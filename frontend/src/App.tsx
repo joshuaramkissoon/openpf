@@ -199,6 +199,8 @@ export default function App() {
   const [deletingChatSessionId, setDeletingChatSessionId] = useState<string | null>(null)
   const [chatSessionBusy, setChatSessionBusy] = useState(false)
 
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdate, setLastUpdate] = useState<string | null>(null)
@@ -462,7 +464,24 @@ export default function App() {
     </section>
   )
 
+  const sectionLabels: Record<string, string> = {
+    overview: 'Overview',
+    research: 'Research',
+    execution: 'Execution',
+    leveraged: 'Leveraged',
+    jobs: 'Jobs',
+    artifacts: 'Artifacts',
+    chat: 'Archie',
+    diagnostics: 'Diagnostics',
+  }
+
   return (
+    <>
+    <header className="mobile-header">
+      <span className="mobile-header-title">MyPF</span>
+      <span className="mobile-header-section">{sectionLabels[activeSection] || activeSection}</span>
+    </header>
+
     <div className="workspace-shell">
       <aside className="glass-card left-nav">
         <p className="eyebrow">Workspace</p>
@@ -740,5 +759,86 @@ export default function App() {
         </div>
       )}
     </div>
+
+    {/* Mobile bottom navigation */}
+    <nav className="mobile-bottom-nav">
+      <button
+        className={`mobile-nav-tab${activeSection === 'overview' ? ' active' : ''}`}
+        onClick={() => { setActiveSection('overview'); setMoreMenuOpen(false) }}
+      >
+        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <rect x="14" y="14" width="7" height="7" rx="1" />
+        </svg>
+        <span className="mobile-nav-label">Overview</span>
+      </button>
+      <button
+        className={`mobile-nav-tab${activeSection === 'research' ? ' active' : ''}`}
+        onClick={() => { setActiveSection('research'); setMoreMenuOpen(false) }}
+      >
+        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        <span className="mobile-nav-label">Research</span>
+      </button>
+      <button
+        className={`mobile-nav-tab${activeSection === 'chat' ? ' active' : ''}`}
+        onClick={() => { setActiveSection('chat'); setMoreMenuOpen(false) }}
+      >
+        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+        <span className="mobile-nav-label">Archie</span>
+      </button>
+      <button
+        className={`mobile-nav-tab${activeSection === 'jobs' ? ' active' : ''}`}
+        onClick={() => { setActiveSection('jobs'); setMoreMenuOpen(false) }}
+      >
+        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <polyline points="12 6 12 12 16 14" />
+        </svg>
+        <span className="mobile-nav-label">Jobs</span>
+      </button>
+      <button
+        className={`mobile-nav-tab${['execution', 'leveraged', 'artifacts', 'diagnostics'].includes(activeSection) ? ' active' : ''}`}
+        onClick={() => setMoreMenuOpen((prev) => !prev)}
+      >
+        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="5" r="1.5" fill="currentColor" />
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+          <circle cx="12" cy="19" r="1.5" fill="currentColor" />
+        </svg>
+        <span className="mobile-nav-label">More</span>
+      </button>
+      {moreMenuOpen && (
+        <div className="mobile-more-menu">
+          <button className={activeSection === 'execution' ? 'active' : ''} onClick={() => { setActiveSection('execution'); setMoreMenuOpen(false) }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+            Execution
+          </button>
+          <button className={activeSection === 'leveraged' ? 'active' : ''} onClick={() => { setActiveSection('leveraged'); setMoreMenuOpen(false) }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></svg>
+            Leveraged
+          </button>
+          <button className={activeSection === 'artifacts' ? 'active' : ''} onClick={() => { setActiveSection('artifacts'); setMoreMenuOpen(false) }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+            Artifacts
+          </button>
+          <button className={activeSection === 'diagnostics' ? 'active' : ''} onClick={() => { setActiveSection('diagnostics'); setMoreMenuOpen(false) }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+            Diagnostics
+          </button>
+          <button onClick={() => { setSettingsOpen(true); setMoreMenuOpen(false) }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+            Settings
+          </button>
+        </div>
+      )}
+    </nav>
+    </>
   )
 }
