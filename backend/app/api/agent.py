@@ -290,10 +290,10 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             await websocket.send_json({"type": "delta", "delta": chunk})
 
         async def _on_status(phase: str, message: str, tool_input: dict | None = None) -> None:
-            payload: dict = {"type": "status", "phase": phase, "message": message}
+            msg: dict = {"type": "status", "phase": phase, "message": message}
             if tool_input:
-                payload["tool_input"] = tool_input
-            await websocket.send_json(payload)
+                msg["tool_input"] = tool_input
+            await websocket.send_json(msg)
             if phase in ("tool_start", "tool_result"):
                 entry: dict = {"phase": phase, "message": message}
                 if tool_input:
@@ -301,6 +301,9 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                 collected_tool_calls.append(entry)
 
         assistant_text: str
+        stop_reason: str | None = None
+        result_subtype: str | None = None
+
         if not payload.content.strip():
             assistant_text = "No message provided."
         elif settings.agent_provider != "claude":
@@ -308,7 +311,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
         else:
             timeout = getattr(settings, "chat_stream_timeout", 300)
             try:
-                assistant_text = await asyncio.wait_for(
+                reply = await asyncio.wait_for(
                     claude_chat_runtime.stream_reply(
                         chat_session_id=session.id,
                         prompt=prompt,
@@ -317,8 +320,12 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                     ),
                     timeout=timeout,
                 )
+                assistant_text = reply.text
+                stop_reason = reply.stop_reason
+                result_subtype = reply.result_subtype
             except asyncio.TimeoutError:
                 assistant_text = "".join(streamed_chunks).strip() or "Response timed out."
+                result_subtype = "error_timeout"
 
         if not assistant_text:
             assistant_text = "".join(streamed_chunks).strip() or "No response generated."
@@ -328,13 +335,13 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             tool_calls=collected_tool_calls if collected_tool_calls else None,
         )
         schedule_memory_distillation(user_message=payload.content, assistant_message=assistant_text)
-        await websocket.send_json(
-            {
-                "type": "done",
-                "session": _session_item(session).model_dump(mode="json"),
-                "assistant_message": _message_item(assistant_row).model_dump(mode="json"),
-            }
-        )
+        await websocket.send_json({
+            "type": "done",
+            "session": _session_item(session).model_dump(mode="json"),
+            "assistant_message": _message_item(assistant_row).model_dump(mode="json"),
+            "stop_reason": stop_reason,
+            "result_subtype": result_subtype,
+        })
     except WebSocketDisconnect:
         pass
     except Exception as exc:

@@ -209,7 +209,7 @@ async def send_message(
     display_currency: Literal["GBP", "USD"] = "GBP",
     redact_values: bool = False,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
-    on_status: Callable[[str, str], Awaitable[None]] | None = None,
+    on_status: Callable[[str, str, dict | None], Awaitable[None]] | None = None,
 ) -> tuple[ChatSession, ChatMessage, ChatMessage]:
     session = ensure_session(db, session_id)
     user_row = append_user_message(db, session, content)
@@ -218,12 +218,13 @@ async def send_message(
     assistant_text: str
     if settings.agent_provider == "claude":
         try:
-            assistant_text = await claude_chat_runtime.stream_reply(
+            reply = await claude_chat_runtime.stream_reply(
                 chat_session_id=session.id,
                 prompt=prompt,
                 on_delta=on_delta or (lambda _delta: _noop_async()),
                 on_status=on_status,
             )
+            assistant_text = reply.text
             if not assistant_text:
                 assistant_text = "No response generated."
         except Exception as exc:
