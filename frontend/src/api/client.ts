@@ -20,7 +20,7 @@ import type {
 } from '../types'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? 'http://localhost:8000/api',
+  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
   timeout: 30000,
 })
 
@@ -211,8 +211,8 @@ export type ChatStreamHandlers = {
 }
 
 function websocketBaseUrl() {
-  const raw = String(api.defaults.baseURL || 'http://localhost:8000/api')
-  const base = new URL(raw)
+  const raw = String(api.defaults.baseURL || '/api')
+  const base = new URL(raw, window.location.origin)
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
   return base.toString().replace(/\/$/, '')
 }
