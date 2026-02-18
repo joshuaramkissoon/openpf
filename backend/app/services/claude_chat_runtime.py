@@ -268,6 +268,14 @@ def _contains_thinking(message: Any) -> bool:
 
 
 @dataclass
+class ReplyResult:
+    """Result from a chat reply including stop metadata."""
+    text: str
+    stop_reason: str | None = None
+    result_subtype: str | None = None
+
+
+@dataclass
 class _RuntimeSession:
     client: Any
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -400,7 +408,7 @@ class ClaudeChatRuntime:
         prompt: str,
         on_delta: Callable[[str], Awaitable[None]],
         on_status: Callable[[str, str, dict | None], Awaitable[None]] | None = None,
-    ) -> str:
+    ) -> ReplyResult:
         state = await self._get_session(chat_session_id)
 
         async with state.lock:
@@ -433,9 +441,23 @@ class ClaudeChatRuntime:
             seen_tool_result_ids: set[str] = set()
             tool_name_by_id: dict[str, str] = {}
             tool_input_by_id: dict[str, dict] = {}
+            stop_reason: str | None = None
+            result_subtype: str | None = None
 
             try:
                 async for message in state.client.receive_response():
+                    # Detect ResultMessage (final message in stream)
+                    msg_type = getattr(message, "type", None)
+                    if msg_type == "result":
+                        stop_reason = getattr(message, "stop_reason", None)
+                        result_subtype = getattr(message, "subtype", None)
+                        # ResultMessage may also carry final text
+                        result_text = getattr(message, "result", None)
+                        if isinstance(result_text, str) and result_text.strip() and not chunks:
+                            chunks.append(result_text.strip())
+                            await on_delta(result_text.strip())
+                        continue
+
                     if _contains_thinking(message):
                         await emit_status("thinking", "Thinking...")
 
@@ -482,7 +504,11 @@ class ClaudeChatRuntime:
                     raise
 
             out = "".join(chunks).strip()
-            return out or "No response generated."
+            return ReplyResult(
+                text=out or "No response generated.",
+                stop_reason=stop_reason,
+                result_subtype=result_subtype,
+            )
 
     async def shutdown(self) -> None:
         async with self._sessions_lock:

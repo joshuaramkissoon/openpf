@@ -97,6 +97,8 @@ interface SessionState {
   streamSegments: StreamSegment[]
   streamAssistantId: number | null
   toolCallsExpanded: boolean
+  pendingMessages: { content: string; optimisticId: number }[]
+  stopNotice: string | null
 }
 
 function freshSession(): SessionState {
@@ -109,7 +111,31 @@ function freshSession(): SessionState {
     streamSegments: [],
     streamAssistantId: null,
     toolCallsExpanded: false,
+    pendingMessages: [],
+    stopNotice: null,
   }
+}
+
+function stopReasonNotice(stopReason?: string | null, resultSubtype?: string | null): string | null {
+  if (resultSubtype === 'error_max_turns') {
+    return 'Archie reached the maximum number of steps for this response. You can send a follow-up to continue.'
+  }
+  if (resultSubtype === 'error_timeout') {
+    return 'Response timed out. Try again or simplify your request.'
+  }
+  if (resultSubtype === 'error_max_budget_usd') {
+    return 'Archie hit the cost budget for this response.'
+  }
+  if (resultSubtype === 'error_during_execution') {
+    return 'An error occurred while processing. You can try again.'
+  }
+  if (stopReason === 'refusal') {
+    return 'Archie declined this request. Try rephrasing.'
+  }
+  if (stopReason === 'max_tokens') {
+    return 'Response was cut short due to length limits. Send a follow-up to continue.'
+  }
+  return null
 }
 
 interface Props {
@@ -266,53 +292,16 @@ export function AgentChatPanel({
     [current.messages, current.sending]
   )
 
-  async function submitContent(content: string) {
-    const trimmed = content.trim()
-    const sessionId = activeSessionId
-    if (!trimmed) return
-    if (!sessionId) {
-      onError('Create or select a conversation in the sidebar first.')
-      return
-    }
-
-    const session = getSession(sessionId)
-    if (session.sending) return
-
-    setInput('')
-    onError(null)
-    isNearBottomRef.current = true
-
-    const optimisticUserId = -Date.now()
-    const optimisticAssistantId = optimisticUserId - 1
-    const optimisticUser: ChatMessage = {
-      id: optimisticUserId,
-      session_id: sessionId,
-      created_at: new Date().toISOString(),
-      role: 'user',
-      content: trimmed,
-    }
-    const optimisticAssistant: ChatMessage = {
-      id: optimisticAssistantId,
-      session_id: sessionId,
-      created_at: new Date().toISOString(),
-      role: 'assistant',
-      content: '',
-    }
-
-    patchSession(sessionId, (s) => {
-      s.sending = true
-      s.streamStatus = 'Thinking...'
-      s.hasStreamedText = false
-      s.statusTrail = [{ id: `st-${Date.now()}`, phase: 'thinking', message: 'Thinking...' }]
-      s.streamAssistantId = optimisticAssistantId
-      s.streamSegments = [{ id: `seg-${Date.now()}`, kind: 'thinking', text: 'Thinking...' }]
-      s.messages = [...s.messages, optimisticUser, optimisticAssistant]
-    })
-
+  async function runStream(
+    sessionId: string,
+    content: string,
+    optimisticUserId: number,
+    optimisticAssistantId: number,
+  ) {
     const handle = streamChatMessage(
       sessionId,
       {
-        content: trimmed,
+        content,
         account_kind: accountView,
         display_currency: displayCurrency,
         redact_values: presentationMask,
@@ -362,8 +351,11 @@ export function AgentChatPanel({
             }
           })
         },
-        onDone: ({ session: touched, assistant_message }) => {
+        onDone: ({ session: touched, assistant_message, stop_reason, result_subtype }) => {
           activeStreamsRef.current.delete(sessionId)
+          const notice = stopReasonNotice(stop_reason, result_subtype)
+          // Atomically set sending=false and dequeue next message to avoid race
+          let nextQueued: { content: string; optimisticId: number } | undefined
           patchSession(sessionId, (s) => {
             s.messages = s.messages.map((row) => (row.id === optimisticAssistantId ? assistant_message : row))
             s.streamStatus = null
@@ -371,8 +363,13 @@ export function AgentChatPanel({
             s.streamAssistantId = null
             s.sending = false
             s.hasStreamedText = false
+            s.stopNotice = notice
+            nextQueued = s.pendingMessages.shift()
           })
           onSessionTouched?.(touched)
+          if (nextQueued) {
+            void drainQueued(sessionId, nextQueued.content, nextQueued.optimisticId)
+          }
         },
         onError: (message) => {
           activeStreamsRef.current.delete(sessionId)
@@ -386,6 +383,7 @@ export function AgentChatPanel({
             s.streamAssistantId = null
             s.sending = false
             s.hasStreamedText = false
+            s.pendingMessages = []
           })
         },
       }
@@ -405,7 +403,6 @@ export function AgentChatPanel({
     } finally {
       activeStreamsRef.current.delete(sessionId)
       // Only clean up if onDone/onError didn't already handle it
-      // (avoids a race condition flash where segments are cleared but sending is still true)
       const session = getSession(sessionId)
       if (session.sending) {
         patchSession(sessionId, (s) => {
@@ -415,6 +412,85 @@ export function AgentChatPanel({
         })
       }
     }
+  }
+
+  function startStream(sessionId: string, content: string, optimisticUserId: number) {
+    const optimisticAssistantId = optimisticUserId - 1
+    const optimisticAssistant: ChatMessage = {
+      id: optimisticAssistantId,
+      session_id: sessionId,
+      created_at: new Date().toISOString(),
+      role: 'assistant',
+      content: '',
+    }
+
+    patchSession(sessionId, (s) => {
+      s.sending = true
+      s.streamStatus = 'Thinking...'
+      s.hasStreamedText = false
+      s.statusTrail = [{ id: `st-${Date.now()}`, phase: 'thinking', message: 'Thinking...' }]
+      s.streamAssistantId = optimisticAssistantId
+      s.streamSegments = [{ id: `seg-${Date.now()}`, kind: 'thinking', text: 'Thinking...' }]
+      s.messages = [...s.messages, optimisticAssistant]
+      s.stopNotice = null
+    })
+
+    void runStream(sessionId, content, optimisticUserId, optimisticAssistantId)
+  }
+
+  function drainQueued(sessionId: string, content: string, existingOptimisticUserId: number) {
+    onError(null)
+    isNearBottomRef.current = true
+    startStream(sessionId, content, existingOptimisticUserId)
+  }
+
+  async function submitContent(content: string) {
+    const trimmed = content.trim()
+    const sessionId = activeSessionId
+    if (!trimmed) return
+    if (!sessionId) {
+      onError('Create or select a conversation in the sidebar first.')
+      return
+    }
+
+    const session = getSession(sessionId)
+
+    // Queue the message if Archie is currently responding
+    if (session.sending) {
+      setInput('')
+      isNearBottomRef.current = true
+      const optimisticId = -Date.now()
+      patchSession(sessionId, (s) => {
+        s.pendingMessages.push({ content: trimmed, optimisticId })
+        s.messages = [...s.messages, {
+          id: optimisticId,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          role: 'user' as const,
+          content: trimmed,
+        }]
+      })
+      return
+    }
+
+    setInput('')
+    onError(null)
+    isNearBottomRef.current = true
+
+    const optimisticUserId = -Date.now()
+    const optimisticUser: ChatMessage = {
+      id: optimisticUserId,
+      session_id: sessionId,
+      created_at: new Date().toISOString(),
+      role: 'user',
+      content: trimmed,
+    }
+
+    patchSession(sessionId, (s) => {
+      s.messages = [...s.messages, optimisticUser]
+    })
+
+    startStream(sessionId, trimmed, optimisticUserId)
   }
 
   function submit() {
@@ -428,7 +504,7 @@ export function AgentChatPanel({
   function onInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      if (input.trim() && !current.sending) {
+      if (input.trim()) {
         submit()
       }
     }
@@ -565,6 +641,10 @@ export function AgentChatPanel({
               </article>
             )
           })}
+
+          {current.stopNotice && !current.sending && (
+            <div className="chat-stop-notice">{current.stopNotice}</div>
+          )}
         </div>
 
         <div className="chat-composer">
@@ -584,10 +664,10 @@ export function AgentChatPanel({
           <button
             className="chat-send-btn"
             onClick={submit}
-            disabled={current.sending || !input.trim() || !activeSessionId}
+            disabled={!input.trim() || !activeSessionId}
             aria-label="Send message"
           >
-            {current.sending ? '…' : 'Send'}
+            {current.sending ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>

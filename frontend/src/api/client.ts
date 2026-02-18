@@ -206,7 +206,12 @@ export type ChatStreamHandlers = {
   onAck?: (payload: { session: ChatSession; user_message: ChatMessage }) => void
   onStatus?: (payload: { phase: string; message: string; toolInput?: Record<string, unknown> }) => void
   onDelta?: (payload: { delta: string }) => void
-  onDone?: (payload: { session: ChatSession; assistant_message: ChatMessage }) => void
+  onDone?: (payload: {
+    session: ChatSession
+    assistant_message: ChatMessage
+    stop_reason?: string | null
+    result_subtype?: string | null
+  }) => void
   onError?: (message: string) => void
 }
 
@@ -282,6 +287,8 @@ export function streamChatMessage(
           handlers.onDone?.({
             session: data.session as ChatSession,
             assistant_message: data.assistant_message as ChatMessage,
+            stop_reason: (data.stop_reason as string) ?? null,
+            result_subtype: (data.result_subtype as string) ?? null,
           })
           settled = true
           try {
