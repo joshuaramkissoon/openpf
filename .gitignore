@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Env
+.env
+backend/.env
+frontend/.env
+
+# Logs
+backend/logs/
+
+# OS
+.DS_Store
+
+# Tooling
+.playwright-mcp/
+
+# Claude Code / Archie runtime
+# Ignore everything in .claude/ then selectively un-ignore config files
+.claude/*
+!.claude/CLAUDE.md
+!.claude/runtime/
+.claude/runtime/*
+!.claude/runtime/.claude/
+.claude/runtime/.claude/*
+!.claude/runtime/.claude/CLAUDE.md
+!.claude/runtime/.claude/skills/
+
+# Docker
+*.tar

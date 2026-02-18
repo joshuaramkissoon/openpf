@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.env
+mypf.db
+venv
+.venv
+tests
+.pytest_cache

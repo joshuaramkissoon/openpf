@@ -1,0 +1,41 @@
+services:
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/mypf.db:/app/mypf.db
+      - ./.claude:/app/.claude
+      - ./backend/logs:/app/logs
+    env_file: ./backend/.env
+    environment:
+      PROJECT_ROOT: /app
+      INPROC_SCHEDULER_ENABLED: "false"
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    command: python worker.py
+    volumes:
+      - ./backend/mypf.db:/app/mypf.db
+      - ./.claude:/app/.claude
+      - ./backend/logs:/app/logs
+    env_file: ./backend/.env
+    environment:
+      PROJECT_ROOT: /app
+      WORKER_POLL_SECONDS: "15"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    command: sh -c "npm run build && npm run preview -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: http://localhost:8000/api
+    depends_on:
+      - backend
+    restart: unless-stopped
