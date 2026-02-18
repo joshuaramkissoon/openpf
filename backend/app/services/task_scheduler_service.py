@@ -347,7 +347,7 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any]]:
         setting_sources=setting_sources,
         allowed_tools=allowed_tools,
         mcp_servers=mcp_servers,
-        max_turns=max(3, min(settings.agent_max_turns, 10)),
+        max_turns=settings.agent_max_turns,
     )
 
     async def _run() -> str:

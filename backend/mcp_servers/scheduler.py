@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -162,14 +163,24 @@ def run_scheduled_task_now(task_id: str) -> str:
     """Run a single task immediately."""
     logger.info("run_scheduled_task_now id=%s", task_id)
     init_db()
-    db = SessionLocal()
+
+    # run_task_now → _run_claude_prompt → anyio.run() needs its own event
+    # loop, but this MCP server already runs inside an async loop (FastMCP).
+    # Executing in a separate thread gives anyio.run() a clean loop.
+    def _in_thread() -> dict:
+        db = SessionLocal()
+        try:
+            return run_task_now(db, task_id)
+        finally:
+            db.close()
+
     try:
-        result = run_task_now(db, task_id)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_in_thread)
+            result = future.result()  # blocks until done
         return _fmt({"ok": True, **result})
     except Exception as exc:  # noqa: BLE001
         return _fmt({"ok": False, "error": str(exc)})
-    finally:
-        db.close()
 
 
 @mcp.tool()
@@ -190,12 +201,21 @@ def run_due_scheduled_tasks() -> str:
     """Run all due enabled tasks now."""
     logger.info("run_due_scheduled_tasks")
     init_db()
-    db = SessionLocal()
+
+    def _in_thread() -> list:
+        db = SessionLocal()
+        try:
+            return run_due_tasks(db)
+        finally:
+            db.close()
+
     try:
-        rows = run_due_tasks(db)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_in_thread)
+            rows = future.result()
         return _fmt({"ok": True, "count": len(rows), "items": rows})
-    finally:
-        db.close()
+    except Exception as exc:  # noqa: BLE001
+        return _fmt({"ok": False, "error": str(exc)})
 
 
 @mcp.tool()

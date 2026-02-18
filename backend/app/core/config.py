@@ -68,7 +68,7 @@ class Settings(BaseSettings):
 
     agent_provider: Literal["rules", "claude"] = Field(default="claude", alias="AGENT_PROVIDER")
     agent_workspace: str = Field(default="./.claude/agent_workspace", alias="AGENT_WORKSPACE")
-    agent_max_turns: int = Field(default=6, alias="AGENT_MAX_TURNS")
+    agent_max_turns: int = Field(default=25, alias="AGENT_MAX_TURNS")
     agent_allow_bash: bool = Field(default=False, alias="AGENT_ALLOW_BASH")
     inproc_scheduler_enabled: bool = Field(default=False, alias="INPROC_SCHEDULER_ENABLED")
 
