@@ -1,33 +1,50 @@
 # Archie-Builds — Phase 2 Spec
 
 **Date**: 2026-02-19
-**Scope**: Persistent async development agent that Archie delegates software tasks to
+**Scope**: Persistent async development agent that Archie proposes tasks to; Josh approves before execution
 **Execute in**: Separate Claude Code session — this spec is self-contained
 
 ---
 
 ## Overview
 
-Archie can delegate software development tasks to an async engineer agent via a simple MCP tool call. The engineer agent:
+Archie **proposes** software development tasks based on real friction it encounters. Josh approves proposals. Only approved proposals become active engineer tasks.
+
+The engineer agent:
 - Works in an isolated Docker sandbox with a git clone of the repo
 - Uses git worktrees for parallel task isolation
 - Posts all progress to `#archie-builds` on Slack
 - Raises PRs, responds to review comments, and cleans up on merge
 
-From Archie's perspective: one MCP call → `{task_id}` returned immediately → everything else happens asynchronously via Slack.
+**The key invariant**: Archie never directly triggers a build. It proposes → Josh approves → engineer executes. This keeps Josh as the decision node on what gets built, while Archie owns the roadmap thinking.
+
+### Archie's operating principles for proposals
+
+- Only propose when there's a **specific, concrete gap** actually encountered — not hypothetical improvements
+- One well-scoped proposal at a time with a clear "why now" and expected outcome
+- Self-police vanity features — if it doesn't make Archie materially more useful to Josh, don't propose it
+- Log proposals during sessions rather than raising them ad-hoc mid-conversation (see Proposal Queue below)
+- Track what's been proposed and shipped to learn what's worth raising
 
 ---
 
 ## Architecture
 
 ```
-Archie Chat / Scheduler
-  └─ mcp__engineer__submit_task(description, context)
-        ↓  returns {task_id, status: "submitted"}
+Archie Chat
+  └─ (end of session or explicit trigger)
+       └─ mcp__engineer__propose_task(title, rationale, scope, priority)
+              ↓  returns {proposal_id, status: "proposed"}
+              ↓  posts proposal to #archie-builds Slack for Josh to review
+
+Josh (in Slack or via API)
+  └─ approves proposal → mcp__engineer__approve_proposal(proposal_id)
+                          OR rejects → mcp__engineer__reject_proposal(proposal_id, reason)
 
 Engineer Service (FastAPI router + background workers)
-  ├─ EngineerTask DB table tracks all tasks
-  ├─ Per task:
+  ├─ EngineerProposal DB table tracks proposals
+  ├─ EngineerTask DB table tracks approved, running tasks
+  ├─ On approval → create EngineerTask → start execution:
   │    1. git pull (on main branch in sandbox)
   │    2. git worktree add worktrees/{task_id}/ -b feat/{task_id}
   │    3. Claude Agent SDK session (CWD = worktree path in sandbox)
@@ -136,12 +153,27 @@ docker exec mypf-engineer-sandbox bash -c "
 Add to existing SQLite DB:
 
 ```sql
+-- Proposals: Archie proposes, Josh approves/rejects
+CREATE TABLE engineer_proposals (
+    id              TEXT PRIMARY KEY,        -- UUID
+    title           TEXT NOT NULL,
+    rationale       TEXT NOT NULL,           -- Why Archie is proposing this
+    scope           TEXT NOT NULL,           -- What would change
+    priority        TEXT NOT NULL DEFAULT 'medium',  -- high | medium | low
+    status          TEXT NOT NULL DEFAULT 'proposed',  -- proposed | approved | rejected
+    rejection_reason TEXT,                   -- Set if rejected
+    task_id         TEXT REFERENCES engineer_tasks(id),  -- Set when approved+started
+    proposed_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at      TIMESTAMP,
+    slack_message_ts TEXT                    -- Slack message ts for the proposal notification
+);
+
+-- Tasks: created only when a proposal is approved
 CREATE TABLE engineer_tasks (
     id              TEXT PRIMARY KEY,        -- UUID
-    description     TEXT NOT NULL,
-    context         TEXT,                    -- JSON string: context passed from Archie
-    status          TEXT NOT NULL DEFAULT 'submitted',
-                                             -- submitted | running | awaiting_review | addressing_comments | complete | failed
+    proposal_id     TEXT REFERENCES engineer_proposals(id),
+    status          TEXT NOT NULL DEFAULT 'running',
+                                             -- running | awaiting_review | addressing_comments | complete | failed
     session_id      TEXT,                    -- Claude SDK session ID (for resumption)
     agent_id        TEXT,                    -- Claude SDK agent ID (for resumption)
     worktree_path   TEXT,                    -- Absolute path in sandbox container
@@ -154,12 +186,41 @@ CREATE TABLE engineer_tasks (
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_engineer_proposals_status ON engineer_proposals(status);
 CREATE INDEX idx_engineer_tasks_pr ON engineer_tasks(pr_number);
 CREATE INDEX idx_engineer_tasks_status ON engineer_tasks(status);
 ```
 
-SQLAlchemy model: `backend/app/models/engineer_task.py`
-Alembic migration: `backend/alembic/versions/xxxx_add_engineer_tasks.py`
+SQLAlchemy models: `backend/app/models/engineer_proposal.py`, `backend/app/models/engineer_task.py`
+Alembic migration: `backend/alembic/versions/xxxx_add_engineer_tables.py`
+
+---
+
+## Proposal Queue (Archie-side memory)
+
+Archie logs proposal ideas to `.claude/runtime/memory/proposals.md` during sessions rather than raising them mid-conversation. Format:
+
+```markdown
+## Pending proposals
+
+- **[date] Live position refresh before destructive actions** — currently relies on stale context before cancellations/sells. A "fetch fresh state" helper would eliminate a class of errors. Priority: high.
+- **[date] Instrument cache refresh tool** — all-instruments.json goes stale. MCP tool to trigger refresh. Priority: medium.
+```
+
+At end of conversation (or when explicitly asked), Archie surfaces pending proposals via `propose_task`. Once submitted, it moves the entry from `## Pending proposals` to `## Submitted proposals` in memory.
+
+**Trigger mechanism**: hybrid — log ideas mid-session, surface at natural conversation end-points or on user request ("any proposals?"). Never interrupt a response mid-stream to propose.
+
+---
+
+## Initial Backlog (seed proposals from Archie)
+
+These are real friction points Archie identified from actual usage, in priority order:
+
+1. **Live position refresh before destructive actions** — Archie currently relies on stale context data before cancellations/sells. A "fetch fresh state" helper or mandatory pre-execution position fetch would eliminate a class of errors.
+2. **Portfolio data freshness** — Context data can be 1-2 days stale. Real-time positions on demand would make analysis significantly more reliable.
+3. **Instrument cache refresh MCP tool** — `all-instruments.json` goes stale. An MCP tool to trigger a refresh would unblock several instrument-lookup workflows.
+4. **Proposal queue memory structure** — A structured `.claude/runtime/memory/proposals.md` with clear pending/submitted/shipped sections, so Archie can track its own roadmap coherently.
 
 ---
 
@@ -167,40 +228,59 @@ Alembic migration: `backend/alembic/versions/xxxx_add_engineer_tasks.py`
 
 New MCP server at `backend/mcp_servers/engineer.py`. Exposed to Archie via the existing MCP server pattern.
 
-**Tools**:
+**Archie-facing tools** (propose only — no direct execution):
 
 ```python
 @tool
-def submit_task(description: str, context: str = "") -> dict:
+def propose_task(title: str, rationale: str, scope: str, priority: str = "medium") -> dict:
     """
-    Submit a software development task to the engineer agent.
-    Returns immediately with task_id. Task runs asynchronously.
+    Propose a development task for Josh's approval.
+    Posts proposal to #archie-builds Slack. Does NOT start execution.
 
     Args:
-        description: What to build or fix (be specific)
-        context: Relevant context — current behaviour, desired behaviour, affected files
+        title: Short task title (< 80 chars)
+        rationale: Why this matters — specific friction encountered, not hypothetical
+        scope: What would change — files, features, expected outcome
+        priority: "high" | "medium" | "low"
 
     Returns:
-        {"task_id": str, "status": "submitted"}
+        {"proposal_id": str, "status": "proposed"}
+    """
+
+@tool
+def get_proposal_status(proposal_id: str) -> dict:
+    """
+    Check if a proposal has been approved, rejected, or is pending.
+
+    Returns:
+        {"proposal_id": str, "status": "proposed|approved|rejected", "reason": str|None, "task_id": str|None}
+    """
+
+@tool
+def list_proposals(status: str = "all") -> list[dict]:
+    """
+    List proposals. status: "proposed" | "approved" | "rejected" | "all"
+
+    Returns:
+        [{"proposal_id": str, "title": str, "status": str, "priority": str, "task_id": str|None}]
     """
 
 @tool
 def get_task_status(task_id: str) -> dict:
     """
-    Get current status of an engineer task.
+    Get execution status of an approved+running engineer task.
 
     Returns:
         {"task_id": str, "status": str, "pr_url": str|None, "pr_number": int|None, "error": str|None}
     """
+```
 
-@tool
-def list_active_tasks() -> list[dict]:
-    """
-    List all non-completed engineer tasks.
+**Josh-facing approval tools** (called via API endpoint or Slack slash command — NOT exposed to Archie):
 
-    Returns:
-        [{"task_id": str, "description": str, "status": str, "pr_url": str|None}]
-    """
+```python
+# REST endpoints only (not MCP):
+POST /engineer/proposals/{id}/approve
+POST /engineer/proposals/{id}/reject   body: {"reason": str}
 ```
 
 MCP server config (add to `claude_chat_runtime.py` and `claude_agent_runtime.py`):
@@ -213,7 +293,12 @@ if engineer_script.is_file():
         "args": [str(engineer_script)],
         "env": _mcp_env,
     }
-    allowed_tools.extend(["mcp__engineer__submit_task", "mcp__engineer__get_task_status", "mcp__engineer__list_active_tasks"])
+    allowed_tools.extend([
+        "mcp__engineer__propose_task",
+        "mcp__engineer__get_proposal_status",
+        "mcp__engineer__list_proposals",
+        "mcp__engineer__get_task_status",
+    ])
 ```
 
 ---
@@ -332,14 +417,21 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
 ## FastAPI Router: `backend/app/routers/engineer.py`
 
-REST endpoints for managing engineer tasks (primarily for debugging/monitoring):
+```
+# Proposals
+GET  /engineer/proposals                        — list all proposals (filterable by status)
+GET  /engineer/proposals/{id}                   — get proposal detail
+POST /engineer/proposals/{id}/approve           — approve → kicks off engineer task
+POST /engineer/proposals/{id}/reject            — reject, body: {"reason": str}
 
+# Tasks (read-only — execution is internal)
+GET  /engineer/tasks                            — list active tasks
+GET  /engineer/tasks/{id}                       — task detail + PR status
+POST /engineer/tasks/{id}/retry                 — retry a failed task
+DELETE /engineer/tasks/{id}                     — cancel (removes worktree, closes PR)
 ```
-GET  /engineer/tasks           — list all tasks
-GET  /engineer/tasks/{id}      — get task detail
-POST /engineer/tasks/{id}/retry — retry a failed task
-DELETE /engineer/tasks/{id}    — cancel a task (removes worktree)
-```
+
+**Approval flow in Slack**: The #archie-builds proposal notification should include quick-action buttons (via Slack's Block Kit) so Josh can approve/reject directly in Slack without opening a browser. The Slack webhook handler processes button clicks and calls the internal approve/reject logic.
 
 ---
 
@@ -348,27 +440,43 @@ DELETE /engineer/tasks/{id}    — cancel a task (removes worktree)
 Add to `.claude/runtime/.claude/CLAUDE.md`:
 
 ```markdown
-## Engineer Agent (Archie-Builds)
+## Archie-Builds (Self-Improvement Pipeline)
 
-Use `mcp__engineer__submit_task` to delegate platform development tasks.
+You own this platform's development roadmap. When you encounter real friction — tools that are clunky,
+data that's stale, workflows that break — you can propose improvements to archie-builds.
 
-The engineer runs asynchronously. You get back a `task_id` immediately; work happens in the background. Track progress in #archie-builds on Slack, or use `mcp__engineer__get_task_status`.
+**You propose. Josh approves. Then it gets built.**
 
-**Good delegation candidates**:
-- Bug fixes (describe: current behaviour, expected behaviour, affected file/feature)
-- New features (describe: what it should do, where it fits in the existing architecture)
-- Refactors (describe: what to change and why)
-- UI improvements (describe: current UX problem and desired outcome)
+### How to propose
 
-**Always provide context**:
-- What is broken or missing
-- Relevant file paths if known
-- Expected behaviour
-- Any constraints or related features
+1. Log the idea to `.claude/runtime/memory/proposals.md` during the session (don't interrupt mid-response)
+2. At end of conversation, or when asked, surface pending proposals using `mcp__engineer__propose_task`
+3. The proposal appears in #archie-builds on Slack for Josh to approve or reject
 
-**Do not delegate**:
-- Tasks requiring real-time data or live portfolio state
-- Tasks that need your ongoing reasoning (analysis, recommendations)
+### What makes a good proposal
+
+- Rooted in **specific friction you actually encountered** in this or a recent session
+- Narrow scope — one clear thing, not a sweeping refactor
+- Clear "why now" — what's the concrete cost of not having this?
+- Expected outcome — what will be different / better?
+
+### What NOT to propose
+
+- Hypothetical improvements you haven't actually needed
+- UI/UX changes without a clear user-facing friction point
+- Features that make you more capable in abstract — only propose what makes you more useful to Josh specifically
+- Anything you're unsure Josh would value — when in doubt, log it and raise it next session after more evidence
+
+### Proposal memory format
+
+Keep `.claude/runtime/memory/proposals.md` with two sections:
+- `## Pending` — ideas to raise
+- `## Submitted` — raised proposals with their status
+
+### Check proposal status
+
+Use `mcp__engineer__list_proposals` to see what's pending, approved, or in flight.
+Use `mcp__engineer__get_task_status` to check execution progress on approved tasks.
 ```
 
 ---
@@ -380,8 +488,10 @@ The engineer runs asynchronously. You get back a `task_id` immediately; work hap
 | `engineer-sandbox/Dockerfile` | New — sandbox container definition |
 | `engineer-sandbox/init.sh` | New — first-boot repo clone + gh auth |
 | `docker-compose.yml` | Add `engineer-sandbox` service |
-| `backend/app/models/engineer_task.py` | New — SQLAlchemy model |
-| `backend/alembic/versions/xxxx_add_engineer_tasks.py` | New — DB migration |
+| `backend/app/models/engineer_proposal.py` | New — SQLAlchemy model for proposals |
+| `backend/app/models/engineer_task.py` | New — SQLAlchemy model for tasks |
+| `backend/alembic/versions/xxxx_add_engineer_tables.py` | New — DB migration (proposals + tasks) |
+| `.claude/runtime/memory/proposals.md` | New — Archie's proposal queue (pending/submitted) |
 | `backend/app/services/engineer_agent_service.py` | New — core agent runner + lifecycle |
 | `backend/mcp_servers/engineer.py` | New — MCP server (3 tools) |
 | `backend/app/routers/engineer.py` | New — REST monitoring endpoints |
