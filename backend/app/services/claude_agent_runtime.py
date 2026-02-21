@@ -10,48 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.services.claude_sdk_config import parse_setting_sources, project_root, resolve_sdk_cwd
+from app.services.claude_sdk_config import (
+    build_security_hooks, build_subagents, parse_setting_sources, project_root, resolve_sdk_cwd,
+    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
+)
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
 
 settings = get_settings()
 
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
-
-_T212_MCP_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__get_exchanges",
-    "mcp__trading212__get_order_history",
-    "mcp__trading212__get_dividend_history",
-    "mcp__trading212__get_transaction_history",
-    "mcp__trading212__request_csv_export",
-    "mcp__trading212__get_csv_export_status",
-]
-
-_MARKET_MCP_TOOLS = [
-    "mcp__marketdata__get_price_snapshot",
-    "mcp__marketdata__get_price_history_rows",
-    "mcp__marketdata__get_technical_snapshot",
-]
-
-_SCHEDULER_MCP_TOOLS = [
-    "mcp__scheduler__list_scheduled_tasks",
-    "mcp__scheduler__create_scheduled_task",
-    "mcp__scheduler__pause_scheduled_task",
-    "mcp__scheduler__resume_scheduled_task",
-    "mcp__scheduler__delete_scheduled_task",
-    "mcp__scheduler__run_scheduled_task_now",
-    "mcp__scheduler__get_scheduled_task_logs",
-    "mcp__scheduler__run_due_scheduled_tasks",
-    "mcp__scheduler__seed_default_scheduled_tasks",
-]
 
 
 def _build_sdk_env() -> dict[str, str]:
@@ -71,6 +38,9 @@ def _build_sdk_env() -> dict[str, str]:
     _pick("T212_API_SECRET_STOCKS_ISA", settings.archie_t212_api_secret_stocks_isa, settings.t212_api_secret_stocks_isa)
     _pick("T212_STOCKS_ISA_API_KEY", settings.archie_t212_api_key_stocks_isa, settings.t212_stocks_isa_api_key)
     _pick("T212_STOCKS_ISA_API_SECRET", settings.archie_t212_api_secret_stocks_isa, settings.t212_stocks_isa_api_secret)
+
+    _backend_root = str(Path(__file__).resolve().parent.parent.parent)
+    env["PYTHONPATH"] = _backend_root
 
     return env
 
@@ -105,6 +75,7 @@ def run_sandboxed_python(code: str, input_payload: dict[str, Any] | None = None,
         proc = subprocess.run(
             ["python3", str(script_path)],
             cwd=temp_path,
+            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent.parent)},
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -284,7 +255,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
         sdk_cwd = resolve_sdk_cwd()
         setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
 
-        allowed_tools = ["Skill", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"]
+        allowed_tools = ["Skill", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task"]
         if settings.agent_allow_bash:
             allowed_tools.append("Bash")
 
@@ -342,17 +313,27 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
             allowed_tools=allowed_tools,
             setting_sources=setting_sources,
             mcp_servers=mcp_servers if mcp_servers else {},
+            hooks=build_security_hooks(),
+            agents=build_subagents(),
         )
 
-        async def _run_query() -> str:
+        async def _run_query() -> tuple[str, dict]:
             chunks: list[str] = []
+            cost_info: dict = {}
             async with ClaudeSDKClient(options=options) as client:
                 await client.query(json.dumps(prompt_payload))
                 async for message in client.receive_response():
+                    if getattr(message, "type", None) == "result":
+                        cost_info = {
+                            "total_cost_usd": getattr(message, "total_cost_usd", None),
+                            "duration_ms": getattr(message, "duration_ms", None),
+                            "num_turns": getattr(message, "num_turns", None),
+                            "session_id": getattr(message, "session_id", None),
+                        }
                     text = _extract_text_from_sdk_message(message)
                     if text:
                         chunks.append(text)
-            return "\n".join(chunks)
+            return "\n".join(chunks), cost_info
 
         import anyio
 
@@ -360,7 +341,22 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
         if env_key:
             os.environ.setdefault("ANTHROPIC_API_KEY", env_key)
 
-        response_text = anyio.run(_run_query)
+        response_text, cost_info = anyio.run(_run_query)
+
+        if cost_info.get("total_cost_usd") is not None or cost_info.get("duration_ms") is not None:
+            from app.services import costs_service
+            from app.core.database import SessionLocal
+            _source_id = cost_info.get("session_id") or "unknown"
+            with SessionLocal() as _cost_db:
+                costs_service.record(
+                    _cost_db,
+                    source="agent_run",
+                    source_id=_source_id,
+                    model=settings.claude_model,
+                    total_cost_usd=cost_info.get("total_cost_usd"),
+                    duration_ms=cost_info.get("duration_ms"),
+                    num_turns=cost_info.get("num_turns"),
+                )
 
     except Exception as exc:
         sdk_error = str(exc)
