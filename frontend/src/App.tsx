@@ -35,6 +35,7 @@ import { ThesisBoard } from './components/ThesisBoard'
 import { LeveragedWorkspace } from './components/LeveragedWorkspace'
 import { ScheduledJobsWorkspace } from './components/ScheduledJobsWorkspace'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
+import { CostsWorkspace } from './components/CostsWorkspace'
 import type { AgentRun, AgentRunDetail, AppConfig, ChatSession, ExecutionEvent, PortfolioSnapshot, PositionItem, Thesis, TradeIntent } from './types'
 
 function parseApiError(error: unknown): string {
@@ -184,7 +185,7 @@ function obfuscateSnapshot(snapshot: PortfolioSnapshot): PortfolioSnapshot {
 }
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState<'overview' | 'research' | 'execution' | 'leveraged' | 'jobs' | 'artifacts' | 'chat' | 'diagnostics'>('overview')
+  const [activeSection, setActiveSection] = useState<'overview' | 'research' | 'execution' | 'leveraged' | 'jobs' | 'artifacts' | 'costs' | 'chat' | 'diagnostics'>('overview')
   const [accountView, setAccountView] = useState<'all' | 'invest' | 'stocks_isa'>('all')
   const [displayCurrency, setDisplayCurrency] = useState<'GBP' | 'USD'>('GBP')
   const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null)
@@ -471,6 +472,7 @@ export default function App() {
     leveraged: 'Leveraged',
     jobs: 'Jobs',
     artifacts: 'Artifacts',
+    costs: 'Costs',
     chat: 'Archie',
     diagnostics: 'Diagnostics',
   }
@@ -520,6 +522,12 @@ export default function App() {
           onClick={() => setActiveSection('artifacts')}
         >
           <span className="nav-icon">&#128196;</span> Artifacts
+        </button>
+        <button
+          className={`nav-btn ${activeSection === 'costs' ? 'active' : ''}`}
+          onClick={() => setActiveSection('costs')}
+        >
+          <span className="nav-icon">&#128178;</span> Costs
         </button>
         <button
           className={`nav-btn ${activeSection === 'chat' ? 'active' : ''}`}
@@ -647,21 +655,23 @@ export default function App() {
 
         {error && <div className="error-banner">{error}</div>}
 
-        {activeSection !== 'chat' && activeSection !== 'leveraged' && activeSection !== 'jobs' && activeSection !== 'artifacts' && activeSection !== 'diagnostics' && displaySnapshot && (
+        {activeSection !== 'chat' && activeSection !== 'leveraged' && activeSection !== 'jobs' && activeSection !== 'artifacts' && activeSection !== 'costs' && activeSection !== 'diagnostics' && displaySnapshot && (
           <MetricGrid snapshot={displaySnapshot} positions={displayPositions} accountView={accountView} />
         )}
 
         <main
           className={
-            activeSection === 'leveraged'
-              ? 'leveraged-stage'
-              : activeSection === 'jobs'
-                ? 'jobs-stage'
-                : activeSection === 'artifacts'
-                  ? 'artifacts-stage'
-                  : activeSection === 'diagnostics'
-                    ? 'diagnostics-stage'
-                    : 'content-grid'
+            activeSection === 'costs'
+              ? 'costs-stage'
+              : activeSection === 'leveraged'
+                ? 'leveraged-stage'
+                : activeSection === 'jobs'
+                  ? 'jobs-stage'
+                  : activeSection === 'artifacts'
+                    ? 'artifacts-stage'
+                    : activeSection === 'diagnostics'
+                      ? 'diagnostics-stage'
+                      : 'content-grid'
           }
           style={activeSection === 'chat' ? { display: 'none' } : undefined}
         >
@@ -714,6 +724,10 @@ export default function App() {
 
           {activeSection === 'artifacts' && (
             <ArtifactsWorkspace onError={setError} />
+          )}
+
+          {activeSection === 'costs' && (
+            <CostsWorkspace onError={setError} />
           )}
 
           <div style={activeSection === 'diagnostics' ? undefined : { display: 'none' }}>
@@ -804,7 +818,7 @@ export default function App() {
         <span className="mobile-nav-label">Jobs</span>
       </button>
       <button
-        className={`mobile-nav-tab${['execution', 'leveraged', 'artifacts', 'diagnostics'].includes(activeSection) ? ' active' : ''}`}
+        className={`mobile-nav-tab${['execution', 'leveraged', 'artifacts', 'costs', 'diagnostics'].includes(activeSection) ? ' active' : ''}`}
         onClick={() => setMoreMenuOpen((prev) => !prev)}
       >
         <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -827,6 +841,10 @@ export default function App() {
           <button className={activeSection === 'artifacts' ? 'active' : ''} onClick={() => { setActiveSection('artifacts'); setMoreMenuOpen(false) }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
             Artifacts
+          </button>
+          <button className={activeSection === 'costs' ? 'active' : ''} onClick={() => { setActiveSection('costs'); setMoreMenuOpen(false) }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+            Costs
           </button>
           <button className={activeSection === 'diagnostics' ? 'active' : ''} onClick={() => { setActiveSection('diagnostics'); setMoreMenuOpen(false) }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
