@@ -18,49 +18,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
-from app.services.claude_sdk_config import parse_setting_sources, project_root, resolve_sdk_cwd
+from app.services.claude_sdk_config import (
+    build_security_hooks, build_subagents, parse_setting_sources, project_root, resolve_sdk_cwd,
+    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
+)
+from app.services import costs_service
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import monitor_open_trades, run_leveraged_cycle, scan_signals, update_policy
 
 settings = get_settings()
 
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
-
-_T212_MCP_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__get_exchanges",
-    "mcp__trading212__get_order_history",
-    "mcp__trading212__get_dividend_history",
-    "mcp__trading212__get_transaction_history",
-    "mcp__trading212__request_csv_export",
-    "mcp__trading212__get_csv_export_status",
-]
-
-_MARKET_MCP_TOOLS = [
-    "mcp__marketdata__get_price_snapshot",
-    "mcp__marketdata__get_price_history_rows",
-    "mcp__marketdata__get_technical_snapshot",
-]
-
-_SCHEDULER_MCP_TOOLS = [
-    "mcp__scheduler__list_scheduled_tasks",
-    "mcp__scheduler__create_scheduled_task",
-    "mcp__scheduler__pause_scheduled_task",
-    "mcp__scheduler__resume_scheduled_task",
-    "mcp__scheduler__delete_scheduled_task",
-    "mcp__scheduler__run_scheduled_task_now",
-    "mcp__scheduler__get_scheduled_task_logs",
-    "mcp__scheduler__run_due_scheduled_tasks",
-    "mcp__scheduler__seed_default_scheduled_tasks",
-]
 
 _DEFAULT_TASKS: list[dict[str, Any]] = [
     {
@@ -263,7 +231,7 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any]]:
+def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
     env_key = (settings.anthropic_api_key or "").strip()
@@ -273,7 +241,7 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any]]:
     cwd = resolve_sdk_cwd()
     setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
 
-    allowed_tools = ["Skill", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"]
+    allowed_tools = ["Skill", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task"]
     if settings.agent_allow_bash:
         allowed_tools.append("Bash")
 
@@ -348,25 +316,34 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any]]:
         allowed_tools=allowed_tools,
         mcp_servers=mcp_servers,
         max_turns=settings.agent_max_turns,
+        hooks=build_security_hooks(),
+        agents=build_subagents(),
     )
 
-    async def _run() -> str:
+    async def _run() -> tuple[str, dict]:
         # Only keep the *last* assistant text block — earlier blocks are
         # intermediate reasoning ("Let me search for …") emitted between
         # tool calls, not the polished final report.
         last_text = ""
+        cost_info: dict = {}
         async for message in query(prompt=task.prompt, options=options):
+            if getattr(message, "type", None) == "result":
+                cost_info = {
+                    "total_cost_usd": getattr(message, "total_cost_usd", None),
+                    "duration_ms": getattr(message, "duration_ms", None),
+                    "num_turns": getattr(message, "num_turns", None),
+                }
             text = _extract_text_from_sdk_message(message)
             if text:
                 last_text = text
-        return last_text.strip()
+        return last_text.strip(), cost_info
 
-    output = anyio.run(_run)
+    output, cost_info = anyio.run(_run)
     meta: dict[str, Any] = {}
     parsed = _extract_json_block(output)
     if parsed:
         meta["json"] = parsed
-    return output, meta
+    return output, meta, cost_info
 
 
 def _cron_log_path(task_name: str, content: str, *, task_kind: str = "", description: str = "") -> str:
@@ -402,7 +379,7 @@ def _record_log(db: Session, task: ScheduledTask, *, status: str, message: str, 
     return row
 
 
-def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any], str | None]:
+def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any], str | None, dict]:
     kind = str((task.meta or {}).get("task_kind") or "claude").strip().lower()
     description = str((task.meta or {}).get("description") or task.name)
 
@@ -410,21 +387,21 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         result = run_leveraged_cycle(db, source_task_id=task.id)
         content = "# Leveraged Cycle\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
-        return "ok", {"result": result}, path
+        return "ok", {"result": result}, path, {}
 
     if kind == "leveraged_scan":
         result = scan_signals(db, source_task_id=task.id)
         content = "# Leveraged Scan\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
-        return "ok", {"result": result}, path
+        return "ok", {"result": result}, path, {}
 
     if kind == "leveraged_monitor":
         result = monitor_open_trades(db)
         content = "# Leveraged Monitor\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
-        return "ok", {"result": result}, path
+        return "ok", {"result": result}, path, {}
 
-    output, meta = _run_claude_prompt(task)
+    output, meta, cost_info = _run_claude_prompt(task)
     path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
 
     policy_updates = None
@@ -438,7 +415,7 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
     if policy_updates is not None:
         payload["policy_updates_applied"] = policy_updates
 
-    return "ok", payload, path
+    return "ok", payload, path, cost_info
 
 
 def _touch_task_after_run(db: Session, task: ScheduledTask, *, status: str) -> None:
@@ -460,7 +437,7 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
         raise RuntimeError(f"task {task_id} not found")
 
     try:
-        status, payload, output_path = _run_task_impl(db, task)
+        status, payload, output_path, cost_info = _run_task_impl(db, task)
         _record_log(
             db,
             task,
@@ -469,6 +446,16 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
             payload=payload,
             output_path=output_path,
         )
+        if cost_info.get("total_cost_usd") is not None or cost_info.get("duration_ms") is not None:
+            costs_service.record(
+                db,
+                source="scheduled",
+                source_id=task.name,
+                model=task.model or settings.claude_model,
+                total_cost_usd=cost_info.get("total_cost_usd"),
+                duration_ms=cost_info.get("duration_ms"),
+                num_turns=cost_info.get("num_turns"),
+            )
         _touch_task_after_run(db, task, status=status)
         db.refresh(task)
         return {"task": _serialize_task(task), "status": status, "payload": payload, "output_path": output_path}
@@ -508,7 +495,7 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
             if bg_task is None:
                 return
             try:
-                status, payload, output_path = _run_task_impl(bg_db, bg_task)
+                status, payload, output_path, cost_info = _run_task_impl(bg_db, bg_task)
                 _record_log(
                     bg_db,
                     bg_task,
@@ -517,6 +504,16 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                     payload=payload,
                     output_path=output_path,
                 )
+                if cost_info.get("total_cost_usd") is not None or cost_info.get("duration_ms") is not None:
+                    costs_service.record(
+                        bg_db,
+                        source="scheduled",
+                        source_id=bg_task.name,
+                        model=bg_task.model or settings.claude_model,
+                        total_cost_usd=cost_info.get("total_cost_usd"),
+                        duration_ms=cost_info.get("duration_ms"),
+                        num_turns=cost_info.get("num_turns"),
+                    )
                 _touch_task_after_run(bg_db, bg_task, status=status)
             except Exception as exc:  # noqa: BLE001
                 message = str(exc)
