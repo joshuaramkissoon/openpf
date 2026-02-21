@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,7 +12,11 @@ from time import monotonic
 from typing import Any, Awaitable, Callable
 
 from app.core.config import get_settings
-from app.services.claude_sdk_config import parse_setting_sources, resolve_sdk_cwd, runtime_info as sdk_runtime_info
+from app.services.claude_sdk_config import (
+    build_security_hooks, build_subagents, parse_setting_sources, resolve_sdk_cwd,
+    runtime_info as sdk_runtime_info,
+    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
+)
 
 settings = get_settings()
 
@@ -24,6 +30,7 @@ _TOOL_LABELS: dict[str, str] = {
     "Grep": "Searching code",
     "Glob": "Finding files",
     "Skill": "Running a skill",
+    "Task": "Delegating to subagent",
     # T212 MCP tools
     "mcp__trading212__get_account_summary": "Checking account summary",
     "mcp__trading212__get_positions": "Fetching positions",
@@ -44,6 +51,10 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__marketdata__get_price_snapshot": "Checking latest price",
     "mcp__marketdata__get_price_history_rows": "Fetching price history",
     "mcp__marketdata__get_technical_snapshot": "Computing technicals",
+    "mcp__marketdata__get_indicator_series": "Computing indicator series",
+    "mcp__marketdata__get_risk_metrics": "Analyzing risk metrics",
+    "mcp__marketdata__get_correlation_matrix": "Computing correlations",
+    "mcp__marketdata__compare_assets": "Comparing assets",
     # Scheduler MCP tools
     "mcp__scheduler__list_scheduled_tasks": "Listing scheduled tasks",
     "mcp__scheduler__create_scheduled_task": "Creating scheduled task",
@@ -58,42 +69,6 @@ _TOOL_LABELS: dict[str, str] = {
 
 
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
-
-_T212_MCP_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__get_exchanges",
-    "mcp__trading212__get_order_history",
-    "mcp__trading212__get_dividend_history",
-    "mcp__trading212__get_transaction_history",
-    "mcp__trading212__request_csv_export",
-    "mcp__trading212__get_csv_export_status",
-]
-
-_MARKET_MCP_TOOLS = [
-    "mcp__marketdata__get_price_snapshot",
-    "mcp__marketdata__get_price_history_rows",
-    "mcp__marketdata__get_technical_snapshot",
-]
-
-_SCHEDULER_MCP_TOOLS = [
-    "mcp__scheduler__list_scheduled_tasks",
-    "mcp__scheduler__create_scheduled_task",
-    "mcp__scheduler__pause_scheduled_task",
-    "mcp__scheduler__resume_scheduled_task",
-    "mcp__scheduler__delete_scheduled_task",
-    "mcp__scheduler__run_scheduled_task_now",
-    "mcp__scheduler__get_scheduled_task_logs",
-    "mcp__scheduler__run_due_scheduled_tasks",
-    "mcp__scheduler__seed_default_scheduled_tasks",
-]
 
 
 def _friendly_tool_name(raw: str) -> str:
@@ -128,6 +103,9 @@ def _build_sdk_env() -> dict[str, str]:
     _pick("T212_API_SECRET_STOCKS_ISA", settings.archie_t212_api_secret_stocks_isa, settings.t212_api_secret_stocks_isa)
     _pick("T212_STOCKS_ISA_API_KEY", settings.archie_t212_api_key_stocks_isa, settings.t212_stocks_isa_api_key)
     _pick("T212_STOCKS_ISA_API_SECRET", settings.archie_t212_api_secret_stocks_isa, settings.t212_stocks_isa_api_secret)
+
+    _backend_root = str(Path(__file__).resolve().parent.parent.parent)
+    env["PYTHONPATH"] = _backend_root
 
     return env
 
@@ -244,6 +222,23 @@ def _extract_tool_results(message: Any) -> list[tuple[str, bool]]:
     return out
 
 
+def _extract_input_json_delta(message: Any) -> tuple[int | None, str]:
+    """Extract (content_block_index, partial_json) from input_json_delta events."""
+    event = getattr(message, "event", None)
+    if not isinstance(event, dict):
+        return None, ""
+    if str(event.get("type", "")) != "content_block_delta":
+        return None, ""
+    delta = event.get("delta")
+    if not isinstance(delta, dict):
+        return None, ""
+    if str(delta.get("type", "")) != "input_json_delta":
+        return None, ""
+    idx = event.get("index")
+    partial = delta.get("partial_json", "")
+    return idx, partial
+
+
 def _contains_thinking(message: Any) -> bool:
     content = getattr(message, "content", None)
     if isinstance(content, list):
@@ -273,6 +268,9 @@ class ReplyResult:
     text: str
     stop_reason: str | None = None
     result_subtype: str | None = None
+    cost_usd: float | None = None
+    duration_ms: int | None = None
+    num_turns: int | None = None
 
 
 @dataclass
@@ -301,7 +299,7 @@ class ClaudeChatRuntime:
         setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
         runtime = sdk_runtime_info()
 
-        allowed_tools = ["Skill", "Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+        allowed_tools = ["Skill", "Read", "Glob", "Grep", "WebSearch", "WebFetch", "Task"]
         if settings.claude_chat_allow_writes:
             allowed_tools.extend(["Write", "Edit"])
         if settings.agent_allow_bash:
@@ -385,6 +383,8 @@ class ClaudeChatRuntime:
             permission_mode="acceptEdits" if settings.claude_chat_allow_writes else None,
             env=_build_sdk_env(),
             mcp_servers=mcp_servers if mcp_servers else {},
+            hooks=build_security_hooks(),
+            agents=build_subagents(),
         )
 
     async def _get_session(self, chat_session_id: str) -> _RuntimeSession:
@@ -419,10 +419,16 @@ class ClaudeChatRuntime:
                 nonlocal last_status
                 if not on_status:
                     return
-                marker = (phase, message)
-                if marker == last_status:
-                    return
-                last_status = marker
+                # Only dedup ambient status phases (thinking, query, runtime).
+                # Tool/subagent events represent distinct actions and must
+                # always be emitted even if the label text is identical.
+                if phase in ("thinking", "query", "runtime"):
+                    marker = (phase, message)
+                    if marker == last_status:
+                        return
+                    last_status = marker
+                else:
+                    last_status = None
                 await on_status(phase, message, tool_input)
 
             if not state.connected:
@@ -443,6 +449,43 @@ class ClaudeChatRuntime:
             tool_input_by_id: dict[str, dict] = {}
             stop_reason: str | None = None
             result_subtype: str | None = None
+            cost_usd: float | None = None
+            duration_ms_val: int | None = None
+            num_turns_val: int | None = None
+            active_subagents: dict[str, str] = {}  # task tool_use_id → subagent_type
+            # Track Task tool calls whose input hasn't streamed yet.
+            # Maps tool_use_id → accumulated partial JSON string.
+            pending_task_inputs: dict[str, str] = {}
+            # Map content block index → tool_use_id for correlating input_json_delta events.
+            block_index_to_tool_id: dict[int, str] = {}
+
+            async def _maybe_emit_subagent_start(tool_id: str, partial_json: str) -> None:
+                """Try to extract subagent_type from accumulated JSON and emit subagent_start."""
+                # Try full parse first
+                subagent_type: str | None = None
+                try:
+                    parsed = json.loads(partial_json)
+                    subagent_type = parsed.get("subagent_type")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                # Fall back to regex on partial JSON
+                if not subagent_type:
+                    m = re.search(r'"subagent_type"\s*:\s*"([^"]+)"', partial_json)
+                    if m:
+                        subagent_type = m.group(1)
+                if not subagent_type:
+                    # Also try to find a 'description' field for a friendlier label
+                    m = re.search(r'"description"\s*:\s*"([^"]+)"', partial_json)
+                    if m:
+                        subagent_type = m.group(1)
+                if subagent_type:
+                    pending_task_inputs.pop(tool_id, None)
+                    active_subagents[tool_id] = subagent_type
+                    await emit_status(
+                        "subagent_start",
+                        f"Delegating to {subagent_type}",
+                        {"subagent_id": tool_id, "subagent_type": subagent_type},
+                    )
 
             try:
                 async for message in state.client.receive_response():
@@ -451,11 +494,62 @@ class ClaudeChatRuntime:
                     if msg_type == "result":
                         stop_reason = getattr(message, "stop_reason", None)
                         result_subtype = getattr(message, "subtype", None)
-                        # ResultMessage may also carry final text
+                        cost_usd = getattr(message, "total_cost_usd", None)
+                        duration_ms_val = getattr(message, "duration_ms", None)
+                        num_turns_val = getattr(message, "num_turns", None)
                         result_text = getattr(message, "result", None)
                         if isinstance(result_text, str) and result_text.strip() and not chunks:
                             chunks.append(result_text.strip())
                             await on_delta(result_text.strip())
+                        continue
+
+                    # Accumulate input_json_delta for pending Task tools
+                    delta_idx, delta_json = _extract_input_json_delta(message)
+                    if delta_idx is not None and delta_json:
+                        tool_id_for_delta = block_index_to_tool_id.get(delta_idx)
+                        if tool_id_for_delta and tool_id_for_delta in pending_task_inputs:
+                            pending_task_inputs[tool_id_for_delta] += delta_json
+                            await _maybe_emit_subagent_start(
+                                tool_id_for_delta,
+                                pending_task_inputs.get(tool_id_for_delta, ""),
+                            )
+
+                    # Detect if this message originates from within a subagent
+                    parent_id = getattr(message, "parent_tool_use_id", None)
+                    is_subagent_msg = parent_id is not None and parent_id in active_subagents
+
+                    # If parent is still pending (subagent_start not yet emitted),
+                    # force-emit with a fallback label so nested events aren't lost.
+                    if parent_id and parent_id in pending_task_inputs and parent_id not in active_subagents:
+                        pending_task_inputs.pop(parent_id, None)
+                        active_subagents[parent_id] = "Subagent"
+                        await emit_status(
+                            "subagent_start",
+                            "Delegating to Subagent",
+                            {"subagent_id": parent_id, "subagent_type": "Subagent"},
+                        )
+                        is_subagent_msg = True
+
+                    if is_subagent_msg:
+                        # Process nested tool events (emit as subagent_tool_* phases)
+                        for tool_id2, tool_name2, tool_input2 in _extract_tool_events(message):
+                            key2 = tool_id2 or f"name:{tool_name2}"
+                            if key2 in seen_tool_ids:
+                                continue
+                            seen_tool_ids.add(key2)
+                            if tool_id2:
+                                tool_name_by_id[tool_id2] = tool_name2
+                            friendly2 = _friendly_tool_name(tool_name2)
+                            await emit_status("subagent_tool_start", friendly2, {"subagent_id": parent_id})
+                        for tool_id2, is_error2 in _extract_tool_results(message):
+                            if tool_id2 in seen_tool_result_ids:
+                                continue
+                            seen_tool_result_ids.add(tool_id2)
+                            tool_name2 = tool_name_by_id.get(tool_id2, "tool step")
+                            friendly2 = _friendly_tool_name(tool_name2)
+                            result_msg2 = f"{friendly2} — {'hit a snag' if is_error2 else 'done'}"
+                            await emit_status("subagent_tool_result", result_msg2, {"subagent_id": parent_id})
+                        # Skip regular processing for subagent messages (no text deltas from subagent go to user)
                         continue
 
                     if _contains_thinking(message):
@@ -466,22 +560,65 @@ class ClaudeChatRuntime:
                         if key in seen_tool_ids:
                             continue
                         seen_tool_ids.add(key)
-                        if tool_id:
-                            tool_name_by_id[tool_id] = tool_name
-                            tool_input_by_id[tool_id] = tool_input
-                        friendly = _friendly_tool_name(tool_name)
-                        await emit_status("tool_start", friendly, tool_input)
+
+                        # Track block index → tool_id for input_json_delta correlation
+                        event = getattr(message, "event", None)
+                        if isinstance(event, dict) and tool_id:
+                            block_idx = event.get("index")
+                            if isinstance(block_idx, int):
+                                block_index_to_tool_id[block_idx] = tool_id
+
+                        if tool_name == "Task":
+                            # Check if we already have subagent_type in the input
+                            subagent_type = (tool_input or {}).get("subagent_type")
+                            if subagent_type:
+                                # Full input available (non-streaming or complete message)
+                                if tool_id:
+                                    active_subagents[tool_id] = subagent_type
+                                await emit_status(
+                                    "subagent_start",
+                                    f"Delegating to {subagent_type}",
+                                    {"subagent_id": tool_id or "", "subagent_type": subagent_type},
+                                )
+                            elif tool_id:
+                                # Streaming: input is empty, defer until we get input_json_delta
+                                pending_task_inputs[tool_id] = ""
+                        else:
+                            if tool_id:
+                                tool_name_by_id[tool_id] = tool_name
+                                tool_input_by_id[tool_id] = tool_input
+                            friendly = _friendly_tool_name(tool_name)
+                            await emit_status("tool_start", friendly, tool_input)
 
                     for tool_id, is_error in _extract_tool_results(message):
                         if tool_id in seen_tool_result_ids:
                             continue
                         seen_tool_result_ids.add(tool_id)
-                        tool_name = tool_name_by_id.get(tool_id, "tool step")
-                        friendly = _friendly_tool_name(tool_name)
-                        if is_error:
-                            await emit_status("tool_result", f"{friendly} — hit a snag")
+                        # Handle pending tasks that never got subagent_start emitted
+                        if tool_id in pending_task_inputs and tool_id not in active_subagents:
+                            pending_task_inputs.pop(tool_id, None)
+                            active_subagents[tool_id] = "Subagent"
+                            await emit_status(
+                                "subagent_start",
+                                "Delegating to Subagent",
+                                {"subagent_id": tool_id, "subagent_type": "Subagent"},
+                            )
+                        if tool_id in active_subagents:
+                            # Subagent completed
+                            subagent_type = active_subagents.pop(tool_id)
+                            result_msg = f"{subagent_type} — {'hit a snag' if is_error else 'done'}"
+                            await emit_status(
+                                "subagent_result",
+                                result_msg,
+                                {"subagent_id": tool_id, "subagent_type": subagent_type},
+                            )
                         else:
-                            await emit_status("tool_result", f"{friendly} — done")
+                            tool_name = tool_name_by_id.get(tool_id, "tool step")
+                            friendly = _friendly_tool_name(tool_name)
+                            if is_error:
+                                await emit_status("tool_result", f"{friendly} — hit a snag")
+                            else:
+                                await emit_status("tool_result", f"{friendly} — done")
 
                     delta = _extract_stream_delta(message)
                     if delta:
@@ -508,6 +645,9 @@ class ClaudeChatRuntime:
                 text=out or "No response generated.",
                 stop_reason=stop_reason,
                 result_subtype=result_subtype,
+                cost_usd=cost_usd,
+                duration_ms=duration_ms_val,
+                num_turns=num_turns_val,
             )
 
     async def shutdown(self) -> None:
