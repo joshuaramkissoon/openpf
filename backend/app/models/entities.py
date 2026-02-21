@@ -66,6 +66,19 @@ class AgentRun(Base):
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
 
+class UsageRecord(Base):
+    __tablename__ = "usage_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)   # chat | scheduled | agent_run
+    source_id: Mapped[str] = mapped_column(String(240), index=True)
+    model: Mapped[str] = mapped_column(String(120), default="")
+    total_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    num_turns: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class TradeIntent(Base):
     __tablename__ = "trade_intents"
 
