@@ -44,6 +44,7 @@ from app.services.claude_memory_service import schedule_memory_distillation
 from app.services.execution_service import ExecutionError, approve_intent, execute_intent, list_events, list_intents, reject_intent
 from app.schemas.artifacts import ArtifactDetail, ArtifactItem
 from app.services.artifact_service import get_artifact, list_artifacts
+from app.services import costs_service
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 settings = get_settings()
@@ -284,6 +285,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
 
         streamed_chunks: list[str] = []
         collected_tool_calls: list[dict] = []
+        active_subagent_buffers: dict[str, dict] = {}
 
         async def _on_delta(chunk: str) -> None:
             streamed_chunks.append(chunk)
@@ -294,11 +296,53 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             if tool_input:
                 msg["tool_input"] = tool_input
             await websocket.send_json(msg)
-            if phase in ("tool_start", "tool_result"):
-                entry: dict = {"phase": phase, "message": message}
+
+            ti = tool_input or {}
+
+            if phase == "subagent_start":
+                subagent_id = ti.get("subagent_id", "")
+                subagent_type = ti.get("subagent_type", "unknown")
+                if subagent_id:
+                    active_subagent_buffers[subagent_id] = {
+                        "phase": "subagent_start",
+                        "message": message,
+                        "subagent_type": subagent_type,
+                        "subagent_id": subagent_id,
+                        "nested_calls": [],
+                    }
+            elif phase == "subagent_tool_start":
+                subagent_id = ti.get("subagent_id", "")
+                if subagent_id in active_subagent_buffers:
+                    nested_input = {k: v for k, v in ti.items() if k != "subagent_id"}
+                    entry: dict = {"phase": "tool_start", "message": message}
+                    if nested_input:
+                        entry["tool_input"] = nested_input
+                    active_subagent_buffers[subagent_id]["nested_calls"].append(entry)
+            elif phase == "subagent_tool_result":
+                subagent_id = ti.get("subagent_id", "")
+                if subagent_id in active_subagent_buffers:
+                    active_subagent_buffers[subagent_id]["nested_calls"].append(
+                        {"phase": "tool_result", "message": message}
+                    )
+            elif phase == "subagent_result":
+                subagent_id = ti.get("subagent_id", "")
+                if subagent_id in active_subagent_buffers:
+                    completed = active_subagent_buffers.pop(subagent_id)
+                    collected_tool_calls.append(completed)
+            elif phase in ("tool_start", "tool_result"):
+                entry_: dict = {"phase": phase, "message": message}
                 if tool_input:
-                    entry["tool_input"] = tool_input
-                collected_tool_calls.append(entry)
+                    entry_["tool_input"] = tool_input
+                collected_tool_calls.append(entry_)
+
+        async def _keepalive() -> None:
+            """Send pings every 15s to keep the WS alive during long operations."""
+            try:
+                while True:
+                    await asyncio.sleep(15)
+                    await websocket.send_json({"type": "ping"})
+            except (asyncio.CancelledError, Exception):
+                pass
 
         assistant_text: str
         stop_reason: str | None = None
@@ -310,6 +354,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             assistant_text = "Claude provider is disabled. Set AGENT_PROVIDER=claude to enable chat."
         else:
             timeout = getattr(settings, "chat_stream_timeout", 300)
+            keepalive_task = asyncio.create_task(_keepalive())
             try:
                 reply = await asyncio.wait_for(
                     claude_chat_runtime.stream_reply(
@@ -323,9 +368,26 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                 assistant_text = reply.text
                 stop_reason = reply.stop_reason
                 result_subtype = reply.result_subtype
+                if reply.cost_usd is not None or reply.duration_ms is not None:
+                    with SessionLocal() as _cost_db:
+                        costs_service.record(
+                            _cost_db,
+                            source="chat",
+                            source_id=session.id,
+                            model=settings.claude_model,
+                            total_cost_usd=reply.cost_usd,
+                            duration_ms=reply.duration_ms,
+                            num_turns=reply.num_turns,
+                        )
             except asyncio.TimeoutError:
                 assistant_text = "".join(streamed_chunks).strip() or "Response timed out."
                 result_subtype = "error_timeout"
+            finally:
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except asyncio.CancelledError:
+                    pass
 
         if not assistant_text:
             assistant_text = "".join(streamed_chunks).strip() or "No response generated."
