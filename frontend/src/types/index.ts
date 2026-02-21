@@ -287,11 +287,21 @@ export interface ChatSession {
   title: string
 }
 
-export interface ToolCallEntry {
+export interface RegularToolCallEntry {
   phase: 'tool_start' | 'tool_result' | string
   message: string
   tool_input?: Record<string, unknown>
 }
+
+export interface SubagentToolCallEntry {
+  phase: 'subagent_start'
+  message: string
+  subagent_type: string
+  subagent_id: string
+  nested_calls: Array<{ phase: 'tool_start' | 'tool_result'; message: string; tool_input?: Record<string, unknown> }>
+}
+
+export type ToolCallEntry = RegularToolCallEntry | SubagentToolCallEntry
 
 export interface ChatMessage {
   id: number
@@ -333,4 +343,29 @@ export interface ArtifactDetail {
   path: string
   content: string
   metadata: Record<string, any>
+}
+
+export interface UsageRecord {
+  id: number
+  recorded_at: string
+  source: 'chat' | 'scheduled' | 'agent_run' | string
+  source_id: string
+  model: string
+  total_cost_usd: number | null
+  duration_ms: number | null
+  num_turns: number | null
+}
+
+export interface CostBySource {
+  chat: number
+  scheduled: number
+  agent_run: number
+}
+
+export interface CostSummary {
+  all_time_usd: number
+  this_month_usd: number
+  this_week_usd: number
+  by_source: CostBySource
+  record_count: number
 }
