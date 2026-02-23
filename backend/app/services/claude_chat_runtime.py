@@ -11,6 +11,8 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
+from claude_agent_sdk import ResultMessage
+
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, parse_setting_sources, resolve_sdk_cwd,
@@ -490,8 +492,7 @@ class ClaudeChatRuntime:
             try:
                 async for message in state.client.receive_response():
                     # Detect ResultMessage (final message in stream)
-                    msg_type = getattr(message, "type", None)
-                    if msg_type == "result":
+                    if isinstance(message, ResultMessage):
                         stop_reason = getattr(message, "stop_reason", None)
                         result_subtype = getattr(message, "subtype", None)
                         cost_usd = getattr(message, "total_cost_usd", None)

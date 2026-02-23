@@ -250,7 +250,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
     response_text = ""
 
     try:
-        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
         sdk_cwd = resolve_sdk_cwd()
         setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
@@ -323,7 +323,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
             async with ClaudeSDKClient(options=options) as client:
                 await client.query(json.dumps(prompt_payload))
                 async for message in client.receive_response():
-                    if getattr(message, "type", None) == "result":
+                    if isinstance(message, ResultMessage):
                         cost_info = {
                             "total_cost_usd": getattr(message, "total_cost_usd", None),
                             "duration_ms": getattr(message, "duration_ms", None),
