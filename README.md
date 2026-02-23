@@ -1,4 +1,4 @@
-# MyPF
+# OpenPF
 
 AI-powered portfolio operations platform built on Claude, with live trading via Trading 212.
 
