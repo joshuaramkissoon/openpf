@@ -92,7 +92,7 @@ make down
 | Variable | Purpose |
 |----------|---------|
 | `ANTHROPIC_API_KEY` | Claude API access |
-| `CLAUDE_MODEL` | Model for Archie (e.g. `claude-sonnet-4-20250514`) |
+| `CLAUDE_MODEL` | Model for Archie (e.g. `sonnet-4-6`) |
 | `T212_API_KEY_INVEST` | Trading 212 Invest account key |
 | `T212_API_KEY_STOCKS_ISA` | Trading 212 ISA account key |
 | `T212_BASE_ENV` | `demo` or `live` |
