@@ -232,7 +232,7 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
 
 
 def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
-    from claude_agent_sdk import ClaudeAgentOptions, query
+    from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
     env_key = (settings.anthropic_api_key or "").strip()
     if env_key:
@@ -327,7 +327,7 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
         last_text = ""
         cost_info: dict = {}
         async for message in query(prompt=task.prompt, options=options):
-            if getattr(message, "type", None) == "result":
+            if isinstance(message, ResultMessage):
                 cost_info = {
                     "total_cost_usd": getattr(message, "total_cost_usd", None),
                     "duration_ms": getattr(message, "duration_ms", None),
