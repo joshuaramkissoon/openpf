@@ -84,12 +84,29 @@ the forecast summary, and a band table; `--plot` saves a PNG.
   trusting it for anything beyond illustration.
 - Optional fine-tuning on Josh's actual holdings' history.
 
-## Note on a pre-existing issue
+## Fixed alongside: incomplete subagents refactor
 
-While wiring this up I found that `claude_chat_runtime.py` imports
+While wiring this up I found that `claude_chat_runtime.py`,
+`claude_agent_runtime.py`, and `task_scheduler_service.py` all import
 `build_security_hooks`, `build_subagents`, and the `_*_MCP_TOOLS` constants
-from `claude_sdk_config.py`, but that module (as committed) does not define
-them — so the chat runtime is currently un-importable. The forecast wiring
-was written to **not** depend on those symbols (it defines
-`_FORECAST_MCP_TOOLS` locally), so it adds no new coupling. The missing
-definitions are a separate fix.
+from `claude_sdk_config.py` — but that module never defined them, so all
+three runtimes were **un-importable**.
+
+Root cause: the refactor described in
+`docs/plans/2026-02-19-archie-subagents-design.md` (centralise the tool
+lists in `claude_sdk_config.py`; add `build_subagents()` /
+`build_security_hooks()`) was only half-applied. The call sites and the
+subagent *streaming* logic landed in `claude_chat_runtime.py`, but the
+definitions were never added to `claude_sdk_config.py` (confirmed via
+`git log -S` — `def build_subagents` was never committed in any branch).
+
+This branch completes that refactor:
+
+- Adds `_T212_MCP_TOOLS`, `_MARKET_MCP_TOOLS`, `_SCHEDULER_MCP_TOOLS`,
+  `_EXECUTION_T212_TOOLS`, and `_FORECAST_MCP_TOOLS` to `claude_sdk_config.py`.
+- Implements `build_subagents()` (researcher / quant / execution roster per
+  the design doc) and `build_security_hooks()` (PreToolUse guards blocking
+  destructive Bash and secret/`.env` access).
+
+All three runtimes now import cleanly. The forecast MCP tool list lives in
+`claude_sdk_config.py` alongside the others.

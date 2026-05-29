@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,227 @@ def list_skill_files(cwd: Path | None = None) -> list[str]:
         except ValueError:
             out.append(str(skill_md))
     return out
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# MCP tool allow-lists
+#
+# Centralised here (per docs/plans/2026-02-19-archie-subagents-design.md) so
+# the chat/agent/scheduler runtimes and build_subagents() share one source of
+# truth and avoid circular imports.
+# ──────────────────────────────────────────────────────────────────────────
+
+_T212_MCP_TOOLS = [
+    "mcp__trading212__get_account_summary",
+    "mcp__trading212__get_positions",
+    "mcp__trading212__get_pending_orders",
+    "mcp__trading212__place_market_order",
+    "mcp__trading212__place_limit_order",
+    "mcp__trading212__place_stop_order",
+    "mcp__trading212__place_stop_limit_order",
+    "mcp__trading212__cancel_order",
+    "mcp__trading212__search_instruments",
+    "mcp__trading212__get_exchanges",
+    "mcp__trading212__get_order_history",
+    "mcp__trading212__get_dividend_history",
+    "mcp__trading212__get_transaction_history",
+    "mcp__trading212__request_csv_export",
+    "mcp__trading212__get_csv_export_status",
+]
+
+_MARKET_MCP_TOOLS = [
+    "mcp__marketdata__get_price_snapshot",
+    "mcp__marketdata__get_price_history_rows",
+    "mcp__marketdata__get_technical_snapshot",
+]
+
+_SCHEDULER_MCP_TOOLS = [
+    "mcp__scheduler__list_scheduled_tasks",
+    "mcp__scheduler__create_scheduled_task",
+    "mcp__scheduler__pause_scheduled_task",
+    "mcp__scheduler__resume_scheduled_task",
+    "mcp__scheduler__delete_scheduled_task",
+    "mcp__scheduler__run_scheduled_task_now",
+    "mcp__scheduler__get_scheduled_task_logs",
+    "mcp__scheduler__run_due_scheduled_tasks",
+    "mcp__scheduler__seed_default_scheduled_tasks",
+]
+
+_FORECAST_MCP_TOOLS = [
+    "mcp__forecast__forecast_prices",
+    "mcp__forecast__forecast_status",
+]
+
+# Narrow T212 subset the execution subagent is allowed to use — no CSV
+# export, no dividend/transaction history.
+_EXECUTION_T212_TOOLS = [
+    "mcp__trading212__get_account_summary",
+    "mcp__trading212__get_positions",
+    "mcp__trading212__get_pending_orders",
+    "mcp__trading212__search_instruments",
+    "mcp__trading212__place_market_order",
+    "mcp__trading212__place_limit_order",
+    "mcp__trading212__place_stop_order",
+    "mcp__trading212__place_stop_limit_order",
+    "mcp__trading212__cancel_order",
+    "mcp__trading212__get_order_history",
+]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Subagents
+# ──────────────────────────────────────────────────────────────────────────
+
+_RESEARCHER_PROMPT = (
+    "You are Archie's financial research specialist. You handle web research "
+    "on markets, companies, macro events, financial news, and documentation. "
+    "Work from the specific questions and portfolio context you are given — "
+    "you have no memory of the main conversation. Return structured, clearly "
+    "sourced findings. You may write artifacts, but ONLY under "
+    "`.claude/runtime/artifacts/`; never write anywhere else."
+)
+
+_QUANT_PROMPT = (
+    "You are Archie's quantitative analysis specialist. You perform technical "
+    "analysis, write and run Python scripts for data analysis, compute risk "
+    "metrics and indicators, and do statistical/portfolio modelling. Work from "
+    "the instruments, date ranges, and analysis goals you are given. Show your "
+    "method and return concise, quantified results."
+)
+
+_EXECUTION_PROMPT = (
+    "You are Archie's trade execution specialist. You place and cancel orders "
+    "via the Trading 212 tools, using only the account balance, positions, and "
+    "exact order instructions passed to you. Do not improvise sizing or "
+    "instruments. Always finish with a single JSON block matching the execution "
+    "schema: {\"trades\": [...], \"errors\": [...], \"commentary\": \"...\"}. "
+    "Return structured JSON only — never unstructured prose as the final answer."
+)
+
+
+def build_subagents() -> dict[str, Any]:
+    """Construct Archie's subagent roster.
+
+    Returns a ``dict[str, AgentDefinition]`` suitable for
+    ``ClaudeAgentOptions(agents=...)``. See
+    docs/plans/2026-02-19-archie-subagents-design.md for the roster spec.
+    """
+    from claude_agent_sdk import AgentDefinition
+
+    researcher = AgentDefinition(
+        description=(
+            "Financial research specialist. Delegate here: web research on "
+            "markets, companies, macro events, financial news, documentation. "
+            "Provide specific questions and relevant portfolio context. Returns "
+            "structured research findings and writes artifacts when useful."
+        ),
+        prompt=_RESEARCHER_PROMPT,
+        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS],
+        model="sonnet",
+    )
+
+    quant = AgentDefinition(
+        description=(
+            "Quantitative analysis specialist. Delegate here: technical "
+            "analysis, writing and running Python scripts for data analysis, "
+            "risk calculations, statistical modelling, portfolio metrics, "
+            "indicator computation. Provide: instruments, date ranges, and what "
+            "analysis is needed."
+        ),
+        prompt=_QUANT_PROMPT,
+        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS],
+        model="sonnet",
+    )
+
+    execution = AgentDefinition(
+        description=(
+            "Trade execution specialist. Delegate ALL order placement and "
+            "cancellation here. Always pass: current account balance, relevant "
+            "positions, and exact order instructions (symbol, type, qty, limit "
+            "price if applicable). Returns a typed list of trade results — do "
+            "not attempt T212 tool calls yourself."
+        ),
+        prompt=_EXECUTION_PROMPT,
+        tools=list(_EXECUTION_T212_TOOLS),
+        model="haiku",
+    )
+
+    return {"researcher": researcher, "quant": quant, "execution": execution}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Security hooks
+#
+# PreToolUse guards that block destructive shell commands (rm, fork bombs,
+# disk writes) and access to secrets (.env, keys). Applied to the parent
+# ClaudeAgentOptions; the SDK propagates hooks to subagents.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Bash commands that must never run.
+_BASH_DENY = [
+    (re.compile(r"\brm\b"), "destructive file removal (rm) is blocked"),
+    (re.compile(r"\bmkfs\b"), "filesystem formatting is blocked"),
+    (re.compile(r"\bdd\b\s+.*\bif="), "raw disk writes (dd) are blocked"),
+    (re.compile(r">\s*/dev/(sd|nvme|disk)"), "writes to raw devices are blocked"),
+    (re.compile(r":\s*\(\s*\)\s*\{.*\|.*&\s*\}"), "fork bombs are blocked"),
+    (re.compile(r"\bgit\b.*\bpush\b.*--force"), "force pushes are blocked"),
+]
+
+# Paths/secrets that must never be read or written by any tool.
+_SECRET_PATTERNS = [
+    (re.compile(r"(^|/)\.env(\.|$|\b)"), ".env files contain secrets"),
+    (re.compile(r"\bid_rsa\b|\.pem\b|\.key\b"), "private keys are protected"),
+    (re.compile(r"\b(secrets?|credentials?)\b", re.IGNORECASE), "credential files are protected"),
+]
+
+
+def _deny(reason: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"Blocked by security policy: {reason}",
+        }
+    }
+
+
+async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    command = str((input_data.get("tool_input") or {}).get("command", ""))
+    for pattern, reason in _BASH_DENY:
+        if pattern.search(command):
+            return _deny(reason)
+    for pattern, reason in _SECRET_PATTERNS:
+        if pattern.search(command):
+            return _deny(reason)
+    return {}
+
+
+async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    tool_input = input_data.get("tool_input") or {}
+    target = " ".join(
+        str(tool_input.get(k, ""))
+        for k in ("file_path", "path", "pattern", "notebook_path")
+    )
+    for pattern, reason in _SECRET_PATTERNS:
+        if pattern.search(target):
+            return _deny(reason)
+    return {}
+
+
+def build_security_hooks() -> dict[str, Any]:
+    """Build PreToolUse security hooks for ClaudeAgentOptions(hooks=...).
+
+    Returns ``dict[HookEvent, list[HookMatcher]]``. Blocks dangerous Bash
+    commands and reads/writes that touch secrets.
+    """
+    from claude_agent_sdk import HookMatcher
+
+    return {
+        "PreToolUse": [
+            HookMatcher(matcher="Bash", hooks=[_bash_guard]),
+            HookMatcher(matcher="Read|Edit|Write|Glob|Grep", hooks=[_file_guard]),
+        ],
+    }
 
 
 def runtime_info() -> dict[str, Any]:

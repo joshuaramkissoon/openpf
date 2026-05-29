@@ -17,7 +17,7 @@ from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, parse_setting_sources, resolve_sdk_cwd,
     runtime_info as sdk_runtime_info,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
+    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
 )
 
 settings = get_settings()
@@ -74,13 +74,6 @@ _TOOL_LABELS: dict[str, str] = {
 
 
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
-
-# Forecast MCP tool names (Kronos). Defined locally rather than imported so
-# registration does not depend on other modules' tool-list constants.
-_FORECAST_MCP_TOOLS = [
-    "mcp__forecast__forecast_prices",
-    "mcp__forecast__forecast_status",
-]
 
 
 def _friendly_tool_name(raw: str) -> str:
