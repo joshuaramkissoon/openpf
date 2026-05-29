@@ -1,0 +1,17 @@
+# Extra dependencies for the Kronos price-forecasting feature.
+#
+# These are intentionally split out of requirements.txt because torch is
+# heavy and the core API / chat runtime must run without it. Install only
+# on a machine that will run the forecast MCP server (e.g. Josh's Mac mini
+# M4, where torch uses the Apple Silicon `mps` backend):
+#
+#     pip install -r requirements.txt -r requirements-forecast.txt
+#
+# The forecast service degrades gracefully if these are absent — the rest
+# of the app is unaffected.
+
+torch>=2.0.0
+einops==0.8.1
+huggingface_hub==0.33.1
+safetensors==0.6.2
+tqdm==4.67.1

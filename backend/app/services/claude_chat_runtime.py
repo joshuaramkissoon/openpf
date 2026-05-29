@@ -57,6 +57,9 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__marketdata__get_risk_metrics": "Analyzing risk metrics",
     "mcp__marketdata__get_correlation_matrix": "Computing correlations",
     "mcp__marketdata__compare_assets": "Comparing assets",
+    # Forecast MCP tools
+    "mcp__forecast__forecast_prices": "Forecasting prices (Kronos)",
+    "mcp__forecast__forecast_status": "Checking forecast model",
     # Scheduler MCP tools
     "mcp__scheduler__list_scheduled_tasks": "Listing scheduled tasks",
     "mcp__scheduler__create_scheduled_task": "Creating scheduled task",
@@ -71,6 +74,13 @@ _TOOL_LABELS: dict[str, str] = {
 
 
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
+
+# Forecast MCP tool names (Kronos). Defined locally rather than imported so
+# registration does not depend on other modules' tool-list constants.
+_FORECAST_MCP_TOOLS = [
+    "mcp__forecast__forecast_prices",
+    "mcp__forecast__forecast_status",
+]
 
 
 def _friendly_tool_name(raw: str) -> str:
@@ -313,6 +323,7 @@ class ClaudeChatRuntime:
         t212_script = _MCP_SERVER_DIR / "t212.py"
         market_script = _MCP_SERVER_DIR / "marketdata.py"
         scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
+        forecast_script = _MCP_SERVER_DIR / "forecast.py"
         if t212_script.is_file():
             mcp_servers["trading212"] = {
                 "type": "stdio",
@@ -355,6 +366,18 @@ class ClaudeChatRuntime:
             }
             allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
 
+        # Forecast MCP server (Kronos). Uses the same env so `app` and
+        # `vendor` are importable; torch loads lazily inside the subprocess
+        # only when a forecast is actually requested.
+        if forecast_script.is_file():
+            mcp_servers["forecast"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(forecast_script)],
+                "env": _mcp_env,
+            }
+            allowed_tools.extend(_FORECAST_MCP_TOOLS)
+
         self._info = {
             **runtime,
             "allowed_tools": allowed_tools,
@@ -371,8 +394,12 @@ class ClaudeChatRuntime:
                     "You are Archie, Josh's portfolio copilot on the MyPF dashboard. "
                     "Explain clearly, highlight risk, and give actionable next steps. "
                     "Your identity and memory guidelines are in your project CLAUDE.md. "
-                    "You have MCP market data tools for spot/historical/technical data and "
-                    "scheduler tools for cron task management. "
+                    "You have MCP market data tools for spot/historical/technical data, "
+                    "scheduler tools for cron task management, and a Kronos forecasting "
+                    "tool (forecast_prices) that projects a holding's close price over a "
+                    "future horizon with p10/p50/p90 uncertainty bands. Treat forecasts as "
+                    "probabilistic analysis with clear uncertainty, never as certainties or "
+                    "executed trades. "
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },

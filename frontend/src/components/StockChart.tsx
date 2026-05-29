@@ -5,7 +5,14 @@ import {
   type IChartApi,
   type LogicalRange,
 } from 'lightweight-charts'
-import { fetchChartData, type ChartData, type MACDPoint, type IndicatorPoint } from '../api/charts'
+import {
+  fetchChartData,
+  fetchForecast,
+  type ChartData,
+  type ForecastData,
+  type MACDPoint,
+  type IndicatorPoint,
+} from '../api/charts'
 
 interface Props {
   ticker: string
@@ -14,7 +21,13 @@ interface Props {
   chartType?: 'candlestick' | 'line'
   indicators?: string[]
   height?: number
+  /** Overlay a Kronos probabilistic forecast cone (daily interval only). */
+  forecast?: boolean
+  forecastHorizon?: number
+  forecastSamples?: number
 }
+
+const FORECAST_COLOR = '#FFD54F'
 
 const OVERLAY_COLORS: Record<string, { color: string; style?: 'dashed' }> = {
   sma20: { color: '#2196F3' },
@@ -87,6 +100,9 @@ export function StockChart({
   chartType = 'candlestick',
   indicators = [],
   height = 300,
+  forecast = false,
+  forecastHorizon = 30,
+  forecastSamples = 20,
 }: Props) {
   const mainRef = useRef<HTMLDivElement>(null)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -95,6 +111,12 @@ export function StockChart({
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ChartData | null>(null)
   const [collapsed, setCollapsed] = useState(false)
+
+  // Forecast cone state (only fetched when `forecast` is enabled).
+  const forecastEnabled = forecast && interval === '1d'
+  const [forecastData, setForecastData] = useState<ForecastData | null>(null)
+  const [forecastError, setForecastError] = useState<string | null>(null)
+  const [forecastLoading, setForecastLoading] = useState(false)
 
   // Determine which panels we expect from the data
   const panelKeys = data ? Object.keys(data.panels) : []
@@ -131,6 +153,38 @@ export function StockChart({
       cancelled = true
     }
   }, [ticker, period, interval, indicators.join(',')])
+
+  // Fetch the Kronos forecast cone when enabled.
+  useEffect(() => {
+    if (!forecastEnabled) {
+      setForecastData(null)
+      setForecastError(null)
+      return
+    }
+    let cancelled = false
+    setForecastLoading(true)
+    setForecastError(null)
+
+    fetchForecast({ ticker, horizon: forecastHorizon, samples: forecastSamples })
+      .then((result) => {
+        if (!cancelled) {
+          setForecastData(result)
+          setForecastLoading(false)
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          const message = err instanceof Error ? err.message : 'Failed to load forecast'
+          setForecastError(message)
+          setForecastData(null)
+          setForecastLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [forecastEnabled, ticker, forecastHorizon, forecastSamples])
 
   // Render charts once data is loaded
   useEffect(() => {
@@ -193,6 +247,53 @@ export function StockChart({
           }))
         )
       }
+    }
+
+    // --- Forecast cone (Kronos) ---
+    if (forecastData && forecastData.forecast.length > 0 && data.candles.length > 0) {
+      const lastCandle = data.candles[data.candles.length - 1]
+      const anchorTime = lastCandle.time as string
+      const anchorClose = lastCandle.close
+
+      // Anchor each band at the last real close so the cone connects.
+      const median = [
+        { time: anchorTime, value: anchorClose },
+        ...forecastData.forecast.map((p) => ({ time: p.date, value: p.p50 })),
+      ]
+      const upper = [
+        { time: anchorTime, value: anchorClose },
+        ...forecastData.forecast.map((p) => ({ time: p.date, value: p.p90 })),
+      ]
+      const lower = [
+        { time: anchorTime, value: anchorClose },
+        ...forecastData.forecast.map((p) => ({ time: p.date, value: p.p10 })),
+      ]
+
+      const upperSeries = mainChart.addLineSeries({
+        color: FORECAST_COLOR,
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        priceLineVisible: false,
+        lastValueVisible: false,
+      })
+      upperSeries.setData(upper)
+
+      const lowerSeries = mainChart.addLineSeries({
+        color: FORECAST_COLOR,
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        priceLineVisible: false,
+        lastValueVisible: false,
+      })
+      lowerSeries.setData(lower)
+
+      const medianSeries = mainChart.addLineSeries({
+        color: FORECAST_COLOR,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      })
+      medianSeries.setData(median)
     }
 
     mainChart.timeScale().fitContent()
@@ -360,7 +461,7 @@ export function StockChart({
       chartsRef.current.forEach((c) => c.remove())
       chartsRef.current = []
     }
-  }, [data, chartType, height, collapsed, panelKeys.join(',')])
+  }, [data, forecastData, chartType, height, collapsed, panelKeys.join(',')])
 
   if (loading) {
     return (
@@ -396,6 +497,26 @@ export function StockChart({
       </button>
       {!collapsed && (
         <div className="stock-chart-body">
+          {forecastEnabled && (
+            <div className="stock-chart-forecast-banner">
+              {forecastLoading && <span>Forecasting {ticker} (Kronos)…</span>}
+              {forecastError && (
+                <span className="stock-chart-forecast-error">Forecast unavailable: {forecastError}</span>
+              )}
+              {forecastData && (
+                <span>
+                  <span className="stock-chart-chip" style={{ borderColor: FORECAST_COLOR, color: FORECAST_COLOR }}>
+                    {forecastData.horizon}d forecast
+                  </span>{' '}
+                  median {forecastData.summary.expected_return_pct >= 0 ? '+' : ''}
+                  {forecastData.summary.expected_return_pct.toFixed(1)}% · P(up){' '}
+                  {(forecastData.summary.prob_up * 100).toFixed(0)}% · band ±
+                  {(forecastData.summary.terminal_spread_pct / 2).toFixed(1)}%{' '}
+                  <span className="stock-chart-meta">({forecastData.model.split('/').pop()})</span>
+                </span>
+              )}
+            </div>
+          )}
           <div ref={mainRef} style={{ width: '100%' }} />
           {panelKeys.map((key) => (
             <div key={key} className="stock-chart-panel">
