@@ -59,6 +59,15 @@ def _set_cache(key: tuple[str, int], frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _synthetic_history(symbol: str, lookback_days: int) -> pd.DataFrame:
+    """Generate a deterministic random-walk OHLCV frame.
+
+    DANGER: this is fabricated data. It must ONLY ever be returned when
+    ``OFFLINE_MODE`` is explicitly enabled (tests / offline development).
+    It is NEVER a silent fallback for a throttled/empty provider — doing
+    so would feed fabricated prices into Kronos forecasts, beta/correlation,
+    the backtest, and paper fills. Real-data callers get a ``MarketDataError``
+    instead so the absence of data is surfaced, never hidden.
+    """
     seed = abs(hash(symbol)) % (2**32)
     rng = np.random.default_rng(seed)
     periods = max(lookback_days, 180)
@@ -100,15 +109,21 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
     if cached is not None:
         return cached
 
+    # OFFLINE_MODE is an explicit opt-in (tests / offline dev) ONLY. It is
+    # never enabled implicitly — see _synthetic_history for why.
     if OFFLINE_MODE:
         return _set_cache(cache_key, _synthetic_history(ticker, lookback_days))
 
     now = time.time()
     if now < _YF_THROTTLED_UNTIL:
+        # Recently throttled: a slightly stale *real* quote is acceptable,
+        # but we never fabricate. No cache → surface the error.
         stale = _get_cached(cache_key, allow_stale=True)
         if stale is not None:
             return stale
-        return _set_cache(cache_key, _synthetic_history(ticker, lookback_days))
+        raise MarketDataError(
+            f"Market data provider throttled; no cached history for {ticker}"
+        )
 
     end = date.today() + timedelta(days=1)
     start = date.today() - timedelta(days=lookback_days)
@@ -126,7 +141,7 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
                 auto_adjust=True,
                 timeout=6,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             if attempt == 0:
                 logger.warning("yfinance fetch_history attempt 1 failed for %s, clearing cookies", ticker)
                 _clear_yfinance_cookie_cache()
@@ -136,7 +151,9 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
             stale = _get_cached(cache_key, allow_stale=True)
             if stale is not None:
                 return stale
-            return _set_cache(cache_key, _synthetic_history(ticker, lookback_days))
+            raise MarketDataError(
+                f"Market data fetch failed for {ticker}: {exc}"
+            ) from exc
 
         if not data.empty:
             break
@@ -151,7 +168,9 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
         stale = _get_cached(cache_key, allow_stale=True)
         if stale is not None:
             return stale
-        return _set_cache(cache_key, _synthetic_history(ticker, lookback_days))
+        raise MarketDataError(
+            f"No price history returned for {ticker} (provider empty/throttled)"
+        )
 
     frame = data.reset_index()
     # Ticker.history() returns flat columns, but guard against MultiIndex.
@@ -171,5 +190,7 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
         stale = _get_cached(cache_key, allow_stale=True)
         if stale is not None:
             return stale
-        return _set_cache(cache_key, _synthetic_history(ticker, lookback_days))
+        raise MarketDataError(
+            f"No valid candles for {ticker} after cleaning (provider returned no usable rows)"
+        )
     return _set_cache(cache_key, out)
