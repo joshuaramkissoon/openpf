@@ -130,46 +130,6 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "Output a concise markdown report ending with a JSON block {\"proposals\": [...]}."
         ),
     },
-    {
-        "name": "leveraged_universe_refresh",
-        "cron_expr": "0 9 * * 6",
-        "timezone": "Europe/London",
-        "model": settings.claude_agent_model,
-        "enabled": False,
-        "meta": {
-            "task_kind": "claude",
-            "description": "Weekly refresh of the curated leveraged ETP universe",
-        },
-        "prompt": (
-            "Verify and refresh the curated leveraged-products map at "
-            "`memory/instruments/leveraged-products.md`. This is the mechanism that keeps the leveraged "
-            "universe current. Trading 212 has NO short selling — 'downside' exposure is achieved only via "
-            "INVERSE (short) leveraged ETPs, which are ISA-only. So the file must cover BOTH long AND inverse "
-            "products.\n\n"
-            "Steps:\n"
-            "1. Read the current `memory/instruments/leveraged-products.md` so you preserve its structure, "
-            "the ticker-disambiguation rules, and the notes section.\n"
-            "2. Use the Trading 212 `search_instruments` tool to find currently-available, ISA-eligible "
-            "leveraged ETPs — both 3x LONG and 3x INVERSE/SHORT (e.g. GraniteShares / Leverage Shares 3x "
-            "single-stock and index products, and their inverse equivalents). Respect T212's strict "
-            "instrument-search rate limit (~1 req/50s) — batch your queries and pace them.\n"
-            "3. Use WebSearch to confirm issuer (GraniteShares / Leverage Shares / WisdomTree), the exact "
-            "UNDERLYING each ETP maps to, and the correct yfinance ticker (LSE listings usually need a `.L` "
-            "suffix; GBX = pence). Cross-check that each product is still listed and ISA-eligible — drop any "
-            "that have been delisted.\n"
-            "4. For each product record: ticker (common), T212 instrument code (`_EQ`, noting the lowercase "
-            "`l` ISA suffix where it applies), underlying, direction (long/inverse), currency, and the "
-            "yfinance ticker. Pair each long product with its inverse counterpart where one exists so "
-            "downside hedges are easy to find.\n"
-            "5. Verify every ticker→name→direction mapping before writing — leveraged tickers are easily "
-            "confused (e.g. 3PLT long vs 3SPL inverse; 3SNPL = Netflix short, not Snap; 3TSM = Taiwan "
-            "Semiconductor, not Tesla). Keep the existing disambiguation rules.\n"
-            "6. Write the refreshed curated map back to `memory/instruments/leveraged-products.md`, update "
-            "its 'Updated' date, and note anything newly added, removed, or that you could not verify.\n\n"
-            "Finish with a short markdown summary of what changed (added / removed / re-verified) so the run "
-            "is human-readable."
-        ),
-    },
 ]
 
 

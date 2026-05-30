@@ -20,9 +20,13 @@ Read `memory/README.md` for full guidelines.
 | `memory/lessons.md` | Mistakes & insights | When lessons emerge |
 | `memory/context.md` | Background facts about Josh | Rarely |
 | `memory/session_notes/YYYY-MM-DD.md` | Daily session summaries | End of each session |
-| `memory/instruments/leveraged-products.md` | Curated 3x long/short products (ISA) | When new products discovered |
-| `memory/instruments/all-instruments.json` | Full T212 instrument cache | Auto-updated by script |
 | `memory/trades/` | Leveraged trade log with entry/exit/P&L | After each leveraged trade |
+
+> **Leveraged products are identified LIVE from T212 instrument metadata** — there is no
+> curated products file. `get_positions` returns each holding's real `name` and a `leverage`
+> field ({factor, direction, underlying}); the name itself disambiguates (e.g. `3SNDl` =
+> "Leverage Shares 3x Long SanDisk SNDK", not the SNDL cannabis stock). Always trust the
+> T212 metadata name over ticker-letter guessing.
 
 ### Memory Rules
 - Read relevant memory files BEFORE answering portfolio questions
@@ -112,7 +116,7 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
 - Order placement and cancellation
 - Order history, dividends, transactions; instrument search (`search_instruments`)
 - **Never use T212 tools to look up prices or market data** — T212 has strict API rate limits (1 req/s for positions, 1 req/50s for instrument search)
-- **No short selling on T212.** Downside/short exposure is achieved only via **INVERSE (3x short) ETPs**, which are **ISA-only**. See `memory/instruments/leveraged-products.md`.
+- **No short selling on T212.** Downside/short exposure is achieved only via **INVERSE (3x short) ETPs**, which are **ISA-only**. Identify these from the live T212 instrument metadata (the name encodes factor/direction/underlying).
 
 ### Scheduler MCP
 - List, create, pause, resume, delete, and run scheduled tasks
@@ -123,8 +127,9 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
   (profit target / loss limit / max trades) and exposure/per-position/open-count caps.
 - An autonomous daily loop runs it (morning cycle, midday + EOD monitors) plus a weekly review and an
   optional daily-alpha goal task. Inspect/manage via the scheduler tools.
-- Map underlyings → the correct long/inverse ETP via `memory/instruments/leveraged-products.md` (verify
-  ticker→name→direction every time; the codes are easily confused). Never bypass a rail.
+- Map underlyings → the correct long/inverse ETP via the **live T212 instrument metadata**: every
+  position's `name` + `leverage` field state the factor, direction, and underlying authoritatively
+  (e.g. `3SNDl` = "3x Long SanDisk SNDK"), so no ticker-letter guessing is needed. Never bypass a rail.
 
 ### Tool Routing Rule
 When you need a price, quote, candle data, technical indicator, risk metric, or correlation: **always use marketdata MCP**.

@@ -491,7 +491,10 @@ def _instrument_name_map(db: Session) -> dict[str, str]:
                 ticker = str(inst.get("ticker", "")).strip()
                 name = inst.get("name") or inst.get("shortName")
                 if ticker and name:
-                    mapping[ticker] = str(name)
+                    # Key case-insensitively: the dashboard upper-cases instrument
+                    # codes, but T212 metadata keeps lowercase exchange suffixes
+                    # (e.g. "NUCGl_EQ" for London) — match regardless of case.
+                    mapping[ticker.upper()] = str(name)
     except Exception:  # noqa: BLE001 — names are best-effort, never block the snapshot
         mapping = {}
 
@@ -580,7 +583,7 @@ def get_portfolio_snapshot(
                 "account_kind": p.account_kind,
                 "ticker": p.ticker,
                 "instrument_code": p.instrument_code,
-                "name": name_map.get(p.instrument_code) or name_map.get(p.ticker),
+                "name": name_map.get((p.instrument_code or "").upper()) or name_map.get((p.ticker or "").upper()),
                 "quantity": p.quantity,
                 "average_price": converted_avg_price,
                 "current_price": converted_current_price,

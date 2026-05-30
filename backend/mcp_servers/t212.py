@@ -29,6 +29,8 @@ from typing import Any, Literal
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from app.services.leveraged_registry import classify_leveraged
+
 # ──────────────────────────────────────────────
 # Logging (file-based — stdout is reserved for MCP protocol)
 # ──────────────────────────────────────────────
@@ -349,6 +351,9 @@ async def get_positions(account: str = "invest") -> str:
                 pos["ticker"] = code
             if name:
                 pos["name"] = name
+                lev = classify_leveraged(name)
+                if lev:
+                    pos["leverage"] = lev  # {factor, direction, underlying_name, underlying_ticker}
             if meta.get("type"):
                 pos["instrument_type"] = meta.get("type")
             if meta.get("shortName"):

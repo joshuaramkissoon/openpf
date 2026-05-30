@@ -72,7 +72,10 @@ def _audit_log(entry: dict[str, Any]) -> str:
 # proxy symbol (used for technicals) and a stable underlying KEY (used for
 # concentration accounting — long and inverse ETPs on the same name share a
 # key so we cap total exposure to that underlying regardless of direction).
-# Source: .claude/runtime/memory/instruments/leveraged-products.md
+# NOTE: this static map is a stopgap. The authoritative source is now the live
+# T212 instrument metadata (see app.services.leveraged_registry, which derives
+# factor/direction/underlying from the instrument name); the regime/universe
+# engine will replace this hardcoded map with the derived registry.
 #
 # IMPORTANT: inverse ("short") ETPs provide DOWNSIDE exposure to the
 # underlying and are ISA-only. T212 does NOT support short selling; buying an
