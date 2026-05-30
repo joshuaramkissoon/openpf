@@ -18,6 +18,7 @@ class PositionItem(BaseModel):
     account_kind: str
     ticker: str
     instrument_code: str
+    name: str | None = None
     quantity: float
     average_price: float
     current_price: float | None = None

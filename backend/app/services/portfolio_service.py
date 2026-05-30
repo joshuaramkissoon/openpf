@@ -457,6 +457,49 @@ def _latest_positions(db: Session) -> list[PositionSnapshot]:
     return list(db.execute(select(PositionSnapshot).where(PositionSnapshot.fetched_at == latest_ts)).scalars().all())
 
 
+_INSTRUMENT_NAME_TTL_SECONDS = 6 * 3600
+_instrument_name_cache: tuple[float, dict[str, str]] | None = None
+
+
+def _instrument_name_map(db: Session) -> dict[str, str]:
+    """Best-effort {instrument_code: display name} from T212 bulk metadata.
+
+    The positions feed carries no human-readable name, so we join against the
+    bulk /equity/metadata/instruments list (one call, cached ~6h) to attribute
+    each ticker to its real name. Never raises — returns {} when metadata is
+    unavailable (mock mode / missing credentials).
+    """
+    global _instrument_name_cache
+    now = datetime.now().timestamp()
+    if _instrument_name_cache and (now - _instrument_name_cache[0]) < _INSTRUMENT_NAME_TTL_SECONDS:
+        return _instrument_name_cache[1]
+
+    mapping: dict[str, str] = {}
+    try:
+        store = ConfigStore(db)
+        client = None
+        for acct in ("invest", "stocks_isa"):
+            try:
+                client = build_t212_client(store, acct)
+                break
+            except Exception:  # noqa: BLE001 — try the other account's creds
+                continue
+        if client is not None:
+            for inst in client.get_instruments_metadata():
+                if not isinstance(inst, dict):
+                    continue
+                ticker = str(inst.get("ticker", "")).strip()
+                name = inst.get("name") or inst.get("shortName")
+                if ticker and name:
+                    mapping[ticker] = str(name)
+    except Exception:  # noqa: BLE001 — names are best-effort, never block the snapshot
+        mapping = {}
+
+    if mapping:
+        _instrument_name_cache = (now, mapping)
+    return mapping
+
+
 def get_portfolio_snapshot(
     db: Session,
     account_kind: AccountViewKind = "all",
@@ -511,6 +554,7 @@ def get_portfolio_snapshot(
         if p.instrument_code
     }
     signal_cache: dict[str, Any] = {}
+    name_map = _instrument_name_map(db)
 
     enriched: list[dict[str, Any]] = []
     for p in positions:
@@ -536,6 +580,7 @@ def get_portfolio_snapshot(
                 "account_kind": p.account_kind,
                 "ticker": p.ticker,
                 "instrument_code": p.instrument_code,
+                "name": name_map.get(p.instrument_code) or name_map.get(p.ticker),
                 "quantity": p.quantity,
                 "average_price": converted_avg_price,
                 "current_price": converted_current_price,
