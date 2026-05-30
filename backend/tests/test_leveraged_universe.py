@@ -108,3 +108,14 @@ def test_universe_risk_off_picks_inverse_for_downtrend(monkeypatch):
     for r in out["ranked"]:
         assert r["direction"] == "inverse"
         assert r["regime_aligned"] is True
+
+
+def test_universe_flags_degraded_when_no_instruments(monkeypatch):
+    # T212 outage → empty underlying map → result must be flagged degraded,
+    # not silently presented as an empty (quiet) market.
+    monkeypatch.setattr(lu, "get_underlying_map", lambda db, force=False: {})
+    out = lu.build_universe(None, _regime("risk_on", 0.8))
+    assert out["degraded"] is True
+    assert out["available_underlyings"] == 0
+    assert out["error_reason"]
+    assert out["ranked"] == []

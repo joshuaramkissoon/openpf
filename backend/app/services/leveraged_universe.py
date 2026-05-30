@@ -165,24 +165,32 @@ def _load_instruments(db: Session) -> list[dict[str, Any]]:
     from app.services.t212_client import build_t212_client
 
     store = ConfigStore(db)
+    last_err: Exception | None = None
     for acct in ("invest", "stocks_isa"):
         try:
             client = build_t212_client(store, acct)
             return list(client.get_instruments_metadata())
-        except Exception:  # noqa: BLE001 — try the other account's creds
+        except Exception as exc:  # noqa: BLE001 — try the other account's creds
+            last_err = exc
             continue
+    # Both accounts failed — surface it (callers treat empty as degraded, not
+    # as a legitimately empty market) instead of swallowing it silently.
+    logger.warning("leveraged universe: could not load T212 instruments: %s", last_err)
     return []
 
 
 def get_underlying_map(db: Session, force: bool = False) -> dict[str, dict[str, Any]]:
     global _map_cache
-    now = time.time()
     with _lock:
-        if not force and _map_cache and (now - _map_cache[0]) < _MAP_TTL_SECONDS:
+        if not force and _map_cache and (time.time() - _map_cache[0]) < _MAP_TTL_SECONDS:
             return _map_cache[1]
     mapping = build_underlying_map(_load_instruments(db))
-    with _lock:
-        _map_cache = (now, mapping)
+    # Only cache a NON-EMPTY map: a transient T212 outage returns {} and must
+    # not poison the cache (and starve the universe) for the full TTL. Stamp at
+    # completion time so the TTL reflects when the data was actually read.
+    if mapping:
+        with _lock:
+            _map_cache = (time.time(), mapping)
     return mapping
 
 
@@ -283,14 +291,21 @@ def build_universe(
     ranked.sort(key=lambda r: (r["regime_aligned"], abs(r["move_score"])), reverse=True)
     ranked = ranked[:top_n]
 
+    # Distinguish "no instruments could be loaded" (T212 outage) from a
+    # legitimately empty result, so the caller/UI doesn't read an outage as a
+    # quiet market.
+    degraded = not umap
     result = {
         "regime": regime.to_dict(),
         "ranked": ranked,
         "evaluated": len(pool),
         "available_underlyings": len(umap),
+        "degraded": degraded,
+        "error_reason": "could not load T212 instrument metadata" if degraded else None,
         "errors": errors,
     }
-    if use_cache:
+    # Don't cache a degraded result (stamp at completion time when we do cache).
+    if use_cache and not degraded:
         with _lock:
-            _universe_cache = (now, result)
+            _universe_cache = (time.time(), result)
     return result

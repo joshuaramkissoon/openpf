@@ -60,7 +60,9 @@ def compute_attribution(db: Session, lookback_days: int = 120) -> dict[str, Any]
         avg_pred = sum((s.expected_edge or 0.0) for _, s in items) / n
         avg_real = sum((t.pnl_pct or 0.0) for t, _ in items) / n
         avg_conf = sum((s.confidence or 0.0) for _, s in items) / n
-        capture = (avg_real / avg_pred) if avg_pred else None
+        # Only compute the capture ratio when the predicted edge is meaningfully
+        # non-zero — a near-zero divisor yields a spurious, unstable ratio.
+        capture = (avg_real / avg_pred) if abs(avg_pred) > 1e-3 else None
         return {
             "n": n,
             "win_rate": round(wins / n, 3),

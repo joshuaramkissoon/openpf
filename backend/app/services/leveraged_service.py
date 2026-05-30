@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -23,6 +24,7 @@ from app.services.t212_client import T212Error, build_t212_client, normalize_ins
 
 
 UK_TZ = ZoneInfo("Europe/London")
+logger = logging.getLogger(__name__)
 
 
 class LeveragedError(RuntimeError):
@@ -630,10 +632,13 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
     regime = compute_regime()
     # Attribution from closed trades makes expected_edge data-driven (falls back
     # to the rule constant when there's not enough history yet).
+    attribution: dict[str, Any] = {}
+    attribution_error: str | None = None
     try:
         attribution = compute_attribution(db)
-    except Exception:  # noqa: BLE001 — attribution is advisory, never block a scan
-        attribution = {}
+    except Exception as exc:  # noqa: BLE001 — attribution is advisory, never block a scan
+        attribution_error = str(exc)
+        logger.warning("leveraged scan: attribution failed, using rule edge: %s", exc)
 
     notional_per_trade = min(float(policy["per_position_notional"]), capacity_left)
 
@@ -721,6 +726,7 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
         "open_positions": len(open_trades),
         "open_exposure": current_exposure,
         "regime": regime.to_dict(),
+        "attribution_error": attribution_error,
         "failures": failures,
     }
 

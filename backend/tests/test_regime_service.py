@@ -81,12 +81,21 @@ def test_neutral_mixed(monkeypatch):
 
 
 def test_vix_stress_overrides_uptrend(monkeypatch):
-    # Strong uptrend but a stressed VIX must NOT read as risk-on.
+    # Strong uptrend but a stressed VIX must NOT read as risk-on — and must NOT
+    # flip to risk-off (which would favour inverse ETPs into an uptrend). It
+    # reads NEUTRAL: defensive, no counter-trend tilt.
     up = _tech("uptrend", 760, 700, 670)
     _patch(monkeypatch, spy=up, qqq=up, vix=34.0)
     r = rs.compute_regime(force=True)
-    assert r.regime != "risk_on"
+    assert r.regime == "neutral"
     assert r.vix_state == "stressed"
+
+
+def test_vix_stress_with_downtrend_is_risk_off(monkeypatch):
+    down = _tech("downtrend", 600, 650, 700)
+    _patch(monkeypatch, spy=down, qqq=down, vix=34.0)
+    r = rs.compute_regime(force=True)
+    assert r.regime == "risk_off"
 
 
 def test_degraded_data_is_neutral_not_fabricated(monkeypatch):

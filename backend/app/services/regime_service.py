@@ -177,9 +177,12 @@ def compute_regime(force: bool = False) -> RegimeState:
     base = (sum(index_scores) / len(index_scores)) if index_scores else 0.0
     score = _clamp(base + vix_adj, -1.0, 1.0)
 
-    # Classify. A stressed VIX caps the read defensively even if trend is up.
+    # Classify. A stressed VIX caps the read defensively: never risk-on under
+    # stress, and risk-off only when the trend is genuinely negative (same
+    # threshold, so no discontinuity at score==0 — a high-VIX melt-up reads
+    # neutral, not a counter-trend inverse tilt).
     if vix is not None and vix >= _VIX_STRESS:
-        regime = "risk_off" if score < 0 else "neutral"
+        regime = "risk_off" if score <= _RISK_OFF_AT else "neutral"
     elif score >= _RISK_ON_AT:
         regime = "risk_on"
     elif score <= _RISK_OFF_AT:
@@ -223,8 +226,10 @@ def compute_regime(force: bool = False) -> RegimeState:
         stale=stale,
     )
 
+    # Stamp the cache at completion time (not pre-fetch) so TTL reflects when
+    # the data was actually read.
     with _cache_lock:
-        _cache = (now, state)
+        _cache = (time.time(), state)
     return state
 
 

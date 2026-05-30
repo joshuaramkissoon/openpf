@@ -416,6 +416,8 @@ export interface UniverseResponse {
   ranked: UniverseRow[]
   evaluated: number
   available_underlyings: number
+  degraded?: boolean
+  error_reason?: string | null
   errors: string[]
 }
 
