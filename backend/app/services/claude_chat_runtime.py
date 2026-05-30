@@ -392,6 +392,10 @@ class ClaudeChatRuntime:
                     "EOD monitors, weekly review) that scans and proposes leveraged entries. You can "
                     "inspect and manage these via the scheduler tools and the leveraged-products memory "
                     "file; never imply a rail can be bypassed. "
+                    "To show a price chart, emit a fenced code block tagged `chart` whose body is JSON, e.g. "
+                    "{\"ticker\": \"MU\", \"period\": \"6mo\", \"indicators\": [\"sma20\", \"sma50\"], \"forecast\": true}; "
+                    "the dashboard renders it as an interactive candlestick chart with SMAs and the Kronos forecast "
+                    "cone. NEVER use matplotlib, Python, or image files to draw charts. "
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },
@@ -695,6 +699,42 @@ class ClaudeChatRuntime:
                 await state.client.disconnect()
             except Exception:
                 return
+
+    async def interrupt(self, chat_session_id: str) -> bool:
+        """Stop the in-flight turn for a session.
+
+        Must be safe to call *concurrently* while `stream_reply` holds
+        `state.lock` and is iterating `receive_response()`. We therefore do
+        NOT take `state.lock` — we operate directly on the cached client.
+
+        Preferred path: the SDK's `ClaudeSDKClient.interrupt()` (0.2.87),
+        which sends a control "interrupt" request over the streaming
+        transport, terminating the current turn while keeping the session
+        connected for the next message. If that isn't available or fails,
+        fall back to `drop_session` (disconnect the client, which kills the
+        query); the next message transparently re-connects.
+
+        Returns True if an interrupt/disconnect was attempted, False if
+        there was no active connected session to stop.
+        """
+        state = self._sessions.get(chat_session_id)
+        if not state or not state.connected:
+            return False
+
+        interrupt_fn = getattr(state.client, "interrupt", None)
+        if callable(interrupt_fn):
+            try:
+                await interrupt_fn()
+                return True
+            except Exception:
+                # interrupt() is only valid in streaming mode with an
+                # in-flight turn; if it raises (e.g. nothing to interrupt,
+                # or the control channel rejected it), fall back to a hard
+                # disconnect so the turn is guaranteed to stop.
+                pass
+
+        await self.drop_session(chat_session_id)
+        return True
 
     def runtime_info(self) -> dict[str, Any]:
         return dict(self._info)
