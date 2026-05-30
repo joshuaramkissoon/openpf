@@ -4,6 +4,7 @@ import {
   CreditCard,
   FileText,
   Gauge,
+  HelpCircle,
   LayoutDashboard,
   Lightbulb,
   ListChecks,
@@ -27,6 +28,7 @@ export type SectionKey =
   | "research"
   | "costs"
   | "diagnostics"
+  | "help"
 
 type NavItem = { key: SectionKey; label: string; icon: LucideIcon }
 type NavGroup = { label: string | null; items: NavItem[] }
@@ -133,6 +135,18 @@ export function AppSidebar({
           <span>{pendingIntents} pending</span>
           <span>{activeTheses} active theses</span>
         </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "justify-start gap-2.5 px-2.5",
+            active === "help" && "bg-sidebar-accent text-sidebar-accent-foreground",
+          )}
+          onClick={() => onSelect("help")}
+        >
+          <HelpCircle className="size-4 text-muted-foreground" strokeWidth={2} />
+          Help &amp; Guide
+        </Button>
         <Button variant="ghost" size="sm" className="justify-start gap-2.5 px-2.5" onClick={onOpenSettings}>
           <Settings className="size-4 text-muted-foreground" strokeWidth={2} />
           Settings

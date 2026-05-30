@@ -36,6 +36,7 @@ import { CostsWorkspace } from './components/CostsWorkspace'
 import { AppSidebar, type SectionKey } from '@/components/layout/app-sidebar'
 import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
 import { ResearchDesk } from '@/components/research/research-desk'
+import { HelpGuide } from '@/components/help/help-guide'
 import { SectionCard } from '@/components/kit'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -203,6 +204,7 @@ const SECTION_LABELS: Record<SectionKey, string> = {
   research: 'Insights',
   costs: 'Usage',
   diagnostics: 'Diagnostics',
+  help: 'Help & Guide',
 }
 
 const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
@@ -215,6 +217,7 @@ const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
   research: 'Theses, backtests, and agent reasoning history.',
   costs: 'Token usage on your Claude subscription (estimated).',
   diagnostics: 'Runtime, MCP servers, and capabilities.',
+  help: 'What the app can do and how to use it.',
 }
 
 export default function App() {
@@ -565,6 +568,7 @@ export default function App() {
     if (activeSection === 'artifacts') return <ArtifactsWorkspace onError={setError} />
     if (activeSection === 'costs') return <CostsWorkspace onError={setError} />
     if (activeSection === 'diagnostics') return <RuntimeDiagnosticsPanel onError={setError} />
+    if (activeSection === 'help') return <HelpGuide />
     return null
   }
 
