@@ -23,6 +23,8 @@ from app.services.leveraged_service import (
     serialize_trade,
     update_policy,
 )
+from app.services.leveraged_universe import build_universe
+from app.services.regime_service import compute_regime
 
 router = APIRouter(prefix="/leveraged", tags=["leveraged"])
 
@@ -85,5 +87,20 @@ def refresh_instruments(db: Session = Depends(get_db)) -> LeveragedActionRespons
     try:
         result = refresh_instrument_cache_now(db)
         return LeveragedActionResponse(ok=True, message="instrument cache refreshed", data=result)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/regime")
+def get_regime() -> dict:
+    """Current market regime (SPY/QQQ vs SMA50/200 + VIX) with long/inverse bias."""
+    return compute_regime().to_dict()
+
+
+@router.get("/universe")
+def get_universe(top_n: int = 8, db: Session = Depends(get_db)) -> dict:
+    """Regime-gated, market-driven leveraged watchlist derived from live T212 metadata."""
+    try:
+        return build_universe(db, top_n=max(1, min(int(top_n), 25)))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
