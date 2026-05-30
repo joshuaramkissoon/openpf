@@ -207,7 +207,7 @@ export function SettingsPanel({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       {!hideHeader && (
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">Control Tower</h2>

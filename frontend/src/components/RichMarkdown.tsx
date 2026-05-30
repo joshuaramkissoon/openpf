@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ChartBlock } from '@/components/chat/chart-block'
 
 function renderInline(text: string): ReactNode[] {
   const out: ReactNode[] = []
@@ -75,6 +76,10 @@ function renderMarkdown(md: string): ReactNode[] {
       }
       if (i < rows.length && rows[i].trim().startsWith('```')) {
         i += 1
+      }
+      if (lang === 'chart') {
+        blocks.push(<ChartBlock key={`chart-${i}`} spec={codeRows.join('\n')} />)
+        continue
       }
       blocks.push(
         <pre key={`pre-${i}`}>

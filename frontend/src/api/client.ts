@@ -185,6 +185,13 @@ export async function deleteChatSession(sessionId: string) {
   return data
 }
 
+export async function stopChat(sessionId: string) {
+  const { data } = await api.post<{ id: string; interrupted: boolean }>(
+    `/agent/chat/sessions/${sessionId}/stop`
+  )
+  return data
+}
+
 export async function sendChatMessage(
   sessionId: string,
   payload: {

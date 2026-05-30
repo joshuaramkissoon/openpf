@@ -77,8 +77,8 @@ export function ResearchDesk({
   const verdict = (result?.verdict || "").toLowerCase()
 
   return (
-    <div className="grid gap-4 lg:grid-cols-5">
-      <div className="lg:col-span-2">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+      <div className="min-w-0 lg:col-span-2">
         <SectionCard
           title="Analysis Request"
           description="Archie runs the quant + research subagents over live data and a Kronos forecast, then returns an evidence-backed verdict."
@@ -117,7 +117,7 @@ export function ResearchDesk({
                 onChange={(e) => setHypothesis(e.target.value)}
               />
             </div>
-            <div className="flex items-end gap-5">
+            <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="rd-horizon">Horizon (days)</Label>
                 <Input
@@ -150,7 +150,7 @@ export function ResearchDesk({
         </SectionCard>
       </div>
 
-      <div className="lg:col-span-3">
+      <div className="min-w-0 lg:col-span-3">
         {result ? (
           <SectionCard title="Verdict" description={subject ? `${subject} · ${horizon}d horizon` : `${horizon}d horizon`}>
             <div className="flex flex-col gap-4">

@@ -55,7 +55,10 @@ export function PositionDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-4xl">
+      <SheetContent
+        side="right"
+        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full sm:max-w-4xl sm:data-[side=right]:w-3/4"
+      >
         {position ? (
           <>
             <SheetHeader className="border-b border-border/60 px-6 py-5">
@@ -64,13 +67,16 @@ export function PositionDetailSheet({
                 <Badge variant="outline" className="text-muted-foreground">{accountTag(position.account_kind)}</Badge>
                 <RiskBadge flag={position.risk_flag} className="ml-auto" />
               </div>
-              <SheetDescription className="font-mono text-xs">{position.instrument_code}</SheetDescription>
+              <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                {position.name ? <span className="font-medium text-foreground/90">{position.name}</span> : null}
+                <span className="font-mono text-muted-foreground">{position.instrument_code}</span>
+              </SheetDescription>
             </SheetHeader>
 
             <div className="flex flex-col gap-6 px-6 py-6">
               <section className="flex flex-col gap-2.5">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Financials</h3>
-                <div className="grid grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                   <Stat label="Value"><Money value={position.value} currency={currency} /></Stat>
                   <Stat label="P/L"><MoneyDelta value={position.ppl} currency={currency} /></Stat>
                   <Stat label="Weight"><Pct value={position.weight} /></Stat>
@@ -82,7 +88,7 @@ export function PositionDetailSheet({
 
               <section className="flex flex-col gap-2.5">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Signals &amp; risk</h3>
-                <div className="grid grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-3">
                   <Stat label="3M Momentum">{fmtSignal(position.momentum_63d, "pct")}</Stat>
                   <Stat label="RSI (14)">{fmtSignal(position.rsi_14, "rsi")}</Stat>
                   <Stat label="Trend">{fmtSignal(position.trend_score, "num")}</Stat>

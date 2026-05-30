@@ -1,8 +1,8 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { ArrowUp, ChevronDown, ChevronRight, Loader2, Sparkles, Wrench } from 'lucide-react'
+import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Sparkles, Square, Wrench } from 'lucide-react'
 
-import { getChatMessages, streamChatMessage, type StreamHandle } from '../api/client'
+import { getChatMessages, stopChat, streamChatMessage, type StreamHandle } from '../api/client'
 import type { ChatMessage, ChatSession, ToolCallEntry } from '../types'
 import { cn } from '../lib/utils'
 import {
@@ -157,6 +157,7 @@ type StreamSegment = {
 interface SessionState {
   messages: ChatMessage[]
   sending: boolean
+  stopping: boolean
   streamStatus: string | null
   hasStreamedText: boolean
   statusTrail: StatusItem[]
@@ -171,6 +172,7 @@ function freshSession(): SessionState {
   return {
     messages: [],
     sending: false,
+    stopping: false,
     streamStatus: null,
     hasStreamedText: false,
     statusTrail: [],
@@ -213,6 +215,7 @@ interface Props {
   onSessionTouched?: (session: ChatSession) => void
   onError: (message: string | null) => void
   deletingSessionId?: string | null
+  onOpenSessions?: () => void
 }
 
 export function AgentChatPanel({
@@ -224,6 +227,7 @@ export function AgentChatPanel({
   onSessionTouched,
   onError,
   deletingSessionId = null,
+  onOpenSessions,
 }: Props) {
   const sessionsRef = useRef(new Map<string, SessionState>())
   const activeStreamsRef = useRef(new Map<string, StreamHandle>())
@@ -563,6 +567,64 @@ export function AgentChatPanel({
     void submitContent(input)
   }
 
+  function partialTextFromSegments(segments: StreamSegment[]): string {
+    return segments
+      .filter((seg) => seg.kind === 'text')
+      .map((seg) => seg.text)
+      .join('')
+      .trim()
+  }
+
+  async function stopStream(sessionId: string) {
+    const session = getSession(sessionId)
+    if (!session.sending || session.stopping) return
+
+    patchSession(sessionId, (s) => {
+      s.stopping = true
+      s.streamStatus = 'Stopping…'
+    })
+
+    // Tear down the socket first so no further deltas arrive, then ask the
+    // backend to interrupt the in-flight turn. The StreamHandle's abort()
+    // marks itself settled before closing, so onError won't fire.
+    const handle = activeStreamsRef.current.get(sessionId)
+    handle?.abort()
+    activeStreamsRef.current.delete(sessionId)
+
+    try {
+      await stopChat(sessionId)
+    } catch {
+      // Best-effort: even if the stop call fails, we still finalize the UI
+      // locally so the user isn't stuck in a streaming state.
+    }
+
+    // Finalize the partial response: keep whatever streamed so far and drop
+    // any queued follow-ups, returning the composer to idle.
+    patchSession(sessionId, (s) => {
+      const partial = partialTextFromSegments(s.streamSegments)
+      const assistantId = s.streamAssistantId
+      if (assistantId !== null) {
+        s.messages = s.messages.map((row) =>
+          row.id === assistantId
+            ? { ...row, content: partial || row.content }
+            : row
+        )
+        // Drop an empty optimistic assistant bubble if nothing streamed.
+        if (!partial) {
+          s.messages = s.messages.filter((row) => row.id !== assistantId)
+        }
+      }
+      s.sending = false
+      s.stopping = false
+      s.hasStreamedText = false
+      s.streamStatus = null
+      s.streamSegments = []
+      s.streamAssistantId = null
+      s.pendingMessages = []
+      s.stopNotice = 'Response stopped.'
+    })
+  }
+
   function onPromptChipClick(prompt: string) {
     void submitContent(prompt)
   }
@@ -581,12 +643,22 @@ export function AgentChatPanel({
 
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 border-b border-border px-4 py-2.5 text-xs text-muted-foreground">
-        <span className="mr-auto truncate font-medium text-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+        {onOpenSessions ? (
+          <button
+            type="button"
+            onClick={onOpenSessions}
+            aria-label="Open conversations"
+            className="-ml-1 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground md:hidden"
+          >
+            <PanelLeft className="size-4" />
+          </button>
+        ) : null}
+        <span className="mr-auto min-w-0 truncate font-medium text-foreground">
           {activeSessionTitle || 'No conversation selected'}
         </span>
-        {presentationMask && <span>Demo-safe mode: numeric context obfuscated</span>}
-        <span className="font-mono uppercase tracking-wide">
+        {presentationMask && <span className="hidden sm:inline">Demo-safe mode: numeric context obfuscated</span>}
+        <span className="shrink-0 font-mono uppercase tracking-wide">
           {accountView.toUpperCase()} · {displayCurrency}
         </span>
       </div>
@@ -737,16 +809,31 @@ export function AgentChatPanel({
               disabled={!activeSessionId}
             />
             <InputGroupAddon align="block-end">
-              <span className="text-xs text-muted-foreground">Enter to send · Shift+Enter for newline</span>
-              <InputGroupButton
-                size="icon-sm"
-                className="ml-auto rounded-full bg-primary text-primary-foreground hover:bg-primary/90"
-                aria-label="Send"
-                onClick={submit}
-                disabled={sendDisabled}
-              >
-                {current.sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-              </InputGroupButton>
+              <span className="text-xs text-muted-foreground">
+                {current.sending ? 'Stop to interrupt Archie' : 'Enter to send · Shift+Enter for newline'}
+              </span>
+              {current.sending ? (
+                <InputGroupButton
+                  size="icon-sm"
+                  className="ml-auto rounded-full bg-muted text-foreground hover:bg-muted/80"
+                  aria-label="Stop"
+                  title="Stop response"
+                  onClick={() => void stopStream(activeSessionId)}
+                  disabled={current.stopping || !activeSessionId}
+                >
+                  <Square className="fill-current" />
+                </InputGroupButton>
+              ) : (
+                <InputGroupButton
+                  size="icon-sm"
+                  className="ml-auto rounded-full bg-primary text-primary-foreground hover:bg-primary/90"
+                  aria-label="Send"
+                  onClick={submit}
+                  disabled={sendDisabled}
+                >
+                  <ArrowUp />
+                </InputGroupButton>
+              )}
             </InputGroupAddon>
           </InputGroup>
         </div>

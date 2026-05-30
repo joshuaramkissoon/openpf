@@ -66,21 +66,33 @@ const NAV: NavGroup[] = [
   },
 ]
 
-export function AppSidebar({
+/**
+ * The sidebar body — brand, nav, footer (Help/Settings). Rendered both inside
+ * the persistent `md+` aside and inside the mobile `Sheet` drawer. `onNavigate`
+ * fires after any nav/footer selection so the drawer can close itself.
+ */
+export function SidebarBody({
   active,
   onSelect,
   onOpenSettings,
+  onNavigate,
   pendingIntents,
   activeTheses,
 }: {
   active: SectionKey
   onSelect: (key: SectionKey) => void
   onOpenSettings: () => void
+  onNavigate?: () => void
   pendingIntents: number
   activeTheses: number
 }) {
+  function handleSelect(key: SectionKey) {
+    onSelect(key)
+    onNavigate?.()
+  }
+
   return (
-    <aside className="flex h-full w-60 shrink-0 flex-col gap-6 border-r border-border bg-sidebar px-3 py-5">
+    <>
       <div className="flex items-center gap-2.5 px-2">
         <div className="flex size-8 items-center justify-center rounded-lg bg-primary/15 text-primary ring-1 ring-primary/25">
           <span className="font-mono text-sm font-bold">M</span>
@@ -105,7 +117,7 @@ export function AppSidebar({
               return (
                 <button
                   key={item.key}
-                  onClick={() => onSelect(item.key)}
+                  onClick={() => handleSelect(item.key)}
                   className={cn(
                     "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
                     isActive
@@ -142,16 +154,38 @@ export function AppSidebar({
             "justify-start gap-2.5 px-2.5",
             active === "help" && "bg-sidebar-accent text-sidebar-accent-foreground",
           )}
-          onClick={() => onSelect("help")}
+          onClick={() => handleSelect("help")}
         >
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={2} />
           Help &amp; Guide
         </Button>
-        <Button variant="ghost" size="sm" className="justify-start gap-2.5 px-2.5" onClick={onOpenSettings}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="justify-start gap-2.5 px-2.5"
+          onClick={() => {
+            onOpenSettings()
+            onNavigate?.()
+          }}
+        >
           <Settings className="size-4 text-muted-foreground" strokeWidth={2} />
           Settings
         </Button>
       </div>
+    </>
+  )
+}
+
+export function AppSidebar(props: {
+  active: SectionKey
+  onSelect: (key: SectionKey) => void
+  onOpenSettings: () => void
+  pendingIntents: number
+  activeTheses: number
+}) {
+  return (
+    <aside className="hidden h-full w-60 shrink-0 flex-col gap-6 border-r border-border bg-sidebar px-3 py-5 md:flex">
+      <SidebarBody {...props} />
     </aside>
   )
 }

@@ -72,11 +72,11 @@ export function PortfolioOverview({
         <StatCard label="Est. Volatility" value={<Pct value={metrics.estimated_volatility} />} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-1">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="min-w-0 lg:col-span-1">
           <AllocationCard positions={positions} />
         </div>
-        <div className="lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           <PositionsTable
             positions={positions}
             accountView={accountView}

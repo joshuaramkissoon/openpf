@@ -521,8 +521,8 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
   const headerActions = (
     <>
       <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
-        <SelectTrigger size="sm" className="w-[150px]">
-          <span className="text-muted-foreground">Sort:</span>
+        <SelectTrigger size="sm" className="w-[120px] sm:w-[150px]">
+          <span className="hidden text-muted-foreground sm:inline">Sort:</span>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -531,19 +531,21 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
           ))}
         </SelectContent>
       </Select>
-      <Button variant="outline" size="sm" onClick={() => void loadTasks()} disabled={busy}>
+      <Button variant="outline" size="sm" onClick={() => void loadTasks()} disabled={busy} title="Refresh" className="px-2 sm:px-3">
         <RefreshCw className={cn('size-3.5', busy && 'animate-spin')} />
-        Refresh
+        <span className="hidden sm:inline">Refresh</span>
       </Button>
       <Button
         size="sm"
+        title="New Job"
+        className="px-2 sm:px-3"
         onClick={() => {
           resetForm()
           setCreateOpen(true)
         }}
       >
         <Plus className="size-3.5" />
-        New Job
+        <span className="hidden sm:inline">New Job</span>
       </Button>
     </>
   )
@@ -620,7 +622,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
                       className="flex min-w-0 flex-1 flex-col gap-2 text-left"
                     >
                     {/* Header row */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       {running ? (
                         <RefreshCw className="size-3.5 shrink-0 animate-spin text-positive" />
                       ) : (
@@ -944,7 +946,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="nj-cron">
                   Cron <span className="font-normal text-muted-foreground">(min hr dom mon dow)</span>
@@ -970,7 +972,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="nj-model">Model</Label>
                 <Select value={form.model} onValueChange={(v) => setForm((f) => ({ ...f, model: v as string }))}>

@@ -90,35 +90,41 @@ export function LeveragedWorkspace({ onError }: Props) {
         description="ISA leveraged positions tracked in SQLite + markdown logs"
         action={
           <>
-            <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={busy}>
+            <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={busy} title="Refresh" className="px-2 sm:px-3">
               <RefreshCw />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => void runLeveragedScan().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'scan failed'))}
               disabled={busy}
+              title="Scan"
+              className="px-2 sm:px-3"
             >
               <Scan />
-              Scan
+              <span className="hidden sm:inline">Scan</span>
             </Button>
             <Button
               size="sm"
               onClick={() => void runLeveragedCycle().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'cycle failed'))}
               disabled={busy}
+              title="Run Cycle"
+              className="px-2 sm:px-3"
             >
               <TrendingUp />
-              Run Cycle
+              <span className="hidden sm:inline">Run Cycle</span>
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => void refreshInstrumentCache().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'cache refresh failed'))}
               disabled={busy}
+              title="Refresh Instruments"
+              className="px-2 sm:px-3"
             >
               <RotateCcw />
-              Refresh Instruments
+              <span className="hidden sm:inline">Refresh Instruments</span>
             </Button>
           </>
         }

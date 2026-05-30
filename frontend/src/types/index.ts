@@ -13,6 +13,7 @@ export interface PositionItem {
   account_kind: 'invest' | 'stocks_isa' | string
   ticker: string
   instrument_code: string
+  name?: string | null
   quantity: number
   average_price: number
   current_price: number

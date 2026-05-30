@@ -28,12 +28,12 @@ export function SectionCard({
   return (
     <Card className={cn("flex flex-col gap-0 overflow-hidden rounded-xl border py-0 shadow-none", className)}>
       {(title || action) && (
-        <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3.5">
-          <div className="min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/60 px-5 py-3.5">
+          <div className="min-w-0 flex-1">
             {title ? <h2 className="truncate text-sm font-semibold tracking-tight">{title}</h2> : null}
             {description ? <p className="truncate text-xs text-muted-foreground">{description}</p> : null}
           </div>
-          {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
+          {action ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{action}</div> : null}
         </div>
       )}
       <div className={cn(noPadding ? "" : "p-5", contentClassName)}>{children}</div>

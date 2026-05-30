@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Loader2, Play, Plus, RefreshCw, X } from 'lucide-react'
+import { Loader2, Menu, Play, Plus, RefreshCw, X } from 'lucide-react'
 
 import {
   archiveThesis,
@@ -33,7 +33,7 @@ import { LeveragedWorkspace } from './components/LeveragedWorkspace'
 import { ScheduledJobsWorkspace } from './components/ScheduledJobsWorkspace'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { CostsWorkspace } from './components/CostsWorkspace'
-import { AppSidebar, type SectionKey } from '@/components/layout/app-sidebar'
+import { AppSidebar, SidebarBody, type SectionKey } from '@/components/layout/app-sidebar'
 import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
 import { ResearchDesk } from '@/components/research/research-desk'
 import { HelpGuide } from '@/components/help/help-guide'
@@ -43,6 +43,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import type { AgentRun, AgentRunDetail, AppConfig, ChatSession, ExecutionEvent, PortfolioSnapshot, PositionItem, Thesis, TradeIntent } from './types'
@@ -240,6 +241,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [lastUpdate, setLastUpdate] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [chatRailOpen, setChatRailOpen] = useState(false)
   const [maskSensitiveValues, setMaskSensitiveValues] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('mypf.presentation.mask') === '1'
@@ -507,6 +510,70 @@ export default function App() {
     </SectionCard>
   )
 
+  const chatRail = (
+    <>
+      <div className="flex items-center justify-between px-3 py-2.5">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Conversations
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={() => void handleCreateChatSession()}
+          disabled={chatSessionBusy}
+        >
+          <Plus className="size-4" />
+        </Button>
+      </div>
+      <ScrollArea className="flex-1">
+        <div className="flex flex-col gap-0.5 px-2 pb-2">
+          {chatSessions.length === 0 ? (
+            <p className="px-2 py-3 text-xs text-muted-foreground">No chats yet.</p>
+          ) : (
+            chatSessions.map((session) => (
+              <div
+                key={session.id}
+                className={cn(
+                  'group flex items-center gap-1 rounded-lg px-2.5 py-2 text-sm transition-colors',
+                  session.id === activeChatSessionId
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                    : 'text-muted-foreground hover:bg-sidebar-accent/50',
+                )}
+              >
+                <button
+                  className="flex min-w-0 flex-1 flex-col items-start text-left"
+                  onClick={() => {
+                    setActiveChatSessionId(session.id)
+                    setChatRailOpen(false)
+                  }}
+                  disabled={chatSessionBusy || Boolean(deletingChatSessionId)}
+                >
+                  <span className="w-full truncate font-medium text-foreground">{session.title}</span>
+                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {dayjs(session.updated_at).format('MMM D HH:mm')}
+                  </span>
+                </button>
+                <button
+                  className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-negative group-hover:opacity-100 disabled:opacity-50"
+                  onClick={() => void handleDeleteChatSession(session.id)}
+                  disabled={chatSessionBusy || deletingChatSessionId === session.id}
+                  title="Delete chat"
+                >
+                  {deletingChatSessionId === session.id ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <X className="size-3.5" />
+                  )}
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </ScrollArea>
+    </>
+  )
+
   const statusBits: string[] = []
   if (config) {
     statusBits.push(`${config.broker.broker_mode.toUpperCase()} · ${config.broker.t212_base_env.toUpperCase()}`)
@@ -539,11 +606,11 @@ export default function App() {
 
     if (activeSection === 'execution') {
       return (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="min-w-0 lg:col-span-2">
             <IntentQueue intents={queueIntents} onApprove={handleApprove} onReject={handleReject} onExecute={handleExecute} />
           </div>
-          <div className="lg:col-span-1">
+          <div className="min-w-0 lg:col-span-1">
             <EventsFeed events={events} />
           </div>
         </div>
@@ -552,12 +619,12 @@ export default function App() {
 
     if (activeSection === 'research') {
       return (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="space-y-4 lg:col-span-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="min-w-0 space-y-4 lg:col-span-2">
             <ThesisBoard theses={theses} onArchive={handleArchiveThesis} onActivate={handleActivateThesis} />
             <BacktestLab onError={setError} />
           </div>
-          <div className="lg:col-span-1">{runHistoryCard}</div>
+          <div className="min-w-0 lg:col-span-1">{runHistoryCard}</div>
         </div>
       )
     }
@@ -582,16 +649,45 @@ export default function App() {
         activeTheses={activeThesesCount}
       />
 
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="flex w-72 max-w-[85vw] flex-col gap-6 border-r border-border bg-sidebar px-3 py-5"
+        >
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarBody
+            active={activeSection}
+            onSelect={setActiveSection}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onNavigate={() => setSidebarOpen(false)}
+            pendingIntents={pendingIntents.length}
+            activeTheses={activeThesesCount}
+          />
+        </SheetContent>
+      </Sheet>
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-4 border-b border-border bg-background/80 px-6 py-3 backdrop-blur-sm">
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold tracking-tight">{SECTION_LABELS[activeSection]}</h1>
-            <p className="truncate text-xs text-muted-foreground">
-              {SECTION_DESCRIPTIONS[activeSection] ?? statusBits.join(' · ')}
-            </p>
+        <header className="flex items-center justify-between gap-3 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-sm sm:px-6">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0 md:hidden"
+              aria-label="Open navigation"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu className="size-5" />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">{SECTION_LABELS[activeSection]}</h1>
+              <p className="truncate text-xs text-muted-foreground">
+                {SECTION_DESCRIPTIONS[activeSection] ?? statusBits.join(' · ')}
+              </p>
+            </div>
           </div>
           {activeSection === 'overview' ? (
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <Select
               value={accountView}
               onValueChange={(v) => {
@@ -600,7 +696,7 @@ export default function App() {
                 void loadAll(false, next, displayCurrency)
               }}
             >
-              <SelectTrigger size="sm" className="w-[140px]">
+              <SelectTrigger size="sm" className="w-[96px] sm:w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -617,7 +713,7 @@ export default function App() {
                 void loadAll(false, accountView, next)
               }}
             >
-              <SelectTrigger size="sm" className="w-[80px]">
+              <SelectTrigger size="sm" className="hidden w-[80px] sm:flex">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -625,95 +721,66 @@ export default function App() {
                 <SelectItem value="USD">USD</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" size="sm" onClick={() => void loadAll(true)} disabled={busy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadAll(true)}
+              disabled={busy}
+              aria-label="Refresh"
+              className="px-2 sm:px-3"
+            >
               <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <Button size="sm" onClick={() => void runAgentNow(false)} disabled={busy}>
+            <Button
+              size="sm"
+              onClick={() => void runAgentNow(false)}
+              disabled={busy}
+              aria-label="Run Agent"
+              className="px-2 sm:px-3"
+            >
               {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-              Run Agent
+              <span className="hidden sm:inline">Run Agent</span>
             </Button>
           </div>
           ) : null}
         </header>
 
         <main className="min-h-0 flex-1 overflow-hidden">
-          {activeSection === 'chat' ? (
-            <div className="flex h-full min-h-0">
-              <div className="flex w-56 shrink-0 flex-col border-r border-border bg-card/30">
-                <div className="flex items-center justify-between px-3 py-2.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Conversations
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-7"
-                    onClick={() => void handleCreateChatSession()}
-                    disabled={chatSessionBusy}
-                  >
-                    <Plus className="size-4" />
-                  </Button>
-                </div>
-                <ScrollArea className="flex-1">
-                  <div className="flex flex-col gap-0.5 px-2 pb-2">
-                    {chatSessions.length === 0 ? (
-                      <p className="px-2 py-3 text-xs text-muted-foreground">No chats yet.</p>
-                    ) : (
-                      chatSessions.map((session) => (
-                        <div
-                          key={session.id}
-                          className={cn(
-                            'group flex items-center gap-1 rounded-lg px-2.5 py-2 text-sm transition-colors',
-                            session.id === activeChatSessionId
-                              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                              : 'text-muted-foreground hover:bg-sidebar-accent/50',
-                          )}
-                        >
-                          <button
-                            className="flex min-w-0 flex-1 flex-col items-start text-left"
-                            onClick={() => setActiveChatSessionId(session.id)}
-                            disabled={chatSessionBusy || Boolean(deletingChatSessionId)}
-                          >
-                            <span className="w-full truncate font-medium text-foreground">{session.title}</span>
-                            <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                              {dayjs(session.updated_at).format('MMM D HH:mm')}
-                            </span>
-                          </button>
-                          <button
-                            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-negative group-hover:opacity-100 disabled:opacity-50"
-                            onClick={() => void handleDeleteChatSession(session.id)}
-                            disabled={chatSessionBusy || deletingChatSessionId === session.id}
-                            title="Delete chat"
-                          >
-                            {deletingChatSessionId === session.id ? (
-                              <Loader2 className="size-3.5 animate-spin" />
-                            ) : (
-                              <X className="size-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </ScrollArea>
-              </div>
-              <div className="min-w-0 flex-1">
-                <AgentChatPanel
-                  activeSessionId={activeChatSessionId}
-                  activeSessionTitle={activeChatSession?.title || null}
-                  accountView={accountView}
-                  displayCurrency={displayCurrency}
-                  presentationMask={maskSensitiveValues}
-                  onSessionTouched={handleChatSessionTouched}
-                  onError={setError}
-                  deletingSessionId={deletingChatSessionId}
-                />
-              </div>
+          {/* Chat stays MOUNTED across navigation (just hidden) so an in-flight
+              Archie stream keeps rendering and isn't lost when you switch tabs. */}
+          <div className={cn('h-full min-h-0', activeSection === 'chat' ? 'flex' : 'hidden')}>
+            <div className="hidden w-56 shrink-0 flex-col border-r border-border bg-card/30 md:flex">
+              {chatRail}
             </div>
-          ) : (
+            <Sheet open={chatRailOpen} onOpenChange={setChatRailOpen}>
+              <SheetContent
+                side="left"
+                showCloseButton={false}
+                className="flex w-72 max-w-[85vw] flex-col border-r border-border bg-card p-0"
+              >
+                <SheetTitle className="sr-only">Conversations</SheetTitle>
+                {chatRail}
+              </SheetContent>
+            </Sheet>
+            <div className="min-w-0 flex-1">
+              <AgentChatPanel
+                activeSessionId={activeChatSessionId}
+                activeSessionTitle={activeChatSession?.title || null}
+                accountView={accountView}
+                displayCurrency={displayCurrency}
+                presentationMask={maskSensitiveValues}
+                onSessionTouched={handleChatSessionTouched}
+                onError={setError}
+                deletingSessionId={deletingChatSessionId}
+                onOpenSessions={() => setChatRailOpen(true)}
+              />
+            </div>
+          </div>
+
+          {activeSection !== 'chat' ? (
             <ScrollArea className="h-full">
-              <div className="mx-auto w-full max-w-[1440px] space-y-6 p-6">
+              <div className="mx-auto w-full max-w-[1440px] space-y-6 p-4 sm:p-6">
                 {error ? (
                   <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>
@@ -722,7 +789,7 @@ export default function App() {
                 {renderSection()}
               </div>
             </ScrollArea>
-          )}
+          ) : null}
         </main>
       </div>
 
