@@ -469,6 +469,17 @@ def _build_goal_context(db: Session, task: ScheduledTask) -> str:
         )
     except Exception:  # noqa: BLE001 — regime is advisory; never block the session
         pass
+
+    # Flag imminent high-impact macro events (FOMC/CPI/NFP) so the agent sizes
+    # cautiously into them rather than holding 3x exposure blind.
+    try:
+        from app.services.macro_calendar import macro_context_line
+
+        macro = macro_context_line()
+        if macro:
+            lines.append(f"- MACRO WATCH: {macro}")
+    except Exception:  # noqa: BLE001
+        pass
     if target > 0:
         lines.append(
             f"- PROFIT TARGET: £{target:,.2f} per {window}. Once today's REALIZED P&L >= this, STOP opening "
