@@ -13,7 +13,7 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
-      <span className="font-mono text-sm font-semibold tabular-nums">{children}</span>
+      <span className="whitespace-nowrap font-mono text-sm font-semibold tabular-nums">{children}</span>
     </div>
   )
 }
@@ -55,7 +55,7 @@ export function PositionDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-3xl">
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-4xl">
         {position ? (
           <>
             <SheetHeader className="border-b border-border/60 px-6 py-5">
@@ -113,6 +113,8 @@ export function PositionDetailSheet({
                   height={340}
                   forecast={forecast}
                   forecastHorizon={30}
+                  forecastSamples={12}
+                  forecastLookback={180}
                 />
               </div>
             </div>

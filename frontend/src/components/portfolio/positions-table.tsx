@@ -26,8 +26,7 @@ export function PositionsTable({
   displayCurrency: "GBP" | "USD"
   onSelect: (position: PositionItem) => void
 }) {
-  const visible = positions.slice(0, 40)
-  const hidden = Math.max(0, positions.length - visible.length)
+  const visible = positions
 
   return (
     <SectionCard
@@ -90,11 +89,6 @@ export function PositionsTable({
           </Table>
         </ScrollArea>
       )}
-      {hidden > 0 ? (
-        <p className="border-t border-border/60 px-5 py-2.5 text-xs text-muted-foreground">
-          +{hidden} more positions
-        </p>
-      ) : null}
     </SectionCard>
   )
 }

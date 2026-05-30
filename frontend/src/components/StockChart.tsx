@@ -25,6 +25,7 @@ interface Props {
   forecast?: boolean
   forecastHorizon?: number
   forecastSamples?: number
+  forecastLookback?: number
 }
 
 const FORECAST_COLOR = '#dcb45c'
@@ -102,6 +103,7 @@ export function StockChart({
   forecast = false,
   forecastHorizon = 30,
   forecastSamples = 20,
+  forecastLookback,
 }: Props) {
   const mainRef = useRef<HTMLDivElement>(null)
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -161,7 +163,7 @@ export function StockChart({
     setForecastLoading(true)
     setForecastError(null)
 
-    fetchForecast({ ticker, horizon: forecastHorizon, samples: forecastSamples })
+    fetchForecast({ ticker, horizon: forecastHorizon, samples: forecastSamples, lookback: forecastLookback })
       .then((result) => {
         if (!cancelled) {
           setForecastData(result)
@@ -180,7 +182,7 @@ export function StockChart({
     return () => {
       cancelled = true
     }
-  }, [forecastEnabled, ticker, forecastHorizon, forecastSamples])
+  }, [forecastEnabled, ticker, forecastHorizon, forecastSamples, forecastLookback])
 
   // Render charts once data is loaded
   useEffect(() => {
