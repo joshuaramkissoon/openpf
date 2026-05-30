@@ -14,6 +14,10 @@ export interface PositionItem {
   ticker: string
   instrument_code: string
   name?: string | null
+  /** yfinance symbol resolved from venue metadata (e.g. NUCGl_EQ → NUCG.L). */
+  yfinance_ticker?: string | null
+  /** Venue quote currency (USD/GBX/GBP/EUR…); GBX = pence. */
+  instrument_currency?: string | null
   quantity: number
   average_price: number
   current_price: number

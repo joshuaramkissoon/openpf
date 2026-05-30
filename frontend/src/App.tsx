@@ -134,6 +134,8 @@ function aggregatePositionsByTicker(positions: PositionItem[], portfolioTotal: n
       ticker: row.ticker,
       instrument_code: row.instrument_code,
       name: row.name,
+      yfinance_ticker: row.yfinance_ticker,
+      instrument_currency: row.instrument_currency,
       quantity: row.quantity,
       average_price: avgPrice,
       current_price: currentPrice,

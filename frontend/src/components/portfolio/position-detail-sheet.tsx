@@ -70,6 +70,14 @@ export function PositionDetailSheet({
               <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
                 {position.name ? <span className="font-medium text-foreground/90">{position.name}</span> : null}
                 <span className="font-mono text-muted-foreground">{position.instrument_code}</span>
+                {position.yfinance_ticker && position.yfinance_ticker !== position.ticker ? (
+                  <span className="font-mono text-muted-foreground/70">· {position.yfinance_ticker}</span>
+                ) : null}
+                {position.instrument_currency ? (
+                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+                    {position.instrument_currency}
+                  </span>
+                ) : null}
               </SheetDescription>
             </SheetHeader>
 
@@ -110,8 +118,8 @@ export function PositionDetailSheet({
 
               <div className="rounded-xl border border-border/60 bg-card/40 p-4">
                 <StockChart
-                  key={position.ticker}
-                  ticker={position.ticker}
+                  key={position.yfinance_ticker || position.instrument_code || position.ticker}
+                  ticker={position.yfinance_ticker || position.instrument_code || position.ticker}
                   period="6mo"
                   interval="1d"
                   chartType="candlestick"

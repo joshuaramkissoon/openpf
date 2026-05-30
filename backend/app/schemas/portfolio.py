@@ -19,6 +19,11 @@ class PositionItem(BaseModel):
     ticker: str
     instrument_code: str
     name: str | None = None
+    # yfinance symbol resolved from T212 venue metadata (e.g. NUCGl_EQ → NUCG.L)
+    # so charts/market-data work for London/Xetra/Euronext listings, not just US.
+    yfinance_ticker: str | None = None
+    # Venue quote currency (USD/GBX/GBP/EUR…); GBX means prices are in pence.
+    instrument_currency: str | None = None
     quantity: float
     average_price: float
     current_price: float | None = None

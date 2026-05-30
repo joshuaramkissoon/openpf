@@ -164,12 +164,15 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
             time.sleep(0.5)
 
     if data.empty:
-        _YF_THROTTLED_UNTIL = time.time() + 300
+        # Empty data for ONE symbol (e.g. a delisted/illiquid ticker) is NOT a
+        # provider-wide throttle — do NOT poison the global throttle window, or
+        # a single bad symbol breaks forecasts/signals for every other holding
+        # for 5 minutes. Surface a per-symbol error (or stale cache) only.
         stale = _get_cached(cache_key, allow_stale=True)
         if stale is not None:
             return stale
         raise MarketDataError(
-            f"No price history returned for {ticker} (provider empty/throttled)"
+            f"No price history returned for {ticker} (symbol may be delisted/illiquid)"
         )
 
     frame = data.reset_index()
