@@ -448,6 +448,27 @@ def _build_goal_context(db: Session, task: ScheduledTask) -> str:
         "## GOAL CONTEXT — read before acting",
         f"Today: {today}. This is a goal-driven session: capture small, consistent alpha within hard rails.",
     ]
+
+    # Inject the live market regime so direction selection is regime-aware:
+    # risk-on tilts toward 3x LONG ETPs, risk-off toward 3x INVERSE ETPs
+    # (the only sanctioned downside path on T212, ISA-only).
+    try:
+        from app.services.regime_service import compute_regime
+
+        r = compute_regime()
+        if r.regime == "risk_on":
+            tilt = "Favour 3x LONG ETPs; avoid new inverse/short ETP entries unless a name has a clear independent downtrend."
+        elif r.regime == "risk_off":
+            tilt = "Favour 3x INVERSE ETPs for downside (ISA-only); be sparing with new long ETP entries."
+        else:
+            tilt = "Mixed/neutral tape: trade selectively, smaller size, no strong directional tilt."
+        lines.append(
+            f"- MARKET REGIME: **{r.label}** (score {r.score:+.2f}"
+            + (f", VIX {r.vix:.1f} {r.vix_state}" if r.vix is not None else "")
+            + f"). {tilt}"
+        )
+    except Exception:  # noqa: BLE001 — regime is advisory; never block the session
+        pass
     if target > 0:
         lines.append(
             f"- PROFIT TARGET: £{target:,.2f} per {window}. Once today's REALIZED P&L >= this, STOP opening "
