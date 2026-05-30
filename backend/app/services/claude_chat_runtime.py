@@ -18,6 +18,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd,
     runtime_info as sdk_runtime_info,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS,
 )
 
 settings = get_settings()
@@ -60,6 +61,11 @@ _TOOL_LABELS: dict[str, str] = {
     # Forecast MCP tools
     "mcp__forecast__forecast_prices": "Forecasting prices (Kronos)",
     "mcp__forecast__forecast_status": "Checking forecast model",
+    # Fundamentals MCP tools
+    "mcp__fundamentals__get_fundamentals": "Fetching fundamentals",
+    "mcp__fundamentals__get_valuation": "Checking valuation ratios",
+    "mcp__fundamentals__get_financial_statements": "Reading financial statements",
+    "mcp__fundamentals__get_earnings_calendar": "Checking earnings calendar",
     # Scheduler MCP tools
     "mcp__scheduler__list_scheduled_tasks": "Listing scheduled tasks",
     "mcp__scheduler__create_scheduled_task": "Creating scheduled task",
@@ -315,6 +321,7 @@ class ClaudeChatRuntime:
         market_script = _MCP_SERVER_DIR / "marketdata.py"
         scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
         forecast_script = _MCP_SERVER_DIR / "forecast.py"
+        fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
         if t212_script.is_file():
             mcp_servers["trading212"] = {
                 "type": "stdio",
@@ -369,6 +376,17 @@ class ClaudeChatRuntime:
             }
             allowed_tools.extend(_FORECAST_MCP_TOOLS)
 
+        # Fundamentals MCP server (yfinance). Uses the same env so `app` is
+        # importable as a stdio subprocess.
+        if fundamentals_script.is_file():
+            mcp_servers["fundamentals"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(fundamentals_script)],
+                "env": _mcp_env,
+            }
+            allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
+
         self._info = {
             **runtime,
             "allowed_tools": allowed_tools,
@@ -386,6 +404,8 @@ class ClaudeChatRuntime:
                     "Explain clearly, highlight risk, and give actionable next steps. "
                     "Your identity and memory guidelines are in your project CLAUDE.md. "
                     "You have MCP market data tools for spot/historical/technical data, "
+                    "fundamentals tools (get_fundamentals, get_valuation, get_financial_statements, "
+                    "get_earnings_calendar) for company facts, valuation ratios, statements, and earnings, "
                     "scheduler tools for cron task management, and a Kronos forecasting "
                     "tool (forecast_prices) that projects a holding's close price over a "
                     "future horizon with p10/p50/p90 uncertainty bands. Treat forecasts as "

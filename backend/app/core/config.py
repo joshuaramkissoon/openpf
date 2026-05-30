@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     newsapi_api_key: str = Field(default="", alias="NEWSAPI_API_KEY")
     x_api_bearer_token: str = Field(default="", alias="X_API_BEARER_TOKEN")
 
+    # Optional upgrade path for fundamentals data. NOT used today — the
+    # fundamentals MCP server currently runs on keyless yfinance. Present so a
+    # future switch to the Financial Datasets API needs no schema change.
+    financial_datasets_api_key: str = Field(default="", alias="FINANCIAL_DATASETS_API_KEY")
+
     @property
     def cors_origins_list(self) -> list[str]:
         raw = self.cors_origins.strip()

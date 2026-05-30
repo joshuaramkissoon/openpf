@@ -178,6 +178,13 @@ _FORECAST_MCP_TOOLS = [
     "mcp__forecast__forecast_status",
 ]
 
+_FUNDAMENTALS_MCP_TOOLS = [
+    "mcp__fundamentals__get_fundamentals",
+    "mcp__fundamentals__get_valuation",
+    "mcp__fundamentals__get_financial_statements",
+    "mcp__fundamentals__get_earnings_calendar",
+]
+
 # Narrow T212 subset the execution subagent is allowed to use — no CSV
 # export, no dividend/transaction history.
 _EXECUTION_T212_TOOLS = [
@@ -242,7 +249,7 @@ def build_subagents() -> dict[str, Any]:
             "structured research findings and writes artifacts when useful."
         ),
         prompt=_RESEARCHER_PROMPT,
-        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS],
+        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS],
         model="sonnet",
     )
 
@@ -255,7 +262,7 @@ def build_subagents() -> dict[str, Any]:
             "analysis is needed."
         ),
         prompt=_QUANT_PROMPT,
-        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS, *_FORECAST_MCP_TOOLS],
+        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS, *_FORECAST_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS],
         model="claude-opus-4-8",
     )
 

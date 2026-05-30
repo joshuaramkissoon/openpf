@@ -14,6 +14,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS,
 )
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
 
@@ -265,6 +266,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
         t212_script = _MCP_SERVER_DIR / "t212.py"
         market_script = _MCP_SERVER_DIR / "marketdata.py"
         scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
+        fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
 
         # Resolve a possibly-relative SQLite DATABASE_URL to an absolute
         # path so MCP subprocesses (which may run with a different CWD)
@@ -302,6 +304,14 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                 "env": _mcp_env,
             }
             allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
+        if fundamentals_script.is_file():
+            mcp_servers["fundamentals"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(fundamentals_script)],
+                "env": _mcp_env,
+            }
+            allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
 
         options = ClaudeAgentOptions(
             system_prompt=(
@@ -442,13 +452,17 @@ def run_research_request(
         "1) Restate or form the hypothesis.\n"
         "2) Gather LIVE evidence via tools — never assume prices. Use the marketdata tools "
         "(get_price_snapshot, get_technical_snapshot, get_risk_metrics, get_indicator_series, "
-        "compare_assets, get_correlation_matrix) and the Kronos forecast tool (forecast_prices, "
-        f"~{horizon_days}-day horizon, p10/p50/p90). Delegate news/catalysts to the 'researcher' subagent "
-        "and heavier statistics to the 'quant' subagent.\n"
+        "compare_assets, get_correlation_matrix), the fundamentals tools (get_fundamentals, "
+        "get_valuation, get_financial_statements, get_earnings_calendar) for company facts, "
+        "valuation ratios, financial statements, and earnings, and the Kronos forecast tool "
+        f"(forecast_prices, ~{horizon_days}-day horizon, p10/p50/p90). Delegate news/catalysts to "
+        "the 'researcher' subagent and heavier statistics to the 'quant' subagent.\n"
         "3) Weigh evidence FOR vs AGAINST the hypothesis.\n"
         "4) State invalidation conditions (what would prove it wrong).\n"
         "5) Give a suggested action — ANALYSIS ONLY; never execute or imply executed trades. "
-        "Fundamental/valuation data is not yet available — say so explicitly if the question needs it.\n\n"
+        "Fundamental and valuation data ARE available via the fundamentals tools "
+        "(get_fundamentals, get_valuation, get_financial_statements, get_earnings_calendar) — "
+        "use them whenever the question involves valuation, profitability, growth, or financial health.\n\n"
         "Write a clean markdown report (headers, a metrics table, the forecast read, evidence for/against, "
         "verdict, invalidation, suggested action) and SAVE it with the Write tool to a file named "
         "artifacts/research/<concise-slug>.md.\n\n"
@@ -487,6 +501,7 @@ def run_research_request(
             ("trading212", _MCP_SERVER_DIR / "t212.py", _build_sdk_env(), _T212_MCP_TOOLS),
             ("marketdata", _MCP_SERVER_DIR / "marketdata.py", _mcp_env, _MARKET_MCP_TOOLS),
             ("forecast", _MCP_SERVER_DIR / "forecast.py", _mcp_env, _FORECAST_MCP_TOOLS),
+            ("fundamentals", _MCP_SERVER_DIR / "fundamentals.py", _mcp_env, _FUNDAMENTALS_MCP_TOOLS),
         ):
             if script.is_file():
                 mcp_servers[name] = {"type": "stdio", "command": sys.executable, "args": [str(script)], "env": env}
