@@ -157,7 +157,6 @@ def _fetch_via_ticker(yf_ticker: str, period: str, interval: str) -> pd.DataFram
         interval=interval,
         auto_adjust=True,
         timeout=10,
-        raise_errors=True,
     )
     return frame
 

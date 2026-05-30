@@ -8,10 +8,10 @@ class AccountSummary(BaseModel):
     account_kind: str = "all"
     currency: str
     free_cash: float
-    invested: float
-    pie_cash: float
-    total: float
-    ppl: float
+    invested: float | None = None
+    pie_cash: float | None = None
+    total: float | None = None
+    ppl: float | None = None
 
 
 class PositionItem(BaseModel):
@@ -20,14 +20,15 @@ class PositionItem(BaseModel):
     instrument_code: str
     quantity: float
     average_price: float
-    current_price: float
+    current_price: float | None = None
     total_cost: float
-    value: float
-    ppl: float
-    weight: float
+    value: float | None = None
+    ppl: float | None = None
+    weight: float | None = None
     momentum_63d: float | None = None
     rsi_14: float | None = None
     trend_score: float | None = None
+    volatility_30d: float | None = None
     risk_flag: str | None = None
 
 

@@ -352,7 +352,7 @@ def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool
     broker = config.get_broker()
     watchlist = config.get_watchlist().get("symbols", [])
 
-    snapshot = get_portfolio_snapshot(db)
+    snapshot = get_portfolio_snapshot(db, strip_prices=True)
     market_regime = _market_regime()
 
     ideas: list[ProposedIntent] = []

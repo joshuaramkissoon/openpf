@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.services.claude_sdk_config import parse_setting_sources, resolve_sdk_cwd
+from app.services.claude_sdk_config import configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -194,9 +194,7 @@ def _write_memory_lines(path: Path, lines: list[str]) -> None:
 async def _distill(user_message: str, assistant_message: str, current_memory: list[str]) -> list[str]:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
-    env_key = (settings.anthropic_api_key or "").strip()
-    if env_key:
-        os.environ.setdefault("ANTHROPIC_API_KEY", env_key)
+    configure_sdk_auth()
 
     prompt_payload = {
         "purpose": "Extract durable memory for a long-running portfolio copilot.",

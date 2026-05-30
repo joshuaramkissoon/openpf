@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
 from app.services.claude_sdk_config import (
-    build_security_hooks, build_subagents, parse_setting_sources, project_root, resolve_sdk_cwd,
+    build_security_hooks, build_subagents, configure_sdk_auth,
+    parse_setting_sources, project_root, resolve_sdk_cwd,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
 )
 from app.services import costs_service
@@ -35,7 +36,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "lev_morning_scan",
         "cron_expr": "30 7 * * 1-5",
         "timezone": "Europe/London",
-        "model": settings.claude_model,
+        "model": settings.claude_agent_model,
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_cycle",
@@ -62,7 +63,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "lev_eod_close",
         "cron_expr": "30 15 * * 1-5",
         "timezone": "Europe/London",
-        "model": settings.claude_model,
+        "model": settings.claude_agent_model,
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_monitor",
@@ -74,7 +75,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "weekly_review",
         "cron_expr": "0 10 * * 0",
         "timezone": "Europe/London",
-        "model": settings.claude_model,
+        "model": settings.claude_agent_model,
         "enabled": True,
         "meta": {
             "task_kind": "claude",
@@ -234,9 +235,7 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
 def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-    env_key = (settings.anthropic_api_key or "").strip()
-    if env_key:
-        os.environ.setdefault("ANTHROPIC_API_KEY", env_key)
+    configure_sdk_auth()
 
     cwd = resolve_sdk_cwd()
     setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)

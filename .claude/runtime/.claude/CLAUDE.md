@@ -106,4 +106,7 @@ When you need a price, quote, candle data, or technical indicator: **always use 
 When you need account balances, held positions, or to place/cancel orders: **use T212 MCP**.
 Never call `search_instruments` or other T212 endpoints to look up market data — use yfinance-backed marketdata tools instead.
 
+### CRITICAL: No Cached Prices
+The portfolio context contains **cost basis data only** (quantity, average_price, total_cost). It does NOT contain current market prices. **Never quote a price without fetching it live from marketdata MCP first.** If you cannot fetch a price, say so — do not guess or use stale data.
+
 - If unsure whether a capability is available, check tools first before saying it is unavailable

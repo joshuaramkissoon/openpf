@@ -125,7 +125,6 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
                 end=end.isoformat(),
                 auto_adjust=True,
                 timeout=6,
-                raise_errors=True,
             )
         except Exception:
             if attempt == 0:

@@ -11,7 +11,8 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
-    build_security_hooks, build_subagents, parse_setting_sources, project_root, resolve_sdk_cwd,
+    build_security_hooks, build_subagents, configure_sdk_auth,
+    parse_setting_sources, project_root, resolve_sdk_cwd,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
 )
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
@@ -239,7 +240,8 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
             },
             "constraints": [
                 "Respect provided risk rails.",
-                "Do not assume missing prices.",
+                "Do not assume missing prices — always fetch live prices via marketdata MCP tools.",
+                "Portfolio context contains cost basis only (quantity, average_price, total_cost), NOT current prices.",
                 "Focus on actionable, concise, evidence-backed recommendations.",
                 "Return JSON only."
             ],
@@ -306,7 +308,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                 "You are MyPF's portfolio analyst agent. "
                 "Prioritize risk-aware, evidence-based, high-signal recommendations."
             ),
-            model=settings.claude_model,
+            model=settings.claude_agent_model,
             cwd=str(sdk_cwd),
             add_dirs=[str(workspace)],
             max_turns=settings.agent_max_turns,
@@ -337,9 +339,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
 
         import anyio
 
-        env_key = (settings.anthropic_api_key or "").strip()
-        if env_key:
-            os.environ.setdefault("ANTHROPIC_API_KEY", env_key)
+        configure_sdk_auth()
 
         response_text, cost_info = anyio.run(_run_query)
 
@@ -352,7 +352,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                     _cost_db,
                     source="agent_run",
                     source_id=_source_id,
-                    model=settings.claude_model,
+                    model=settings.claude_agent_model,
                     total_cost_usd=cost_info.get("total_cost_usd"),
                     duration_ms=cost_info.get("duration_ms"),
                     num_turns=cost_info.get("num_turns"),

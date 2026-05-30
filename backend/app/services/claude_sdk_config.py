@@ -13,6 +13,27 @@ settings = get_settings()
 _SETTING_SOURCE_ALLOWED = {"user", "project", "local"}
 
 
+def configure_sdk_auth() -> None:
+    """Set the correct env var for Claude SDK authentication.
+
+    Prefers OAuth token over API key. When OAuth is present, API key is
+    explicitly removed — the SDK treats API key as higher priority, which
+    would silently bypass subscription billing.
+
+    Token source: ``CLAUDE_CODE_OAUTH_TOKEN`` in .env (generated via
+    ``claude setup-token``). Falls back to ``ANTHROPIC_API_KEY``.
+    """
+    oauth = (settings.claude_code_oauth_token or "").strip()
+    if oauth:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = oauth
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        return
+
+    api_key = (settings.anthropic_api_key or "").strip()
+    if api_key:
+        os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
+
+
 def project_root() -> Path:
     # In Docker the directory layout differs (no `backend/` prefix),
     # so allow an explicit override via PROJECT_ROOT env var.
@@ -134,6 +155,10 @@ _MARKET_MCP_TOOLS = [
     "mcp__marketdata__get_price_snapshot",
     "mcp__marketdata__get_price_history_rows",
     "mcp__marketdata__get_technical_snapshot",
+    "mcp__marketdata__get_indicator_series",
+    "mcp__marketdata__get_risk_metrics",
+    "mcp__marketdata__get_correlation_matrix",
+    "mcp__marketdata__compare_assets",
 ]
 
 _SCHEDULER_MCP_TOOLS = [
@@ -230,8 +255,8 @@ def build_subagents() -> dict[str, Any]:
             "analysis is needed."
         ),
         prompt=_QUANT_PROMPT,
-        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS],
-        model="sonnet",
+        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS, *_FORECAST_MCP_TOOLS],
+        model="claude-opus-4-8",
     )
 
     execution = AgentDefinition(
@@ -336,6 +361,8 @@ def runtime_info() -> dict[str, Any]:
         "skills_dir": str(cwd / ".claude" / "skills"),
         "skill_files": list_skill_files(cwd),
         "claude_model": settings.claude_model,
+        "claude_chat_model": settings.claude_chat_model,
+        "claude_agent_model": settings.claude_agent_model,
         "claude_memory_model": settings.claude_memory_model,
         "memory_file": str(runtime_memory_file),
         "memory_source_file": str(source_memory_file),

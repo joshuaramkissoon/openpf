@@ -15,7 +15,7 @@ from claude_agent_sdk import ResultMessage
 
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
-    build_security_hooks, build_subagents, parse_setting_sources, resolve_sdk_cwd,
+    build_security_hooks, build_subagents, configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd,
     runtime_info as sdk_runtime_info,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
 )
@@ -296,9 +296,7 @@ class ClaudeChatRuntime:
     def _build_options(self) -> Any:
         from claude_agent_sdk import ClaudeAgentOptions
 
-        env_key = (settings.anthropic_api_key or "").strip()
-        if env_key:
-            os.environ.setdefault("ANTHROPIC_API_KEY", env_key)
+        configure_sdk_auth()
 
         sdk_cwd = resolve_sdk_cwd()
         setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
@@ -396,7 +394,7 @@ class ClaudeChatRuntime:
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },
-            model=settings.claude_model,
+            model=settings.claude_chat_model,
             cwd=str(sdk_cwd),
             max_turns=max(4, min(settings.agent_max_turns, 12)),
             allowed_tools=allowed_tools,

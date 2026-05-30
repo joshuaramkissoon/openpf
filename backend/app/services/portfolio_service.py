@@ -461,6 +461,7 @@ def get_portfolio_snapshot(
     db: Session,
     account_kind: AccountViewKind = "all",
     display_currency: str | None = None,
+    strip_prices: bool = False,
 ) -> dict[str, Any]:
     accounts_all = _latest_accounts(db)
     positions_all = _latest_positions(db)
@@ -560,34 +561,59 @@ def get_portfolio_snapshot(
         "estimated_volatility": estimated_portfolio_volatility(enriched),
     }
 
-    account_items = [
-        {
+    # When building LLM context (strip_prices=True), drop price-derived fields:
+    # they are computed from cached T212 data and may be stale, so Archie must
+    # fetch live prices via the marketdata MCP tools instead. The UI/Telegram
+    # paths keep them so the dashboard can show value, equity, and weight.
+    if strip_prices:
+        for row in enriched:
+            for key in ("current_price", "value", "ppl", "weight"):
+                row.pop(key, None)
+
+    def _account_item(a: Any) -> dict[str, Any]:
+        item = {
             "fetched_at": a.fetched_at,
             "account_kind": a.account_kind,
             "currency": target_currency,
             "free_cash": _to_target(a.free_cash, a.currency),
-            "invested": _to_target(a.invested, a.currency),
-            "pie_cash": _to_target(a.pie_cash, a.currency),
-            "total": _to_target(a.total, a.currency),
-            "ppl": _to_target(a.ppl, a.currency),
         }
+        if not strip_prices:
+            item.update(
+                {
+                    "invested": _to_target(a.invested, a.currency),
+                    "pie_cash": _to_target(a.pie_cash, a.currency),
+                    "total": _to_target(a.total, a.currency),
+                    "ppl": _to_target(a.ppl, a.currency),
+                }
+            )
+        return item
+
+    account_items = [
+        _account_item(a)
         for a in sorted(accounts_all, key=lambda row: row.account_kind)
     ]
 
     fetched_at = max((a.fetched_at for a in accounts_all), default=datetime.utcnow())
     aggregate_kind = account_kind
 
+    aggregate_account = {
+        "fetched_at": fetched_at,
+        "account_kind": aggregate_kind,
+        "currency": target_currency,
+        "free_cash": free_cash,
+    }
+    if not strip_prices:
+        aggregate_account.update(
+            {
+                "invested": invested,
+                "pie_cash": pie_cash,
+                "total": total_value,
+                "ppl": ppl,
+            }
+        )
+
     return {
-        "account": {
-            "fetched_at": fetched_at,
-            "account_kind": aggregate_kind,
-            "currency": target_currency,
-            "free_cash": free_cash,
-            "invested": invested,
-            "pie_cash": pie_cash,
-            "total": total_value,
-            "ppl": ppl,
-        },
+        "account": aggregate_account,
         "accounts": account_items,
         "positions": enriched,
         "metrics": metrics,

@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import dayjs from 'dayjs'
+import { Receipt, RefreshCw } from 'lucide-react'
+
+import { Money, SectionCard, StatCard } from '@/components/kit'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+
 import { getCostSummary, getCostRecords } from '../api/costs'
 import type { CostSummary, UsageRecord } from '../types'
 
@@ -50,81 +65,97 @@ export function CostsWorkspace({ onError }: Props) {
   useEffect(() => { void load() }, [load])
 
   return (
-    <div className="costs-workspace">
-      <div className="costs-header-row">
-        <h2>API Costs</h2>
-        <button className="btn-sm" onClick={() => void load()} disabled={busy}>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-2xl font-semibold tracking-tight">Usage</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Estimated token cost on your Claude subscription — not billed per call.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
+          <RefreshCw className={busy ? 'animate-spin' : undefined} />
           {busy ? 'Loading…' : 'Refresh'}
-        </button>
+        </Button>
       </div>
 
-      {summary && (
-        <div className="metric-grid costs-summary">
-          <div className="metric-card">
-            <span className="metric-label">All time</span>
-            <span className="metric-value">{fmtCost(summary.all_time_usd)}</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">This month</span>
-            <span className="metric-value">{fmtCost(summary.this_month_usd)}</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">This week</span>
-            <span className="metric-value">{fmtCost(summary.this_week_usd)}</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">Chat</span>
-            <span className="metric-value">{fmtCost(summary.by_source.chat)}</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">Scheduled</span>
-            <span className="metric-value">{fmtCost(summary.by_source.scheduled)}</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">Agent runs</span>
-            <span className="metric-value">{fmtCost(summary.by_source.agent_run)}</span>
-          </div>
+      {summary ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <StatCard label="All time" value={<Money value={summary.all_time_usd} currency="USD" />} />
+          <StatCard label="This week" value={<Money value={summary.this_week_usd} currency="USD" />} />
+          <StatCard label="This month" value={<Money value={summary.this_month_usd} currency="USD" />} />
+          <StatCard label="Chat" value={<Money value={summary.by_source.chat} currency="USD" />} />
+          <StatCard label="Scheduled" value={<Money value={summary.by_source.scheduled} currency="USD" />} />
+          <StatCard label="Agent runs" value={<Money value={summary.by_source.agent_run} currency="USD" />} />
         </div>
-      )}
+      ) : busy ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-[88px] rounded-xl" />
+          ))}
+        </div>
+      ) : null}
 
-      <section className="glass-card costs-table-card">
-        <div className="section-heading-row">
-          <h2>Recent Records</h2>
-          <span className="hint">{records.length} entries</span>
-        </div>
+      <SectionCard
+        title="Recent Records"
+        description="Per-invocation token usage"
+        action={<span className="text-xs text-muted-foreground">{records.length} entries</span>}
+        noPadding
+      >
         {records.length === 0 ? (
-          <p className="empty-state">No usage records yet. Records appear after the next Archie invocation.</p>
+          busy ? (
+            <div className="space-y-2 p-5">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
+              <Receipt className="size-5 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                No usage records yet. Records appear after the next Archie invocation.
+              </p>
+            </div>
+          )
         ) : (
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Source</th>
-                  <th>ID</th>
-                  <th>Model</th>
-                  <th>Cost</th>
-                  <th>Duration</th>
-                  <th>Turns</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((r) => (
-                  <tr key={r.id}>
-                    <td>{dayjs(r.recorded_at).format('MMM D HH:mm')}</td>
-                    <td><span className={`source-badge source-${r.source}`}>{sourceLabel(r.source)}</span></td>
-                    <td className="mono truncate-id" title={r.source_id}>{r.source_id.slice(0, 12)}…</td>
-                    <td className="mono">{r.model}</td>
-                    <td className="cost-value">{r.total_cost_usd != null ? fmtCost(r.total_cost_usd) : '—'}</td>
-                    <td>{fmtDuration(r.duration_ms)}</td>
-                    <td>{r.num_turns ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs text-muted-foreground">Date</TableHead>
+                <TableHead className="text-xs text-muted-foreground">Source</TableHead>
+                <TableHead className="text-xs text-muted-foreground">ID</TableHead>
+                <TableHead className="text-xs text-muted-foreground">Model</TableHead>
+                <TableHead className="text-right text-xs text-muted-foreground">Cost</TableHead>
+                <TableHead className="text-right text-xs text-muted-foreground">Duration</TableHead>
+                <TableHead className="text-right text-xs text-muted-foreground">Turns</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {records.map((r) => (
+                <TableRow key={r.id} className="hover:bg-muted/40">
+                  <TableCell className="text-muted-foreground">{dayjs(r.recorded_at).format('MMM D HH:mm')}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{sourceLabel(r.source)}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground" title={r.source_id}>
+                    {r.source_id.slice(0, 12)}…
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{r.model}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {r.total_cost_usd != null ? fmtCost(r.total_cost_usd) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
+                    {fmtDuration(r.duration_ms)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
+                    {r.num_turns ?? '—'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </SectionCard>
     </div>
   )
 }
