@@ -17,6 +17,7 @@ from app.services.config_store import ConfigStore
 from app.services.instrument_cache_service import refresh_instrument_cache
 from app.services.leveraged_market import LeveragedMarketError, get_price, get_technicals
 from app.services.regime_service import RegimeState, compute_regime
+from app.services.signal_attribution import compute_attribution, data_driven_edge
 from app.services.telegram_service import send_telegram_notification
 from app.services.t212_client import T212Error, build_t212_client, normalize_instrument_code
 
@@ -627,6 +628,12 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
 
     # One regime read per scan — gates long-vs-inverse for every candidate.
     regime = compute_regime()
+    # Attribution from closed trades makes expected_edge data-driven (falls back
+    # to the rule constant when there's not enough history yet).
+    try:
+        attribution = compute_attribution(db)
+    except Exception:  # noqa: BLE001 — attribution is advisory, never block a scan
+        attribution = {}
 
     notional_per_trade = min(float(policy["per_position_notional"]), capacity_left)
 
@@ -644,6 +651,11 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
 
         if signal_data is None:
             continue
+
+        # Blend the rule-based edge with realized history for this direction.
+        signal_data["expected_edge"] = data_driven_edge(
+            attribution, signal_data["direction"], float(signal_data["expected_edge"])
+        )
 
         target_notional = min(notional_per_trade, capacity_left)
         if target_notional < 10:
