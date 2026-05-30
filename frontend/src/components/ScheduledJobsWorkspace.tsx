@@ -3,30 +3,46 @@ import dayjs from 'dayjs'
 import {
   CalendarClock,
   CheckCircle2,
+  Loader2,
   Pause,
   Play,
+  Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
   X,
   XCircle,
 } from 'lucide-react'
 
 import {
+  createSchedulerTask,
   deleteSchedulerTask,
   getArtifact,
   getSchedulerTaskLogs,
   getSchedulerTasks,
   runSchedulerTask,
+  seedSchedulerDefaults,
   updateSchedulerTask,
 } from '../api/client'
 import { RichMarkdown } from './RichMarkdown'
 import { SectionCard } from '@/components/kit'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import type { ArtifactDetail, SchedulerTask, SchedulerTaskLog } from '../types'
 
@@ -39,6 +55,18 @@ const MODEL_OPTIONS = [
   'claude-sonnet-4-6',
   'claude-haiku-4-5',
 ]
+
+const DEFAULT_MODEL = 'claude-sonnet-4-6'
+
+const TASK_KIND_OPTIONS = [
+  'claude',
+  'claude_with_goal',
+  'leveraged_cycle',
+  'leveraged_monitor',
+  'leveraged_scan',
+] as const
+
+type TaskKind = (typeof TASK_KIND_OPTIONS)[number]
 
 function parseCronHuman(expr: string): string {
   const parts = expr.trim().split(/\s+/)
@@ -131,6 +159,36 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
 
   // Detail pane — selected task
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+
+  // New Job dialog
+  const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [seeding, setSeeding] = useState(false)
+  const [form, setForm] = useState({
+    name: '',
+    cron_expr: '30 7 * * 1-5',
+    timezone: 'Europe/London',
+    model: DEFAULT_MODEL,
+    prompt: '',
+    enabled: true,
+    task_kind: 'claude' as TaskKind,
+    goal_target_gbp: '',
+  })
+  const [formError, setFormError] = useState<string | null>(null)
+
+  function resetForm() {
+    setForm({
+      name: '',
+      cron_expr: '30 7 * * 1-5',
+      timezone: 'Europe/London',
+      model: DEFAULT_MODEL,
+      prompt: '',
+      enabled: true,
+      task_kind: 'claude',
+      goal_target_gbp: '',
+    })
+    setFormError(null)
+  }
 
   // Content tab and artifact viewer
   const [contentTab, setContentTab] = useState<'output' | 'prompt'>('prompt')
@@ -285,6 +343,60 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     }
   }
 
+  async function handleCreate() {
+    const name = form.name.trim()
+    const cron = form.cron_expr.trim()
+    const prompt = form.prompt.trim()
+    if (!name) return setFormError('Name is required.')
+    if (cron.split(/\s+/).length !== 5) {
+      return setFormError('Cron expression must have 5 fields (e.g. "30 7 * * 1-5").')
+    }
+    if (!prompt) return setFormError('Prompt is required.')
+
+    const meta: Record<string, unknown> = { task_kind: form.task_kind }
+    if (form.task_kind === 'claude_with_goal') {
+      const target = parseFloat(form.goal_target_gbp)
+      if (Number.isFinite(target) && target > 0) {
+        meta.goal = { target_gbp: target }
+      }
+    }
+
+    setCreating(true)
+    setFormError(null)
+    try {
+      await createSchedulerTask({
+        name,
+        cron_expr: cron,
+        timezone: form.timezone.trim() || 'Europe/London',
+        model: form.model.trim() || DEFAULT_MODEL,
+        prompt,
+        enabled: form.enabled,
+        meta,
+      })
+      setCreateOpen(false)
+      resetForm()
+      await loadTasks()
+      onError(null)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to create job')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function handleSeedDefaults() {
+    setSeeding(true)
+    try {
+      await seedSchedulerDefaults()
+      await loadTasks()
+      onError(null)
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to seed default jobs')
+    } finally {
+      setSeeding(false)
+    }
+  }
+
   async function deleteTask(task: SchedulerTask) {
     setDeleting((prev) => new Set(prev).add(task.id))
     try {
@@ -423,6 +535,16 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
         <RefreshCw className={cn('size-3.5', busy && 'animate-spin')} />
         Refresh
       </Button>
+      <Button
+        size="sm"
+        onClick={() => {
+          resetForm()
+          setCreateOpen(true)
+        }}
+      >
+        <Plus className="size-3.5" />
+        New Job
+      </Button>
     </>
   )
 
@@ -449,14 +571,30 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
               ))}
             </div>
           ) : sortedTasks.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
+            <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
               <CalendarClock className="size-8 text-muted-foreground" />
               <p className="text-sm font-medium">No scheduled jobs yet</p>
               <p className="max-w-md text-xs text-muted-foreground">
-                Ask Archie to set up recurring tasks for you. For example: "Schedule a daily
-                portfolio health check at 8am" or "Run a leveraged scan every weekday morning
-                at 7:30."
+                Create a job manually, seed the recommended defaults, or ask Archie to set up
+                recurring tasks for you — e.g. "Schedule a daily portfolio health check at 8am"
+                or "Run a leveraged scan every weekday morning at 7:30."
               </p>
+              <div className="mt-1 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    resetForm()
+                    setCreateOpen(true)
+                  }}
+                >
+                  <Plus className="size-3.5" />
+                  New Job
+                </Button>
+                <Button variant="outline" size="sm" disabled={seeding} onClick={() => void handleSeedDefaults()}>
+                  {seeding ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  Seed defaults
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="divide-y divide-border/60">
@@ -469,15 +607,18 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
                 const lastStatus = task.last_status
 
                 return (
-                  <button
+                  <div
                     key={task.id}
-                    type="button"
-                    onClick={() => selectTask(task.id)}
                     className={cn(
-                      'flex w-full flex-col gap-2 px-5 py-4 text-left transition-colors hover:bg-muted/40',
+                      'flex items-start gap-2 px-5 py-4 transition-colors hover:bg-muted/40',
                       isSelected && 'bg-muted/50'
                     )}
                   >
+                    <button
+                      type="button"
+                      onClick={() => selectTask(task.id)}
+                      className="flex min-w-0 flex-1 flex-col gap-2 text-left"
+                    >
                     {/* Header row */}
                     <div className="flex items-center gap-2">
                       {running ? (
@@ -560,7 +701,20 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
                         )}
                       </div>
                     )}
-                  </button>
+                    </button>
+
+                    {/* Enable / disable */}
+                    <label
+                      className="flex shrink-0 cursor-pointer items-center gap-1.5 pt-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                      title={task.enabled ? 'Enabled — click to pause' : 'Paused — click to enable'}
+                    >
+                      <span className="hidden sm:inline">{task.enabled ? 'On' : 'Off'}</span>
+                      <Switch
+                        checked={task.enabled}
+                        onCheckedChange={() => void toggleTask(task)}
+                      />
+                    </label>
+                  </div>
                 )
               })}
             </div>
@@ -684,15 +838,15 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
                 </TabsList>
 
                 <TabsContent value="prompt">
-                  <ScrollArea className="max-h-[420px]">
-                    <div className={MARKDOWN_PROSE}>
+                  <div className="max-h-[420px] overflow-y-auto overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3.5">
+                    <div className={cn(MARKDOWN_PROSE, 'min-w-0')}>
                       <RichMarkdown markdown={selectedTask.prompt} />
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="output">
-                  <ScrollArea className="max-h-[420px]">
+                  <div className="max-h-[420px] overflow-y-auto overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3.5">
                     {activeArtifact?.loading && (
                       <div className="space-y-2">
                         <Skeleton className="h-4 w-3/4" />
@@ -712,7 +866,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
                         </p>
                       )
                     )}
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
               </Tabs>
 
@@ -762,6 +916,150 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
           </SectionCard>
         )}
       </div>
+
+      {/* New Job dialog */}
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open)
+          if (!open) resetForm()
+        }}
+      >
+        <DialogContent className="max-h-[88vh] w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New scheduled job</DialogTitle>
+            <DialogDescription>
+              Create a recurring task. Cron is evaluated in the job's timezone.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nj-name">Name</Label>
+              <Input
+                id="nj-name"
+                placeholder="e.g. daily_briefing"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-cron">
+                  Cron <span className="font-normal text-muted-foreground">(min hr dom mon dow)</span>
+                </Label>
+                <Input
+                  id="nj-cron"
+                  className="font-mono"
+                  placeholder="30 7 * * 1-5"
+                  value={form.cron_expr}
+                  onChange={(e) => setForm((f) => ({ ...f, cron_expr: e.target.value }))}
+                />
+                {form.cron_expr.trim().split(/\s+/).length === 5 ? (
+                  <p className="text-xs text-muted-foreground">{parseCronHuman(form.cron_expr)}</p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-tz">Timezone</Label>
+                <Input
+                  id="nj-tz"
+                  value={form.timezone}
+                  onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-model">Model</Label>
+                <Select value={form.model} onValueChange={(v) => setForm((f) => ({ ...f, model: v as string }))}>
+                  <SelectTrigger id="nj-model" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODEL_OPTIONS.map((m) => (
+                      <SelectItem key={m} value={m}>{shortModel(m)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-kind">Task kind</Label>
+                <Select
+                  value={form.task_kind}
+                  onValueChange={(v) => setForm((f) => ({ ...f, task_kind: v as TaskKind }))}
+                >
+                  <SelectTrigger id="nj-kind" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TASK_KIND_OPTIONS.map((k) => (
+                      <SelectItem key={k} value={k}>{k}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {form.task_kind === 'claude_with_goal' ? (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-goal">
+                  Goal target <span className="font-normal text-muted-foreground">(£ per window — optional)</span>
+                </Label>
+                <Input
+                  id="nj-goal"
+                  type="number"
+                  min={0}
+                  step="any"
+                  placeholder="e.g. 40"
+                  value={form.goal_target_gbp}
+                  onChange={(e) => setForm((f) => ({ ...f, goal_target_gbp: e.target.value }))}
+                />
+              </div>
+            ) : null}
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nj-prompt">Prompt</Label>
+              <Textarea
+                id="nj-prompt"
+                rows={5}
+                placeholder="What should Archie do on each run?"
+                value={form.prompt}
+                onChange={(e) => setForm((f) => ({ ...f, prompt: e.target.value }))}
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="nj-enabled"
+                checked={form.enabled}
+                onCheckedChange={(v) => setForm((f) => ({ ...f, enabled: v }))}
+              />
+              <Label htmlFor="nj-enabled" className="text-sm font-normal text-muted-foreground">
+                Enabled — run on schedule
+              </Label>
+            </div>
+
+            {formError ? (
+              <p className="flex items-center gap-1.5 text-xs text-negative">
+                <XCircle className="size-3.5 shrink-0" />
+                {formError}
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" disabled={creating} onClick={() => setCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={creating} onClick={() => void handleCreate()}>
+              {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              Create job
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

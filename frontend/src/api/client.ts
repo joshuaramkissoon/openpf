@@ -415,6 +415,11 @@ export async function getSchedulerTaskLogs(taskId: string, limit = 40) {
   return data
 }
 
+export async function seedSchedulerDefaults() {
+  const { data } = await api.post<{ message: string }>('/scheduler/seed-defaults')
+  return data
+}
+
 export type ApiError = {
   response?: {
     data?: {
