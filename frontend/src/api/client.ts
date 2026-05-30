@@ -422,3 +422,31 @@ export type ApiError = {
     }
   }
 }
+
+export interface ResearchRunRequest {
+  objective: string
+  subject?: string
+  hypothesis?: string
+  horizon_days?: number
+  account_kind?: string
+  create_thesis?: boolean
+}
+
+export interface ResearchRunResult {
+  ok: boolean
+  markdown: string
+  verdict: 'support' | 'refute' | 'mixed' | string | null
+  confidence: number | null
+  summary: string | null
+  suggested_action: string | null
+  invalidation: string | null
+  artifact_path: string | null
+  thesis_id: string | null
+  error?: string | null
+}
+
+export async function runResearch(payload: ResearchRunRequest) {
+  // Analyst runs orchestrate subagents + tools + Kronos; allow several minutes.
+  const { data } = await api.post<ResearchRunResult>('/research/run', payload, { timeout: 280000 })
+  return data
+}

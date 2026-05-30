@@ -35,6 +35,7 @@ import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { CostsWorkspace } from './components/CostsWorkspace'
 import { AppSidebar, type SectionKey } from '@/components/layout/app-sidebar'
 import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
+import { ResearchDesk } from '@/components/research/research-desk'
 import { SectionCard } from '@/components/kit'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -198,6 +199,7 @@ const SECTION_LABELS: Record<SectionKey, string> = {
   leveraged: 'Leveraged Desk',
   jobs: 'Scheduled Jobs',
   artifacts: 'Artifacts',
+  analysis: 'Research Desk',
   research: 'Insights',
   costs: 'Usage',
   diagnostics: 'Diagnostics',
@@ -209,6 +211,7 @@ const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
   leveraged: 'Leveraged positions, rails, and signal queue.',
   jobs: 'Automated agent routines on a schedule.',
   artifacts: 'Generated briefings and reports.',
+  analysis: 'Ask Archie to analyze a holding or a new idea — live data, forecast, verdict.',
   research: 'Theses, backtests, and agent reasoning history.',
   costs: 'Token usage on your Claude subscription (estimated).',
   diagnostics: 'Runtime, MCP servers, and capabilities.',
@@ -556,6 +559,7 @@ export default function App() {
       )
     }
 
+    if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} />
     if (activeSection === 'leveraged') return <LeveragedWorkspace onError={setError} />
     if (activeSection === 'jobs') return <ScheduledJobsWorkspace onError={setError} />
     if (activeSection === 'artifacts') return <ArtifactsWorkspace onError={setError} />

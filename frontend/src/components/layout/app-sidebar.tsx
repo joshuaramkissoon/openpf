@@ -9,6 +9,7 @@ import {
   ListChecks,
   MessageSquare,
   Settings,
+  Telescope,
   type LucideIcon,
 } from "lucide-react"
 
@@ -22,6 +23,7 @@ export type SectionKey =
   | "leveraged"
   | "jobs"
   | "artifacts"
+  | "analysis"
   | "research"
   | "costs"
   | "diagnostics"
@@ -54,6 +56,7 @@ const NAV: NavGroup[] = [
   {
     label: "Analysis",
     items: [
+      { key: "analysis", label: "Research Desk", icon: Telescope },
       { key: "research", label: "Insights", icon: Lightbulb },
       { key: "costs", label: "Usage", icon: CreditCard },
       { key: "diagnostics", label: "Diagnostics", icon: Activity },

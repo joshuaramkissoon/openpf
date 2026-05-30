@@ -64,6 +64,10 @@ LEVERAGED_DEFAULT = {
     "max_open_positions": 3,
     "take_profit_pct": 0.08,
     "stop_loss_pct": 0.05,
+    # Daily session rails for agentic "make £x/day" goals. 0 = disabled/unlimited.
+    "daily_profit_target_gbp": 0.0,
+    "daily_loss_limit_gbp": 0.0,
+    "max_daily_trades": 0,
     "close_time_uk": "15:30",
     "allow_overnight": False,
     "scan_symbols": ["SPY", "QQQ", "NVDA", "PLTR", "TSLA", "SOXL", "TQQQ", "SQQQ"],
@@ -299,6 +303,9 @@ class ConfigStore:
         merged["max_open_positions"] = int(merged.get("max_open_positions", 3))
         merged["take_profit_pct"] = float(merged.get("take_profit_pct", 0.08))
         merged["stop_loss_pct"] = float(merged.get("stop_loss_pct", 0.05))
+        merged["daily_profit_target_gbp"] = float(merged.get("daily_profit_target_gbp", 0.0))
+        merged["daily_loss_limit_gbp"] = float(merged.get("daily_loss_limit_gbp", 0.0))
+        merged["max_daily_trades"] = int(merged.get("max_daily_trades", 0))
         merged["close_time_uk"] = str(merged.get("close_time_uk", "15:30")).strip() or "15:30"
         merged["allow_overnight"] = bool(merged.get("allow_overnight", False))
         merged["scan_symbols"] = [str(x).strip().upper() for x in merged.get("scan_symbols", []) if str(x).strip()]
@@ -320,6 +327,9 @@ class ConfigStore:
         normalized["max_open_positions"] = int(normalized.get("max_open_positions", 3))
         normalized["take_profit_pct"] = float(normalized.get("take_profit_pct", 0.08))
         normalized["stop_loss_pct"] = float(normalized.get("stop_loss_pct", 0.05))
+        normalized["daily_profit_target_gbp"] = float(normalized.get("daily_profit_target_gbp", 0.0))
+        normalized["daily_loss_limit_gbp"] = float(normalized.get("daily_loss_limit_gbp", 0.0))
+        normalized["max_daily_trades"] = int(normalized.get("max_daily_trades", 0))
         normalized["close_time_uk"] = str(normalized.get("close_time_uk", "15:30")).strip() or "15:30"
         normalized["allow_overnight"] = bool(normalized.get("allow_overnight", False))
         normalized["scan_symbols"] = [str(x).strip().upper() for x in normalized.get("scan_symbols", []) if str(x).strip()]

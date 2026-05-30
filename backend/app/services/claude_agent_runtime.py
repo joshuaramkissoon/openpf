@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
+    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
 )
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
 
@@ -398,4 +398,176 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
         "theses": parsed.get("theses", []) if isinstance(parsed.get("theses"), list) else [],
         "research": research,
         "raw": response_text[:12000],
+    }
+
+
+def run_research_request(
+    *,
+    objective: str,
+    subject: str = "",
+    hypothesis: str = "",
+    horizon_days: int = 30,
+    portfolio_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run an interactive, agent-driven research/analysis request (Research Desk).
+
+    Archie orchestrates the researcher + quant subagents over the market-data,
+    forecast, and read-only T212 tools to evaluate ``objective``/``hypothesis``,
+    returning a structured verdict + a markdown report and writing a persistent
+    artifact under .claude/runtime/artifacts/research/.
+    """
+    objective = (objective or "").strip()
+    subject = (subject or "").strip()
+    hypothesis = (hypothesis or "").strip()
+    horizon_days = max(1, min(int(horizon_days or 30), 365))
+
+    if settings.agent_provider != "claude":
+        return {"ok": False, "error": "Claude agent provider is not enabled.",
+                "markdown": "", "verdict": None, "confidence": None, "artifact_path": None}
+    if not objective:
+        return {"ok": False, "error": "An objective is required.",
+                "markdown": "", "verdict": None, "confidence": None, "artifact_path": None}
+
+    request_block = {
+        "subject": subject or "(none — general / new idea described in the objective)",
+        "objective": objective,
+        "hypothesis": hypothesis or "(none stated — form and test your own)",
+        "horizon_days": horizon_days,
+        "portfolio_context": portfolio_context or {},
+    }
+
+    system_prompt = (
+        "You are Archie's Research Desk analyst — rigorous, quantified, and honest about uncertainty. "
+        "Evaluate the ANALYSIS REQUEST (provided as JSON) and produce a verdict. Protocol:\n"
+        "1) Restate or form the hypothesis.\n"
+        "2) Gather LIVE evidence via tools — never assume prices. Use the marketdata tools "
+        "(get_price_snapshot, get_technical_snapshot, get_risk_metrics, get_indicator_series, "
+        "compare_assets, get_correlation_matrix) and the Kronos forecast tool (forecast_prices, "
+        f"~{horizon_days}-day horizon, p10/p50/p90). Delegate news/catalysts to the 'researcher' subagent "
+        "and heavier statistics to the 'quant' subagent.\n"
+        "3) Weigh evidence FOR vs AGAINST the hypothesis.\n"
+        "4) State invalidation conditions (what would prove it wrong).\n"
+        "5) Give a suggested action — ANALYSIS ONLY; never execute or imply executed trades. "
+        "Fundamental/valuation data is not yet available — say so explicitly if the question needs it.\n\n"
+        "Write a clean markdown report (headers, a metrics table, the forecast read, evidence for/against, "
+        "verdict, invalidation, suggested action) and SAVE it with the Write tool to a file named "
+        "artifacts/research/<concise-slug>.md.\n\n"
+        "Your FINAL message must be the markdown report followed by EXACTLY one fenced JSON block:\n"
+        "```json\n"
+        "{\"verdict\": \"support|refute|mixed\", \"confidence\": 0.0, \"summary\": \"one-sentence takeaway\", "
+        "\"suggested_action\": \"string\", \"invalidation\": \"string\", "
+        "\"artifact_path\": \"artifacts/research/<slug>.md\"}\n"
+        "```"
+    )
+
+    sdk_error: str | None = None
+    response_text = ""
+    cost_info: dict = {}
+
+    try:
+        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
+
+        sdk_cwd = resolve_sdk_cwd()
+        setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
+
+        allowed_tools = ["Skill", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task"]
+        if settings.agent_allow_bash:
+            allowed_tools.append("Bash")
+
+        _backend_root = str(_MCP_SERVER_DIR.parent)
+        _db_url = settings.database_url
+        if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
+            _rel = _db_url.replace("sqlite:///", "", 1)
+            _abs = str((Path(_backend_root) / _rel).resolve())
+            _db_url = f"sqlite:///{_abs}"
+        _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
+
+        mcp_servers: dict[str, Any] = {}
+        for name, script, env, tools in (
+            ("trading212", _MCP_SERVER_DIR / "t212.py", _build_sdk_env(), _T212_MCP_TOOLS),
+            ("marketdata", _MCP_SERVER_DIR / "marketdata.py", _mcp_env, _MARKET_MCP_TOOLS),
+            ("forecast", _MCP_SERVER_DIR / "forecast.py", _mcp_env, _FORECAST_MCP_TOOLS),
+        ):
+            if script.is_file():
+                mcp_servers[name] = {"type": "stdio", "command": sys.executable, "args": [str(script)], "env": env}
+                allowed_tools.extend(tools)
+
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            model=settings.claude_agent_model,
+            cwd=str(sdk_cwd),
+            max_turns=30,
+            allowed_tools=allowed_tools,
+            setting_sources=setting_sources,
+            mcp_servers=mcp_servers if mcp_servers else {},
+            hooks=build_security_hooks(),
+            agents=build_subagents(),
+        )
+
+        async def _run_query() -> tuple[str, dict]:
+            # Keep only the LAST assistant text block — earlier blocks are
+            # intermediate reasoning/delegation emitted between tool calls,
+            # not the polished final report + JSON verdict.
+            last_text = ""
+            info: dict = {}
+            async with ClaudeSDKClient(options=options) as client:
+                await client.query(json.dumps(request_block))
+                async for message in client.receive_response():
+                    if isinstance(message, ResultMessage):
+                        info = {
+                            "total_cost_usd": getattr(message, "total_cost_usd", None),
+                            "duration_ms": getattr(message, "duration_ms", None),
+                            "num_turns": getattr(message, "num_turns", None),
+                            "session_id": getattr(message, "session_id", None),
+                        }
+                    text = _extract_text_from_sdk_message(message)
+                    if text:
+                        last_text = text
+            return last_text.strip(), info
+
+        import anyio
+
+        configure_sdk_auth()
+        response_text, cost_info = anyio.run(_run_query)
+
+        if cost_info.get("total_cost_usd") is not None or cost_info.get("duration_ms") is not None:
+            from app.services import costs_service
+            from app.core.database import SessionLocal
+            with SessionLocal() as _cost_db:
+                costs_service.record(
+                    _cost_db,
+                    source="research",
+                    source_id=cost_info.get("session_id") or "research",
+                    model=settings.claude_agent_model,
+                    total_cost_usd=cost_info.get("total_cost_usd"),
+                    duration_ms=cost_info.get("duration_ms"),
+                    num_turns=cost_info.get("num_turns"),
+                )
+    except Exception as exc:  # noqa: BLE001
+        sdk_error = str(exc)
+
+    if not response_text:
+        return {"ok": False, "error": sdk_error or "No response from the analyst.",
+                "markdown": "", "verdict": None, "confidence": None, "artifact_path": None}
+
+    parsed = _extract_json_block(response_text) or {}
+    # Strip the trailing machine-readable JSON block from the displayed report.
+    display_md = re.sub(r"```json\s*\{[\s\S]*?\}\s*```\s*$", "", response_text).strip()
+
+    confidence: float | None
+    try:
+        confidence = float(parsed["confidence"]) if parsed.get("confidence") is not None else None
+    except (TypeError, ValueError, KeyError):
+        confidence = None
+
+    return {
+        "ok": True,
+        "markdown": display_md[:16000],
+        "verdict": (str(parsed.get("verdict")).lower() if parsed.get("verdict") else None),
+        "confidence": confidence,
+        "summary": (str(parsed.get("summary")).strip()[:600] or None) if parsed.get("summary") else None,
+        "suggested_action": (str(parsed.get("suggested_action")).strip()[:1200] or None) if parsed.get("suggested_action") else None,
+        "invalidation": (str(parsed.get("invalidation")).strip()[:1200] or None) if parsed.get("invalidation") else None,
+        "artifact_path": (str(parsed.get("artifact_path")).strip() or None) if parsed.get("artifact_path") else None,
+        "raw": response_text[:16000],
     }

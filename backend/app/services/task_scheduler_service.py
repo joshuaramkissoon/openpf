@@ -100,6 +100,29 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "This is your final artifact — make it polished and information-dense, not a thinking log."
         ),
     },
+    {
+        "name": "daily_alpha_goal",
+        "cron_expr": "45 7 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_agent_model,
+        "enabled": False,
+        "meta": {
+            "task_kind": "claude_with_goal",
+            "description": "Daily alpha goal — scan + propose entries toward a £/day target",
+            "goal": {"target_gbp": 40.0, "loss_limit_gbp": 60.0, "max_trades": 3, "window": "day"},
+        },
+        "prompt": (
+            "Pursue today's profit target within the GOAL CONTEXT and risk rails above. Steps:\n"
+            "1. Check today's realized P&L, open positions, and trades placed so far (T212 + marketdata tools).\n"
+            "2. If the target is already hit or a limit is breached, STOP — report status only.\n"
+            "3. Otherwise scan the leveraged universe with the marketdata tools (technicals, risk metrics, "
+            "compare_assets) and a Kronos forecast on the top candidates. Delegate heavier quant work to the "
+            "'quant' subagent.\n"
+            "4. Rank the best 1-2 entries with hypothesis, forecast cone, sizing within rails, and invalidation. "
+            "Propose them as intents — DO NOT execute unless auto-execute is enabled and rails permit.\n"
+            "Output a concise markdown report ending with a JSON block {\"proposals\": [...]}."
+        ),
+    },
 ]
 
 
@@ -232,7 +255,7 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
+def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
     configure_sdk_auth()
@@ -325,7 +348,8 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
         # tool calls, not the polished final report.
         last_text = ""
         cost_info: dict = {}
-        async for message in query(prompt=task.prompt, options=options):
+        _prompt = f"{goal_context.strip()}\n\n{task.prompt}" if goal_context.strip() else task.prompt
+        async for message in query(prompt=_prompt, options=options):
             if isinstance(message, ResultMessage):
                 cost_info = {
                     "total_cost_usd": getattr(message, "total_cost_usd", None),
@@ -378,6 +402,82 @@ def _record_log(db: Session, task: ScheduledTask, *, status: str, message: str, 
     return row
 
 
+def _build_goal_context(db: Session, task: ScheduledTask) -> str:
+    """Build a GOAL CONTEXT block for ``claude_with_goal`` scheduled tasks.
+
+    Combines the leveraged session rails (config) with any per-task goal
+    override in ``task.meta['goal']`` and instructs the agent to reason about
+    trajectory toward the target and respect hard daily limits.
+    """
+    try:
+        policy = ConfigStore(db).get_leveraged()
+    except Exception:  # noqa: BLE001
+        policy = {}
+    goal = (task.meta or {}).get("goal") or {}
+    if not isinstance(goal, dict):
+        goal = {}
+
+    def _pick_num(*vals: Any) -> float:
+        for v in vals:
+            try:
+                if v is not None and float(v) != 0.0:
+                    return float(v)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    target = _pick_num(goal.get("target_gbp"), policy.get("daily_profit_target_gbp"))
+    loss_limit = _pick_num(goal.get("loss_limit_gbp"), policy.get("daily_loss_limit_gbp"))
+    try:
+        max_trades = int(goal.get("max_trades") or policy.get("max_daily_trades") or 0)
+    except (TypeError, ValueError):
+        max_trades = 0
+    window = str(goal.get("window") or "day").strip() or "day"
+    notes = str(goal.get("notes") or "").strip()
+
+    per_pos = float(policy.get("per_position_notional", 200.0) or 200.0)
+    max_exp = float(policy.get("max_total_exposure", 600.0) or 600.0)
+    max_open = int(policy.get("max_open_positions", 3) or 3)
+    tp = float(policy.get("take_profit_pct", 0.08) or 0.08)
+    sl = float(policy.get("stop_loss_pct", 0.05) or 0.05)
+    today = datetime.now(tz=timezone.utc).strftime("%A %d %B %Y")
+
+    lines = [
+        "## GOAL CONTEXT — read before acting",
+        f"Today: {today}. This is a goal-driven session: capture small, consistent alpha within hard rails.",
+    ]
+    if target > 0:
+        lines.append(
+            f"- PROFIT TARGET: £{target:,.2f} per {window}. Once today's REALIZED P&L >= this, STOP opening "
+            "new positions (managing/closing existing ones is fine)."
+        )
+    else:
+        lines.append("- PROFIT TARGET: none set — optimise risk-adjusted return without overtrading.")
+    if loss_limit > 0:
+        lines.append(
+            f"- LOSS LIMIT: £{loss_limit:,.2f} per {window}. If today's REALIZED P&L <= -£{loss_limit:,.2f}, "
+            "STOP for the day — no new entries."
+        )
+    if max_trades > 0:
+        lines.append(f"- MAX NEW TRADES today: {max_trades}. Do not exceed.")
+    lines.append(
+        f"- EXPOSURE RAILS: <= £{max_exp:,.0f} total, <= £{per_pos:,.0f} per position, <= {max_open} open at "
+        f"once. Entries use +{tp * 100:.0f}% take-profit / -{sl * 100:.0f}% stop-loss."
+    )
+    lines.append(
+        "Before deciding: use your tools to determine TODAY's realized P&L, current open positions, and how "
+        "many trades you have already placed today. Reason about TRAJECTORY toward the target, not statelessly. "
+        "If any limit is already hit, do NOT open new positions — just report status."
+    )
+    lines.append(
+        "At the end, append ONE status line (date | realized P&L | trades today | open exposure | action taken) "
+        "to memory/leveraged/daily-goal.md (create it if absent) so future runs have continuity."
+    )
+    if notes:
+        lines.append(f"Operator notes: {notes}")
+    return "\n".join(lines)
+
+
 def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any], str | None, dict]:
     kind = str((task.meta or {}).get("task_kind") or "claude").strip().lower()
     description = str((task.meta or {}).get("description") or task.name)
@@ -400,7 +500,8 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
-    output, meta, cost_info = _run_claude_prompt(task)
+    goal_context = _build_goal_context(db, task) if kind == "claude_with_goal" else ""
+    output, meta, cost_info = _run_claude_prompt(task, goal_context=goal_context)
     path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
 
     policy_updates = None
