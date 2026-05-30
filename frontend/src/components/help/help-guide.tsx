@@ -37,7 +37,7 @@ const FEATURES: Feature[] = [
     icon: Telescope,
     title: "Research Desk",
     what: "Structured, agent-driven analysis of a holding or a brand-new idea — ends in a verdict.",
-    how: "File an Analysis Request (subject, objective, optional hypothesis, horizon). Archie gathers live evidence + a Kronos forecast + news and returns verdict · confidence · suggested action · invalidation, plus a saved report. Toggle \"save as thesis\" to track it over time.",
+    how: "File an Analysis Request (subject, objective, optional hypothesis, horizon). Archie gathers live evidence (prices, technicals, risk, fundamentals/valuation), a Kronos forecast, and news, then returns verdict · confidence · suggested action · invalidation plus a saved report. Toggle \"save as thesis\" to track it over time.",
   },
   {
     icon: Gauge,
@@ -203,7 +203,7 @@ export function HelpGuide() {
               <li>Per-position size, total exposure, and max-open rails are always enforced.</li>
               <li>Daily target / loss-limit / max-trades rails stop an over-eager session.</li>
               <li>Live order placement requires switching broker mode to live in Settings.</li>
-              <li>Fundamental/valuation data isn't wired yet — valuation theses are flagged as unsupported.</li>
+              <li>Fundamentals — valuation ratios, financial statements, FCF, and earnings dates — are live (via yfinance), so Archie can run valuation analysis.</li>
             </ul>
           </div>
         </SectionCard>
