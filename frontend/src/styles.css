@@ -2037,6 +2037,18 @@ textarea {
 .chat-tool-step.tool_start .chat-tool-step-text { color: #ffe4a0; }
 .chat-tool-step.tool_result .chat-tool-step-text { color: #8de8b9; }
 .chat-tool-step.thinking .chat-tool-step-text { color: #9fc2db; }
+.chat-tool-step.subagent_start .chat-tool-step-text { color: #c4b5fd; }
+.chat-tool-dot.subagent { background: #8b5cf6; }
+
+/* Nested tool calls made by a delegated subagent. */
+.chat-subagent-nested {
+  margin-top: 0.35rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid rgba(139, 92, 246, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
 
 .chat-tool-args {
   display: flex;

@@ -36,7 +36,7 @@ function ToolCallsSummary({ toolCalls, expanded, onToggle }: {
   expanded: boolean
   onToggle: () => void
 }) {
-  const toolCount = toolCalls.filter(tc => tc.phase === 'tool_start').length
+  const toolCount = toolCalls.filter(tc => tc.phase === 'tool_start' || tc.phase === 'subagent_start').length
   if (toolCount === 0) return null
 
   return (
@@ -49,24 +49,60 @@ function ToolCallsSummary({ toolCalls, expanded, onToggle }: {
       </button>
       {expanded && (
         <div className="chat-tool-timeline chat-tool-timeline-done">
-          {toolCalls.map((tc, i) => (
-            <div key={i} className={`chat-tool-step ${tc.phase}`}>
-              <span className={`chat-tool-dot done ${tc.phase}`} />
-              <div className="chat-tool-step-body">
-                <span className="chat-tool-step-text">{tc.message}</span>
-                {tc.tool_input && Object.keys(tc.tool_input).length > 0 && (
-                  <div className="chat-tool-args">
-                    {Object.entries(tc.tool_input).slice(0, 4).map(([k, v]) => (
-                      <span key={k} className="chat-tool-arg">
-                        <span className="chat-tool-arg-key">{k}</span>
-                        <span className="chat-tool-arg-val">{String(v).slice(0, 40)}</span>
-                      </span>
-                    ))}
+          {toolCalls.map((tc, i) => {
+            // Subagent entries carry nested_calls; regular entries carry tool_input.
+            // Narrow via `in` because the regular `phase` widens to string.
+            if ('nested_calls' in tc) {
+              return (
+                <div key={i} className="chat-tool-step subagent_start">
+                  <span className="chat-tool-dot done subagent" />
+                  <div className="chat-tool-step-body">
+                    <span className="chat-tool-step-text">{tc.message}</span>
+                    {tc.nested_calls.length > 0 && (
+                      <div className="chat-subagent-nested">
+                        {tc.nested_calls.map((nc, j) => (
+                          <div key={j} className={`chat-tool-step ${nc.phase}`}>
+                            <span className={`chat-tool-dot done ${nc.phase}`} />
+                            <div className="chat-tool-step-body">
+                              <span className="chat-tool-step-text">{nc.message}</span>
+                              {nc.tool_input && Object.keys(nc.tool_input).length > 0 && (
+                                <div className="chat-tool-args">
+                                  {Object.entries(nc.tool_input).slice(0, 4).map(([k, v]) => (
+                                    <span key={k} className="chat-tool-arg">
+                                      <span className="chat-tool-arg-key">{k}</span>
+                                      <span className="chat-tool-arg-val">{String(v).slice(0, 40)}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+              )
+            }
+            return (
+              <div key={i} className={`chat-tool-step ${tc.phase}`}>
+                <span className={`chat-tool-dot done ${tc.phase}`} />
+                <div className="chat-tool-step-body">
+                  <span className="chat-tool-step-text">{tc.message}</span>
+                  {tc.tool_input && Object.keys(tc.tool_input).length > 0 && (
+                    <div className="chat-tool-args">
+                      {Object.entries(tc.tool_input).slice(0, 4).map(([k, v]) => (
+                        <span key={k} className="chat-tool-arg">
+                          <span className="chat-tool-arg-key">{k}</span>
+                          <span className="chat-tool-arg-val">{String(v).slice(0, 40)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
