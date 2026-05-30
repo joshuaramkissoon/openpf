@@ -58,7 +58,41 @@ def _find_duplicate(db: Session, intent: TradeIntent, window_seconds: int) -> bo
     return db.execute(q).scalar_one_or_none() is not None
 
 
+# A 'proposed' intent older than this is auto-archived: a stale proposal no
+# longer reflects current prices/conviction, so it shouldn't sit in the queue
+# as something actionable.
+_INTENT_TTL_HOURS = 24
+
+
+def expire_stale_intents(db: Session, ttl_hours: int = _INTENT_TTL_HOURS) -> int:
+    """Mark un-acted 'proposed' intents older than the TTL as 'expired'.
+
+    Keeps the execution queue to live, still-relevant proposals. Approved
+    intents are left alone (acting on them was a deliberate decision).
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=ttl_hours)
+    stale = (
+        db.execute(
+            select(TradeIntent).where(
+                TradeIntent.status == "proposed",
+                TradeIntent.created_at < cutoff,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not stale:
+        return 0
+    for intent in stale:
+        intent.status = "expired"
+        if not intent.failure_reason:
+            intent.failure_reason = f"expired: stale proposal (> {ttl_hours}h old)"
+    db.commit()
+    return len(stale)
+
+
 def list_intents(db: Session, limit: int = 100) -> list[TradeIntent]:
+    expire_stale_intents(db)
     q = select(TradeIntent).order_by(desc(TradeIntent.created_at)).limit(limit)
     return list(db.execute(q).scalars().all())
 

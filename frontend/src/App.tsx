@@ -590,6 +590,7 @@ export default function App() {
               {SECTION_DESCRIPTIONS[activeSection] ?? statusBits.join(' · ')}
             </p>
           </div>
+          {activeSection === 'overview' ? (
           <div className="flex items-center gap-2">
             <Select
               value={accountView}
@@ -633,6 +634,7 @@ export default function App() {
               Run Agent
             </Button>
           </div>
+          ) : null}
         </header>
 
         <main className="min-h-0 flex-1 overflow-hidden">
