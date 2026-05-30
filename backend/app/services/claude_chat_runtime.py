@@ -411,6 +411,13 @@ class ClaudeChatRuntime:
                     "future horizon with p10/p50/p90 uncertainty bands. Treat forecasts as "
                     "probabilistic analysis with clear uncertainty, never as certainties or "
                     "executed trades. "
+                    "There is also a leveraged trading engine (3x ISA ETPs, long via products like "
+                    "3PLT and downside via INVERSE ETPs — T212 has no short selling) governed by "
+                    "hard-enforced daily risk rails (profit target, loss limit, max trades, exposure/"
+                    "per-position caps), and an autonomous daily scheduled loop (morning scan, midday/"
+                    "EOD monitors, weekly review) that scans and proposes leveraged entries. You can "
+                    "inspect and manage these via the scheduler tools and the leveraged-products memory "
+                    "file; never imply a rail can be bypassed. "
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },

@@ -41,11 +41,17 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_cycle",
-            "description": "Morning leveraged scan + entries",
+            "description": "Morning leveraged cycle (monitor + scan) → markdown report",
         },
+        # NOTE: leveraged_cycle is a deterministic engine run; this prompt text
+        # is NOT sent to an LLM. The scheduler renders the engine output as a
+        # human-readable markdown report (see _render_leveraged_cycle_md), so a
+        # readable artifact is produced even when no setups qualify.
         "prompt": (
-            "Run leveraged cycle: monitor open trades, scan new setups, and execute only within configured rails. "
-            "If policy rails need adjustment, include JSON {\"policy_updates\": {...}} in your output."
+            "Deterministic leveraged morning cycle: monitor open trades against stop/take-profit/time rules, "
+            "then scan the configured universe for new setups within rails. Entries execute only if "
+            "auto-execute is enabled and rails permit; otherwise setups are logged as proposals. "
+            "Output is a rendered markdown report (monitor + scan), not raw JSON."
         ),
     },
     {
@@ -122,6 +128,46 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "4. Rank the best 1-2 entries with hypothesis, forecast cone, sizing within rails, and invalidation. "
             "Propose them as intents — DO NOT execute unless auto-execute is enabled and rails permit.\n"
             "Output a concise markdown report ending with a JSON block {\"proposals\": [...]}."
+        ),
+    },
+    {
+        "name": "leveraged_universe_refresh",
+        "cron_expr": "0 9 * * 6",
+        "timezone": "Europe/London",
+        "model": settings.claude_agent_model,
+        "enabled": False,
+        "meta": {
+            "task_kind": "claude",
+            "description": "Weekly refresh of the curated leveraged ETP universe",
+        },
+        "prompt": (
+            "Verify and refresh the curated leveraged-products map at "
+            "`memory/instruments/leveraged-products.md`. This is the mechanism that keeps the leveraged "
+            "universe current. Trading 212 has NO short selling — 'downside' exposure is achieved only via "
+            "INVERSE (short) leveraged ETPs, which are ISA-only. So the file must cover BOTH long AND inverse "
+            "products.\n\n"
+            "Steps:\n"
+            "1. Read the current `memory/instruments/leveraged-products.md` so you preserve its structure, "
+            "the ticker-disambiguation rules, and the notes section.\n"
+            "2. Use the Trading 212 `search_instruments` tool to find currently-available, ISA-eligible "
+            "leveraged ETPs — both 3x LONG and 3x INVERSE/SHORT (e.g. GraniteShares / Leverage Shares 3x "
+            "single-stock and index products, and their inverse equivalents). Respect T212's strict "
+            "instrument-search rate limit (~1 req/50s) — batch your queries and pace them.\n"
+            "3. Use WebSearch to confirm issuer (GraniteShares / Leverage Shares / WisdomTree), the exact "
+            "UNDERLYING each ETP maps to, and the correct yfinance ticker (LSE listings usually need a `.L` "
+            "suffix; GBX = pence). Cross-check that each product is still listed and ISA-eligible — drop any "
+            "that have been delisted.\n"
+            "4. For each product record: ticker (common), T212 instrument code (`_EQ`, noting the lowercase "
+            "`l` ISA suffix where it applies), underlying, direction (long/inverse), currency, and the "
+            "yfinance ticker. Pair each long product with its inverse counterpart where one exists so "
+            "downside hedges are easy to find.\n"
+            "5. Verify every ticker→name→direction mapping before writing — leveraged tickers are easily "
+            "confused (e.g. 3PLT long vs 3SPL inverse; 3SNPL = Netflix short, not Snap; 3TSM = Taiwan "
+            "Semiconductor, not Tesla). Keep the existing disambiguation rules.\n"
+            "6. Write the refreshed curated map back to `memory/instruments/leveraged-products.md`, update "
+            "its 'Updated' date, and note anything newly added, removed, or that you could not verify.\n\n"
+            "Finish with a short markdown summary of what changed (added / removed / re-verified) so the run "
+            "is human-readable."
         ),
     },
 ]
@@ -488,25 +534,164 @@ def _build_goal_context(db: Session, task: ScheduledTask) -> str:
     return "\n".join(lines)
 
 
+def _fmt_pct(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:+.2f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_gbp(value: Any) -> str:
+    try:
+        return f"£{float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _render_leveraged_monitor_md(result: dict[str, Any]) -> str:
+    """Render monitor_open_trades output as a human-readable markdown report."""
+    checked = int(result.get("checked", 0) or 0)
+    closed = int(result.get("closed", 0) or 0)
+    items = result.get("items") or []
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    lines = [
+        "# Leveraged Monitor",
+        f"_{stamp}_",
+        "",
+        f"**Open trades checked:** {checked} · **Closed this run:** {closed}",
+        "",
+    ]
+    if not items:
+        lines.append("No open leveraged positions to monitor. Nothing to do.")
+        return "\n".join(lines) + "\n"
+
+    lines.append("| Symbol | Current price | Return | Action |")
+    lines.append("|---|---|---|---|")
+    for it in items:
+        reason = it.get("close_reason")
+        action = f"CLOSED ({reason})" if reason else "held"
+        price = it.get("current_price")
+        price_str = f"{float(price):,.2f}" if isinstance(price, (int, float)) else "—"
+        lines.append(
+            f"| {it.get('symbol', '—')} | {price_str} | {_fmt_pct(it.get('return_pct'))} | {action} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_leveraged_scan_md(result: dict[str, Any]) -> str:
+    """Render scan_signals output as a human-readable markdown report.
+
+    Always produces a readable artifact — even when zero setups qualify, it
+    states what was checked and why nothing was proposed (the recurring
+    lessons.md complaint about raw-JSON 'nothing found' dumps).
+    """
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    created = int(result.get("created", 0) or 0)
+    executed = int(result.get("executed", 0) or 0)
+    signals = result.get("signals") or []
+    failures = result.get("failures") or []
+    reason = result.get("reason")
+    policy = result.get("policy") or {}
+
+    lines = [
+        "# Leveraged Scan",
+        f"_{stamp}_",
+        "",
+        f"**New setups proposed:** {created} · **Auto-executed:** {executed} · "
+        f"**Open positions:** {result.get('open_positions', 0)} · "
+        f"**Open exposure:** {_fmt_gbp(result.get('open_exposure'))}",
+        "",
+    ]
+
+    if reason:
+        lines.append(f"> No new entries: {reason}.")
+        lines.append("")
+
+    if signals:
+        lines.append("## Proposed setups")
+        lines.append("")
+        lines.append("| Symbol | Direction | Ref price | Notional | Conf. | Exp. edge | SL / TP |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for s in signals:
+            sl_tp = f"{_fmt_pct(-abs(float(s.get('stop_loss_pct') or 0)))} / {_fmt_pct(s.get('take_profit_pct'))}"
+            ref = s.get("reference_price")
+            ref_str = f"{float(ref):,.2f}" if isinstance(ref, (int, float)) else "—"
+            lines.append(
+                f"| {s.get('symbol', '—')} | {s.get('direction', '—')} | {ref_str} | "
+                f"{_fmt_gbp(s.get('target_notional'))} | "
+                f"{float(s.get('confidence') or 0):.0%} | {_fmt_pct(s.get('expected_edge'))} | {sl_tp} |"
+            )
+            rationale = str(s.get("rationale") or "").strip()
+            if rationale:
+                lines.append(f"|  | _{rationale}_ |  |  |  |  |  |")
+        lines.append("")
+    elif not reason:
+        lines.append(
+            "No setups qualified this run — the scanned universe showed no entries meeting the "
+            "momentum/technical thresholds. Nothing proposed."
+        )
+        lines.append("")
+
+    if failures:
+        lines.append("## Data / execution issues")
+        for f in failures:
+            lines.append(f"- {f}")
+        lines.append("")
+
+    lines.append("## Rails in force")
+    lines.append(
+        f"- Per-position {_fmt_gbp(policy.get('per_position_notional'))} · "
+        f"max total {_fmt_gbp(policy.get('max_total_exposure'))} · "
+        f"max open {policy.get('max_open_positions', '—')} · "
+        f"auto-execute {'ON' if policy.get('auto_execute_enabled') else 'OFF'}"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _render_leveraged_cycle_md(result: dict[str, Any]) -> str:
+    """Render run_leveraged_cycle (monitor + scan) as one markdown report."""
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    monitor = result.get("monitor") or {}
+    scan = result.get("scan") or {}
+
+    parts = [
+        "# Leveraged Morning Cycle",
+        f"_{stamp}_",
+        "",
+        "Deterministic engine run: monitor open trades, then scan for new setups within rails. "
+        "Entries execute only if auto-execute is enabled and rails permit; otherwise they are proposals.",
+        "",
+        "---",
+        "",
+        _render_leveraged_monitor_md(monitor),
+        "",
+        "---",
+        "",
+        _render_leveraged_scan_md(scan),
+    ]
+    return "\n".join(parts)
+
+
 def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any], str | None, dict]:
     kind = str((task.meta or {}).get("task_kind") or "claude").strip().lower()
     description = str((task.meta or {}).get("description") or task.name)
 
     if kind == "leveraged_cycle":
         result = run_leveraged_cycle(db, source_task_id=task.id)
-        content = "# Leveraged Cycle\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
+        content = _render_leveraged_cycle_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
     if kind == "leveraged_scan":
         result = scan_signals(db, source_task_id=task.id)
-        content = "# Leveraged Scan\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
+        content = _render_leveraged_scan_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
     if kind == "leveraged_monitor":
         result = monitor_open_trades(db)
-        content = "# Leveraged Monitor\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
+        content = _render_leveraged_monitor_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 

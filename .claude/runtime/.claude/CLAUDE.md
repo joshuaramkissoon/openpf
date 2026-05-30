@@ -86,23 +86,50 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
 
 ## Tooling You Have
 
-### Market Data MCP — use for ALL price/technical queries (no rate limits)
+### Market Data MCP — use for ALL price/technical/risk queries (no rate limits)
 - `get_price_snapshot` — spot price, daily change, volume
 - `get_price_history_rows` — historical OHLCV candles
 - `get_technical_snapshot` — RSI, SMA, MACD, Bollinger Bands, ATR
+- `get_indicator_series` — indicator time series (e.g. SMA50/200 for regime reads)
+- `get_risk_metrics` — volatility, beta, drawdown
+- `get_correlation_matrix` — correlation across holdings/instruments
+- `compare_assets` — relative performance / ranking across symbols
+
+### Fundamentals MCP — company facts, valuation, statements, earnings
+- `get_fundamentals` — profile, profitability, growth, balance-sheet health
+- `get_valuation` — valuation ratios (P/E, P/S, EV/EBITDA, etc.)
+- `get_financial_statements` — income / balance sheet / cash flow
+- `get_earnings_calendar` — next earnings date + history (for pre-earnings vol/risk)
+- Use these whenever a question touches valuation, profitability, growth, financial health, or earnings timing.
+
+### Forecast MCP — Kronos probabilistic price forecast
+- `forecast_prices` — projects a holding's close over a future horizon with **p10/p50/p90** bands
+- `forecast_status` — model availability
+- Treat forecasts as probabilistic analysis with explicit uncertainty — **never** as certainties or executed trades.
 
 ### Trading 212 MCP — use ONLY for account-specific operations (strict rate limits)
 - Account summary, positions, pending orders
 - Order placement and cancellation
-- Order history, dividends, transactions
+- Order history, dividends, transactions; instrument search (`search_instruments`)
 - **Never use T212 tools to look up prices or market data** — T212 has strict API rate limits (1 req/s for positions, 1 req/50s for instrument search)
+- **No short selling on T212.** Downside/short exposure is achieved only via **INVERSE (3x short) ETPs**, which are **ISA-only**. See `memory/instruments/leveraged-products.md`.
 
 ### Scheduler MCP
 - List, create, pause, resume, delete, and run scheduled tasks
 - Inspect task logs
 
+### Leveraged engine (3x ISA ETPs)
+- A scan/monitor/execute engine for 3x **long** and **inverse** ISA ETPs, governed by hard daily risk rails
+  (profit target / loss limit / max trades) and exposure/per-position/open-count caps.
+- An autonomous daily loop runs it (morning cycle, midday + EOD monitors) plus a weekly review and an
+  optional daily-alpha goal task. Inspect/manage via the scheduler tools.
+- Map underlyings → the correct long/inverse ETP via `memory/instruments/leveraged-products.md` (verify
+  ticker→name→direction every time; the codes are easily confused). Never bypass a rail.
+
 ### Tool Routing Rule
-When you need a price, quote, candle data, or technical indicator: **always use marketdata MCP**.
+When you need a price, quote, candle data, technical indicator, risk metric, or correlation: **always use marketdata MCP**.
+When you need valuation, financials, fundamentals, or earnings dates: **use fundamentals MCP**.
+When you need a forward price cone: **use forecast MCP** (`forecast_prices`, p10/p50/p90).
 When you need account balances, held positions, or to place/cancel orders: **use T212 MCP**.
 Never call `search_instruments` or other T212 endpoints to look up market data — use yfinance-backed marketdata tools instead.
 
