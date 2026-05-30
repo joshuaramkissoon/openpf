@@ -34,6 +34,51 @@ def configure_sdk_auth() -> None:
         os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
 
 
+def resolve_t212_env() -> dict[str, str]:
+    """T212 credential env vars for the MCP subprocesses, sourced from the DB
+    (ConfigStore) — the SAME credentials the dashboard uses — so Archie never
+    drifts from the keys you manage. Falls back to the regular ``T212_*`` .env
+    settings if the DB has none.
+
+    Note: deliberately does NOT prefer the legacy ``ARCHIE_T212_*`` keys — those
+    being stale (while the regular keys were updated) is exactly what caused
+    Archie's 401s. Credentials live in subprocess memory only.
+    """
+    env: dict[str, str] = {"T212_BASE_ENV": settings.t212_base_env}
+    invest = ("", "")
+    isa = ("", "")
+    try:
+        from app.core.database import SessionLocal
+        from app.services.config_store import ConfigStore
+
+        with SessionLocal() as db:
+            store = ConfigStore(db)
+            env["T212_BASE_ENV"] = str(store.get_broker().get("t212_base_env") or settings.t212_base_env)
+            ic = store.get_account_credentials("invest")
+            sc = store.get_account_credentials("stocks_isa")
+            invest = (str(ic.get("t212_api_key", "")).strip(), str(ic.get("t212_api_secret", "")).strip())
+            isa = (str(sc.get("t212_api_key", "")).strip(), str(sc.get("t212_api_secret", "")).strip())
+    except Exception:  # noqa: BLE001 — fall back to .env below
+        pass
+
+    if not all(invest):
+        invest = (
+            (settings.t212_invest_api_key or settings.t212_api_key_invest or settings.t212_api_key or "").strip(),
+            (settings.t212_invest_api_secret or settings.t212_api_secret_invest or settings.t212_api_secret or "").strip(),
+        )
+    if not all(isa):
+        isa = (
+            (settings.t212_stocks_isa_api_key or settings.t212_api_key_stocks_isa or "").strip(),
+            (settings.t212_stocks_isa_api_secret or settings.t212_api_secret_stocks_isa or "").strip(),
+        )
+
+    if all(invest):
+        env["T212_API_KEY_INVEST"], env["T212_API_SECRET_INVEST"] = invest
+    if all(isa):
+        env["T212_API_KEY_STOCKS_ISA"], env["T212_API_SECRET_STOCKS_ISA"] = isa
+    return env
+
+
 def project_root() -> Path:
     # In Docker the directory layout differs (no `backend/` prefix),
     # so allow an explicit override via PROJECT_ROOT env var.

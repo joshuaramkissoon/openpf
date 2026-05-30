@@ -20,7 +20,7 @@ from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
-    parse_setting_sources, project_root, resolve_sdk_cwd,
+    parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
     _FUNDAMENTALS_MCP_TOOLS,
 )
@@ -242,23 +242,9 @@ def list_task_logs(db: Session, task_id: str, limit: int = 30) -> list[dict[str,
 
 
 def _build_sdk_env() -> dict[str, str]:
-    env: dict[str, str] = {}
-
-    def _pick(key: str, archie_val: str, fallback_val: str) -> None:
-        val = (archie_val or fallback_val or "").strip()
-        if val:
-            env[key] = val
-
-    env["T212_BASE_ENV"] = settings.t212_base_env
-    _pick("T212_API_KEY_INVEST", settings.archie_t212_api_key_invest, settings.t212_api_key_invest)
-    _pick("T212_API_SECRET_INVEST", settings.archie_t212_api_secret_invest, settings.t212_api_secret_invest)
-    _pick("T212_INVEST_API_KEY", settings.archie_t212_api_key_invest, settings.t212_invest_api_key)
-    _pick("T212_INVEST_API_SECRET", settings.archie_t212_api_secret_invest, settings.t212_invest_api_secret)
-    _pick("T212_API_KEY_STOCKS_ISA", settings.archie_t212_api_key_stocks_isa, settings.t212_api_key_stocks_isa)
-    _pick("T212_API_SECRET_STOCKS_ISA", settings.archie_t212_api_secret_stocks_isa, settings.t212_api_secret_stocks_isa)
-    _pick("T212_STOCKS_ISA_API_KEY", settings.archie_t212_api_key_stocks_isa, settings.t212_stocks_isa_api_key)
-    _pick("T212_STOCKS_ISA_API_SECRET", settings.archie_t212_api_secret_stocks_isa, settings.t212_stocks_isa_api_secret)
-    return env
+    """T212 creds for the MCP subprocesses, DB-sourced (in sync with the
+    dashboard). Credentials live in subprocess memory only."""
+    return resolve_t212_env()
 
 
 def _extract_text_from_sdk_message(message: Any) -> str:

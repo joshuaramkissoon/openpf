@@ -338,11 +338,21 @@ async def get_positions(account: str = "invest") -> str:
         for pos in data:
             if not isinstance(pos, dict):
                 continue
-            meta = imap.get(str(pos.get("ticker", "")).strip())
-            if meta:
-                pos["name"] = meta.get("name")
-                pos["short_name"] = meta.get("shortName")
+            # T212's newer shape nests {instrument: {ticker, name, currency}};
+            # older shape is flat. Surface ticker + name from either, and fill
+            # type/short_name from the metadata cache.
+            inst = pos.get("instrument") if isinstance(pos.get("instrument"), dict) else {}
+            code = str(pos.get("ticker") or inst.get("ticker") or "").strip()
+            meta = imap.get(code, {})
+            name = inst.get("name") or meta.get("name")
+            if code and not pos.get("ticker"):
+                pos["ticker"] = code
+            if name:
+                pos["name"] = name
+            if meta.get("type"):
                 pos["instrument_type"] = meta.get("type")
+            if meta.get("shortName"):
+                pos["short_name"] = meta.get("shortName")
         return _fmt({"count": len(data), "positions": data})
     return _fmt(data)
 

@@ -16,6 +16,7 @@ from claude_agent_sdk import ResultMessage
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd,
+    resolve_t212_env,
     runtime_info as sdk_runtime_info,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
     _FUNDAMENTALS_MCP_TOOLS,
@@ -87,37 +88,10 @@ def _friendly_tool_name(raw: str) -> str:
 
 
 def _build_sdk_env() -> dict[str, str]:
-    """Collect T212 credentials to pass via the SDK env field.
-
-    Prefers ARCHIE_T212_* keys (unrestricted, read-only) over the
-    backend's IP-restricted keys. Only non-empty values are included.
-    Credentials live in subprocess memory only — never written to disk
-    or exposed to file-reading tools.
-    """
-    env: dict[str, str] = {}
-
-    def _pick(key: str, archie_val: str, fallback_val: str) -> None:
-        val = (archie_val or fallback_val or "").strip()
-        if val:
-            env[key] = val
-
-    env["T212_BASE_ENV"] = settings.t212_base_env
-
-    # Invest account — prefer Archie's unrestricted keys
-    _pick("T212_API_KEY_INVEST", settings.archie_t212_api_key_invest, settings.t212_api_key_invest)
-    _pick("T212_API_SECRET_INVEST", settings.archie_t212_api_secret_invest, settings.t212_api_secret_invest)
-    _pick("T212_INVEST_API_KEY", settings.archie_t212_api_key_invest, settings.t212_invest_api_key)
-    _pick("T212_INVEST_API_SECRET", settings.archie_t212_api_secret_invest, settings.t212_invest_api_secret)
-
-    # Stocks ISA — prefer Archie's unrestricted keys
-    _pick("T212_API_KEY_STOCKS_ISA", settings.archie_t212_api_key_stocks_isa, settings.t212_api_key_stocks_isa)
-    _pick("T212_API_SECRET_STOCKS_ISA", settings.archie_t212_api_secret_stocks_isa, settings.t212_api_secret_stocks_isa)
-    _pick("T212_STOCKS_ISA_API_KEY", settings.archie_t212_api_key_stocks_isa, settings.t212_stocks_isa_api_key)
-    _pick("T212_STOCKS_ISA_API_SECRET", settings.archie_t212_api_secret_stocks_isa, settings.t212_stocks_isa_api_secret)
-
-    _backend_root = str(Path(__file__).resolve().parent.parent.parent)
-    env["PYTHONPATH"] = _backend_root
-
+    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the
+    MCP subprocesses. Credentials live in subprocess memory only."""
+    env = resolve_t212_env()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
     return env
 
 
