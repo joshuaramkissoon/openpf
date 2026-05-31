@@ -133,8 +133,8 @@ export function LeveragedWorkspace({ onError }: Props) {
                   <TableHead>Underlying</TableHead>
                   <TableHead>Direction</TableHead>
                   <TableHead>ETP</TableHead>
-                  <TableHead className="text-right">Move</TableHead>
-                  <TableHead className="text-right">Trend</TableHead>
+                  <TableHead className="text-right">Move vs 50d</TableHead>
+                  <TableHead className="text-right">Momentum</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -152,7 +152,9 @@ export function LeveragedWorkspace({ onError }: Props) {
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.etp_ticker}</TableCell>
-                    <TableCell className="text-right tabular-nums">{row.move_score >= 0 ? '+' : ''}{row.move_score.toFixed(2)}</TableCell>
+                    <TableCell className={cn('text-right tabular-nums', (row.move_pct ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500')}>
+                      {row.move_pct != null ? `${row.move_pct >= 0 ? '+' : ''}${(row.move_pct * 100).toFixed(1)}%` : `${row.move_score.toFixed(2)}`}
+                    </TableCell>
                     <TableCell className="text-right text-xs capitalize text-muted-foreground">{row.trend}</TableCell>
                   </TableRow>
                 ))}

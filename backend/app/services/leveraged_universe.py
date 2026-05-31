@@ -133,12 +133,18 @@ def build_underlying_map(instruments: list[dict[str, Any]]) -> dict[str, dict[st
         if not _is_isa_tradeable(entry):
             continue
         direction = "inverse" if entry.get("direction") == "inverse" else "long"
+        # A single-stock underlying (has a ticker, or a canonical name→ticker)
+        # vs a broad index/commodity. Single names carry the interesting moves,
+        # so the universe ranker prioritises them over indices.
+        name_up = re.sub(r"\s+", " ", (entry.get("underlying_name") or "").strip().upper())
+        is_stock = bool(entry.get("underlying_ticker")) or name_up in _CANONICAL_UNDERLYING
         slot = out.setdefault(
             key,
             {
                 "underlying": key,
                 "underlying_name": entry.get("underlying_name"),
                 "proxy": _proxy_for(entry),
+                "is_stock": is_stock,
                 "long": None,
                 "inverse": None,
             },
@@ -194,25 +200,41 @@ def get_underlying_map(db: Session, force: bool = False) -> dict[str, dict[str, 
     return mapping
 
 
-def _move_score(tech: dict[str, Any]) -> tuple[float, str]:
-    """Return (signed strength in ~[-1,1], trend label) from an underlying's tech."""
+# A name must be at least this far from its 50-day average (or be in a
+# trend-confirmed move) to count as a "mover" worth surfacing — this is what
+# filters out the lukewarm "mixed but slightly above MA" names that made the
+# universe look boring.
+_MIN_MOVE = 0.03  # 3% from the 50-day trend
+
+
+def _move_metrics(tech: dict[str, Any]) -> dict[str, Any] | None:
+    """Momentum read for an underlying, keyed on REAL price action.
+
+    `momentum` is the signed % distance of price from its 50-day average — an
+    actual move magnitude, not an abstract score. `conviction` amplifies that
+    when the trend and RSI agree. "Mixed"/lukewarm names score low and are
+    filtered out by the caller.
+    """
     trend = str(tech.get("trend_direction") or "mixed")
     price = float(tech.get("price") or 0.0)
-    sma20 = float(tech.get("sma_20") or 0.0)
     sma50 = float(tech.get("sma_50") or 0.0)
     rsi = float(tech.get("rsi_14") or 50.0)
-    score = 0.0
-    if trend == "uptrend":
-        score += 0.5
-    elif trend == "downtrend":
-        score -= 0.5
-    if sma20 > 0 and price > 0:
-        score += 0.25 if price > sma20 else -0.25
-    if sma50 > 0 and sma20 > 0:
-        score += 0.15 if sma20 > sma50 else -0.15
-    # RSI distance from 50 adds conviction in the trend's direction.
-    score += (rsi - 50.0) / 100.0
-    return max(-1.0, min(1.0, score)), trend
+    if price <= 0 or sma50 <= 0:
+        return None
+    momentum = price / sma50 - 1.0  # signed % vs the 50-day trend
+    sign = 1.0 if momentum >= 0 else -1.0
+    trend_agrees = (trend == "uptrend" and momentum > 0) or (trend == "downtrend" and momentum < 0)
+    conviction = abs(momentum) * (1.6 if trend_agrees else 1.0)
+    if (rsi >= 60 and momentum > 0) or (rsi <= 40 and momentum < 0):
+        conviction += 0.02  # RSI extension confirms the move
+    return {
+        "momentum": momentum,
+        "trend": trend,
+        "rsi": rsi,
+        "trend_agrees": trend_agrees,
+        "conviction": sign * conviction,
+        "is_mover": abs(momentum) >= _MIN_MOVE or (trend_agrees and abs(momentum) >= _MIN_MOVE / 2),
+    }
 
 
 def build_universe(
@@ -221,7 +243,7 @@ def build_universe(
     *,
     candidates: list[str] | None = None,
     top_n: int = 8,
-    max_eval: int = 24,
+    max_eval: int = 36,
 ) -> dict[str, Any]:
     """Rank underlyings by move strength, pick direction, gate by regime, map to ETP.
 
@@ -239,16 +261,14 @@ def build_universe(
     regime = regime or compute_regime()
     umap = get_underlying_map(db)
 
-    # Default candidate pool: underlyings that can be expressed in BOTH directions
-    # (so the regime gate has something to pick), with a readable proxy. This is
-    # exactly the set where a regime tilt is actionable.
+    # Default candidate pool: every underlying with a readable proxy and a
+    # tradeable ETP. We do NOT bias toward both-direction names (that buried the
+    # interesting single-stock movers under broad indices). Instead we prioritise
+    # SINGLE STOCKS — where the real moves are — then indices, and rank the lot
+    # by actual momentum magnitude.
     if candidates is None:
-        pool = [
-            k for k, v in umap.items()
-            if v.get("proxy") and (v.get("long") or v.get("inverse"))
-        ]
-        # Prefer those with both directions available, then cap the eval budget.
-        pool.sort(key=lambda k: (umap[k].get("long") is not None and umap[k].get("inverse") is not None), reverse=True)
+        pool = [k for k, v in umap.items() if v.get("proxy") and (v.get("long") or v.get("inverse"))]
+        pool.sort(key=lambda k: 1 if umap[k].get("is_stock") else 0, reverse=True)
         pool = pool[:max_eval]
     else:
         pool = [c.strip().upper() for c in candidates if c.strip()]
@@ -264,8 +284,14 @@ def build_universe(
         except LeveragedMarketError as exc:
             errors.append(f"{key}: {exc}")
             continue
-        score, trend = _move_score(tech)
-        direction = "long" if score >= 0 else "inverse"
+        m = _move_metrics(tech)
+        if m is None:
+            continue
+        # Skip lukewarm names — only surface genuine movers (this is the fix for
+        # the "boring picks": no more mixed-trend-barely-above-MA indices).
+        if candidates is None and not m["is_mover"]:
+            continue
+        direction = "long" if m["momentum"] >= 0 else "inverse"
         etp = slot.get(direction)
         if etp is None:
             # No ETP for the natural direction — skip (can't express it in ISA).
@@ -274,16 +300,31 @@ def build_universe(
         # In a strong opposing regime, drop the name entirely.
         if not aligned and abs(regime.score) >= 0.6 and regime.regime != "neutral":
             continue
+        # Clean momentum label derived from the actual move (the marketdata
+        # trend flag is unreliable — a +50% name should not read "mixed").
+        mv = m["momentum"]
+        if mv >= 0.30:
+            label = "strong uptrend"
+        elif mv >= 0.05:
+            label = "uptrend"
+        elif mv <= -0.30:
+            label = "strong downtrend"
+        elif mv <= -0.05:
+            label = "downtrend"
+        else:
+            label = "flat"
         ranked.append({
             "underlying": key,
             "underlying_name": slot.get("underlying_name"),
+            "is_stock": bool(slot.get("is_stock")),
             "direction": direction,
             "etp_ticker": etp["ticker"],
             "etp_name": etp["name"],
             "factor": etp.get("factor"),
             "currency": etp.get("currency"),
-            "move_score": round(score, 3),
-            "trend": trend,
+            "move_pct": round(m["momentum"], 4),
+            "move_score": round(m["conviction"], 3),
+            "trend": label,
             "regime_aligned": aligned,
         })
 
