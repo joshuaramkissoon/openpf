@@ -8,10 +8,12 @@ import {
   Lightbulb,
   ListChecks,
   MessageSquare,
+  Radar,
   Settings,
   ShieldCheck,
   Sparkles,
   Telescope,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react"
 
@@ -42,8 +44,14 @@ const FEATURES: Feature[] = [
   {
     icon: Gauge,
     title: "Leveraged Desk",
-    what: "Leveraged positions, the risk rails that bound them, and the live signal queue.",
-    how: "Set per-position size, max exposure, max open, take-profit/stop-loss, and the new daily target / loss-limit / max-trades rails. Execution stays gated until you turn broker mode to live.",
+    what: "The market-regime read, today's regime-gated universe, your leveraged positions, and the risk rails that bound them.",
+    how: "Read the regime banner + \"Today's Universe\" table up top (see below), then set per-position size, max exposure, max open, take-profit/stop-loss, and the daily target / loss-limit / max-trades rails. Execution stays gated until you turn broker mode to live.",
+  },
+  {
+    icon: Radar,
+    title: "Market Regime & Universe",
+    what: "The engine that decides direction: is the tape risk-on (favour 3x long) or risk-off (favour 3x inverse)?",
+    how: "The banner on the Leveraged Desk shows the live regime (SPY/QQQ vs their moving averages + VIX) with a long/inverse tilt. The table below ranks the strongest movers from your live T212 leveraged universe and maps each to the correct 3x ETP for that direction — already filtered to the regime. It's a watchlist, not an order.",
   },
   {
     icon: CalendarClock,
@@ -87,7 +95,7 @@ const RHYTHM: { time: string; title: string; body: string }[] = [
   {
     time: "07:45",
     title: "Morning scan",
-    body: "If enabled, the daily-alpha job wakes Archie with your £/day goal, scans the leveraged universe, forecasts the top names, and proposes 1–2 entries inside your rails.",
+    body: "If enabled, the daily-alpha job wakes Archie with your £/day goal + the day's market regime and any imminent macro events (FOMC/CPI/NFP), scans the regime-gated universe, forecasts the top names, and proposes 1–2 entries inside your rails.",
   },
   {
     time: "Any time",
@@ -178,6 +186,56 @@ export function HelpGuide() {
           {FEATURES.map((f) => (
             <FeatureCard key={f.title} {...f} />
           ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="How the leveraged engine works"
+        description="Regime → universe → signal → learning. The pipeline behind the Leveraged Desk and the daily-alpha loop."
+      >
+        <div className="flex flex-col gap-3.5">
+          <div className="flex gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+              <TrendingUp className="size-4" strokeWidth={2} />
+            </div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              <p className="text-sm font-semibold text-foreground">1 · Regime sets the direction</p>
+              SPY &amp; QQQ vs their SMA50/200, plus the VIX, classify the tape as
+              <span className="font-medium text-foreground"> risk-on</span>,
+              <span className="font-medium text-foreground"> risk-off</span>, or
+              <span className="font-medium text-foreground"> neutral</span>. Risk-on favours <span className="font-medium text-foreground">3x long</span> ETPs; risk-off favours <span className="font-medium text-foreground">3x inverse</span> ETPs (the only ISA-legal way to get downside — T212 has no short selling). A high-VIX tape is treated defensively.
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+              <Radar className="size-4" strokeWidth={2} />
+            </div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              <p className="text-sm font-semibold text-foreground">2 · Universe finds the candidates</p>
+              The strongest-moving underlyings are ranked from your <span className="font-medium text-foreground">live T212 leveraged catalogue</span> (≈160 underlyings) and mapped to the correct 3x ETP — long or inverse to match each name's move. The regime then <span className="font-medium text-foreground">gates</span> the list: entries that fight a strong tape are dropped. That's the "Today's Universe" table.
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+              <CalendarClock className="size-4" strokeWidth={2} />
+            </div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              <p className="text-sm font-semibold text-foreground">3 · Macro calendar adds caution</p>
+              Imminent high-impact events — FOMC, CPI, NFP — are flagged into the morning scan so Archie sizes cautiously into them rather than holding 3x exposure into a print. Live headline news comes from Archie's web search on top.
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+              <Lightbulb className="size-4" strokeWidth={2} />
+            </div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              <p className="text-sm font-semibold text-foreground">4 · Attribution learns over time</p>
+              Once trades close, the engine joins each back to the signal that proposed it and compares <span className="font-medium text-foreground">predicted vs realised edge</span>. After a handful of closed trades the edge estimate stops being a fixed guess and starts reflecting what's actually working.
+            </div>
+          </div>
+          <p className="rounded-lg border border-border/60 bg-muted/15 p-3 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-medium text-foreground">To use it:</span> open the <span className="font-medium text-foreground">Leveraged Desk</span> to read the regime + universe any time. To run it on a schedule, enable <span className="font-medium text-foreground">daily_alpha_goal</span> in Scheduled Jobs and set your £/day target — the regime, universe, and macro context are fed to Archie automatically each morning. Proposals always land in <span className="font-medium text-foreground">Execution</span> for your approval; nothing trades until you enable auto-execute within your rails.
+          </p>
         </div>
       </SectionCard>
 
