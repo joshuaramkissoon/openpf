@@ -14,6 +14,7 @@ from app.services.config_store import ConfigStore
 from app.services.execution_service import approve_intent, execute_intent
 from app.services.market_data import fetch_history
 from app.services.portfolio_service import get_portfolio_snapshot
+from app.services.regime_service import compute_regime
 from app.services.t212_client import normalize_instrument_code
 
 
@@ -33,14 +34,20 @@ class ProposedIntent:
 
 
 def _market_regime() -> str:
-    spy = signal_for_symbol("SPY")
-    if spy.trend_score is None or spy.momentum_63d is None:
+    """Human-readable regime line for the agent run summary.
+
+    Delegates to the shared `regime_service` (SPY/QQQ vs SMA50/200 + VIX) so the
+    agent, the leveraged engine, and the dashboard all read the SAME regime,
+    instead of this function's old SPY-only heuristic.
+    """
+    try:
+        r = compute_regime()
+        bits = [r.label, f"score {r.score:+.2f}"]
+        if r.vix is not None:
+            bits.append(f"VIX {r.vix:.1f} ({r.vix_state})")
+        return " · ".join(bits)
+    except Exception:  # noqa: BLE001 — never block a run on regime
         return "neutral"
-    if spy.trend_score >= 0.75 and spy.momentum_63d > 0:
-        return "risk-on"
-    if spy.trend_score <= 0.25 and spy.momentum_63d < 0:
-        return "risk-off"
-    return "mixed"
 
 
 def _safe_qty(notional: float, price: float) -> float:

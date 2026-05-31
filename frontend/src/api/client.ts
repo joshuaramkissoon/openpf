@@ -384,6 +384,53 @@ export async function refreshInstrumentCache() {
   return data
 }
 
+export interface RegimeState {
+  regime: 'risk_on' | 'risk_off' | 'neutral'
+  label: string
+  score: number
+  long_bias: number
+  inverse_bias: number
+  vix: number | null
+  vix_state: string
+  breadth: number | null
+  rationale: string
+  stale: boolean
+  as_of: string
+}
+
+export interface UniverseRow {
+  underlying: string
+  underlying_name: string | null
+  direction: 'long' | 'inverse'
+  etp_ticker: string
+  etp_name: string
+  factor: number | null
+  currency: string | null
+  move_score: number
+  trend: string
+  regime_aligned: boolean
+}
+
+export interface UniverseResponse {
+  regime: RegimeState
+  ranked: UniverseRow[]
+  evaluated: number
+  available_underlyings: number
+  degraded?: boolean
+  error_reason?: string | null
+  errors: string[]
+}
+
+export async function getLeveragedRegime() {
+  const { data } = await api.get<RegimeState>('/leveraged/regime')
+  return data
+}
+
+export async function getLeveragedUniverse(topN = 8) {
+  const { data } = await api.get<UniverseResponse>('/leveraged/universe', { params: { top_n: topN } })
+  return data
+}
+
 export async function getSchedulerTasks() {
   const { data } = await api.get<SchedulerTask[]>('/scheduler/tasks')
   return data

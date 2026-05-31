@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -16,11 +17,14 @@ from app.services.claude_sdk_config import project_root
 from app.services.config_store import ConfigStore
 from app.services.instrument_cache_service import refresh_instrument_cache
 from app.services.leveraged_market import LeveragedMarketError, get_price, get_technicals
+from app.services.regime_service import RegimeState, compute_regime
+from app.services.signal_attribution import compute_attribution, data_driven_edge
 from app.services.telegram_service import send_telegram_notification
 from app.services.t212_client import T212Error, build_t212_client, normalize_instrument_code
 
 
 UK_TZ = ZoneInfo("Europe/London")
+logger = logging.getLogger(__name__)
 
 
 class LeveragedError(RuntimeError):
@@ -428,7 +432,47 @@ def _signal_risk_flag(confidence: float, expected_edge: float) -> str:
     return "low"
 
 
-def _build_signal(symbol: str, policy: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+# How hard a STRONG regime suppresses counter-regime entries. At |score| >=
+# _REGIME_GATE_AT a misaligned signal is dropped outright (don't fight a strong
+# tape); below that it survives but with a confidence penalty + a conflict flag.
+_REGIME_GATE_AT = 0.6
+_REGIME_BOOST = 0.06     # max confidence boost for an in-regime signal
+_REGIME_PENALTY = 0.15   # max confidence penalty for a counter-regime signal
+
+
+def _apply_regime(
+    confidence: float, direction: str, regime: RegimeState | None
+) -> tuple[float, bool, str | None]:
+    """Adjust confidence by regime alignment; signal whether to drop the entry.
+
+    Returns (adjusted_confidence, drop, note). A risk-on regime favours LONG
+    ETPs and penalises INVERSE; risk-off is the mirror. A neutral or degraded
+    regime is a no-op. In a STRONG aligned-against regime the entry is dropped
+    so the engine never proposes fighting a decisive tape.
+    """
+    if regime is None or regime.stale or regime.regime == "neutral":
+        return confidence, False, None
+
+    strength = abs(regime.score)
+    aligned = regime.favours(direction)
+    if aligned:
+        return _clamp(confidence + _REGIME_BOOST * strength, 0.35, 0.95), False, (
+            f"regime {regime.label} supports {direction}"
+        )
+
+    # Counter-regime.
+    if strength >= _REGIME_GATE_AT:
+        return confidence, True, (
+            f"dropped: {direction} fights a strong {regime.label} regime (score {regime.score:+.2f})"
+        )
+    return _clamp(confidence - _REGIME_PENALTY * strength, 0.35, 0.95), False, (
+        f"regime {regime.label} counter to {direction} — confidence trimmed"
+    )
+
+
+def _build_signal(
+    symbol: str, policy: dict[str, Any], regime: RegimeState | None = None
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Build a per-product entry signal.
 
     Direction logic is driven by the UNDERLYING'S technicals, NOT the ETP's own
@@ -504,6 +548,13 @@ def _build_signal(symbol: str, policy: dict[str, Any]) -> tuple[dict[str, Any] |
     confidence += 0.07 if abs(macd - macd_signal) > 0 else 0.0
     confidence = _clamp(confidence, 0.35, 0.92)
 
+    # Regime gate: tilt toward in-regime entries, suppress counter-regime ones,
+    # and drop outright when fighting a strong tape. `direction` here is
+    # 'short' for inverse ETPs / 'long' for long ETPs.
+    confidence, regime_drop, regime_note = _apply_regime(confidence, direction, regime)
+    if regime_drop:
+        return None, etp_tech
+
     expected_edge = 0.006 + max(0.0, confidence - 0.5) * 0.02
     expected_edge = _clamp(expected_edge, 0.004, 0.03)
 
@@ -512,6 +563,8 @@ def _build_signal(symbol: str, policy: dict[str, Any]) -> tuple[dict[str, Any] |
         f"underlying={underlying_label} {side}: trend={trend}, rsi={rsi:.1f}, "
         f"macd={macd:.4f} vs signal={macd_signal:.4f}, sma20={sma20:.4f}, sma50={sma50:.4f}"
     )
+    if regime_note:
+        rationale += f" | {regime_note}"
 
     # Return the ETP's own technicals as `tech` (so meta reflects the traded
     # instrument); the underlying read lives in the rationale + meta below.
@@ -519,6 +572,10 @@ def _build_signal(symbol: str, policy: dict[str, Any]) -> tuple[dict[str, Any] |
     out_tech["underlying_key"] = underlying_label
     out_tech["underlying_trend"] = trend
     out_tech["driven_by_underlying"] = under is not None
+    if regime is not None:
+        out_tech["regime"] = regime.regime
+        out_tech["regime_score"] = regime.score
+        out_tech["regime_aligned"] = regime.favours(direction)
 
     return {
         "symbol": symbol,
@@ -571,6 +628,18 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
     created_rows: list[LeveragedSignal] = []
     failures: list[str] = []
 
+    # One regime read per scan — gates long-vs-inverse for every candidate.
+    regime = compute_regime()
+    # Attribution from closed trades makes expected_edge data-driven (falls back
+    # to the rule constant when there's not enough history yet).
+    attribution: dict[str, Any] = {}
+    attribution_error: str | None = None
+    try:
+        attribution = compute_attribution(db)
+    except Exception as exc:  # noqa: BLE001 — attribution is advisory, never block a scan
+        attribution_error = str(exc)
+        logger.warning("leveraged scan: attribution failed, using rule edge: %s", exc)
+
     notional_per_trade = min(float(policy["per_position_notional"]), capacity_left)
 
     for symbol in universe:
@@ -580,13 +649,18 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
             continue
 
         try:
-            signal_data, tech = _build_signal(symbol, policy)
+            signal_data, tech = _build_signal(symbol, policy, regime=regime)
         except LeveragedMarketError as exc:
             failures.append(f"{symbol}: {exc}")
             continue
 
         if signal_data is None:
             continue
+
+        # Blend the rule-based edge with realized history for this direction.
+        signal_data["expected_edge"] = data_driven_edge(
+            attribution, signal_data["direction"], float(signal_data["expected_edge"])
+        )
 
         target_notional = min(notional_per_trade, capacity_left)
         if target_notional < 10:
@@ -651,6 +725,8 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
         "policy": policy,
         "open_positions": len(open_trades),
         "open_exposure": current_exposure,
+        "regime": regime.to_dict(),
+        "attribution_error": attribution_error,
         "failures": failures,
     }
 

@@ -23,6 +23,10 @@ from app.services.leveraged_service import (
     serialize_trade,
     update_policy,
 )
+from app.services.leveraged_universe import build_universe
+from app.services.macro_calendar import upcoming_events
+from app.services.regime_service import compute_regime
+from app.services.signal_attribution import compute_attribution
 
 router = APIRouter(prefix="/leveraged", tags=["leveraged"])
 
@@ -87,3 +91,31 @@ def refresh_instruments(db: Session = Depends(get_db)) -> LeveragedActionRespons
         return LeveragedActionResponse(ok=True, message="instrument cache refreshed", data=result)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/regime")
+def get_regime() -> dict:
+    """Current market regime (SPY/QQQ vs SMA50/200 + VIX) with long/inverse bias."""
+    return compute_regime().to_dict()
+
+
+@router.get("/universe")
+def get_universe(top_n: int = 8, db: Session = Depends(get_db)) -> dict:
+    """Regime-gated, market-driven leveraged watchlist derived from live T212 metadata."""
+    try:
+        return build_universe(db, top_n=max(1, min(int(top_n), 25)))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/attribution")
+def get_attribution(lookback_days: int = 120, db: Session = Depends(get_db)) -> dict:
+    """Predicted-vs-realized edge from closed trades joined to their signals."""
+    return compute_attribution(db, lookback_days=max(7, min(int(lookback_days), 730)))
+
+
+@router.get("/macro")
+def get_macro(within_days: int = 14) -> dict:
+    """Upcoming high-impact US macro events (FOMC/CPI/NFP)."""
+    days = max(1, min(int(within_days), 90))
+    return {"events": upcoming_events(within_days=days), "within_days": days}

@@ -6,11 +6,15 @@ import {
   closeLeveragedTrade,
   executeLeveragedSignal,
   getLeveragedSnapshot,
+  getLeveragedUniverse,
   patchLeveragedPolicy,
   refreshInstrumentCache,
   runLeveragedCycle,
   runLeveragedScan,
+  type UniverseResponse,
 } from '../api/client'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { Money, MoneyDelta, Pct, SectionCard, StatCard } from '@/components/kit'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,6 +38,7 @@ export function LeveragedWorkspace({ onError }: Props) {
   const [snapshot, setSnapshot] = useState<LeveragedSnapshot | null>(null)
   const [busy, setBusy] = useState(false)
   const [policyDraft, setPolicyDraft] = useState<LeveragedConfig | null>(null)
+  const [universe, setUniverse] = useState<UniverseResponse | null>(null)
 
   async function loadAll() {
     setBusy(true)
@@ -51,6 +56,9 @@ export function LeveragedWorkspace({ onError }: Props) {
 
   useEffect(() => {
     void loadAll()
+    // Regime + universe load independently (slower, market-data backed) so they
+    // never block the core desk from rendering.
+    void getLeveragedUniverse(8).then(setUniverse).catch(() => setUniverse(null))
   }, [])
 
   const summary = snapshot?.summary
@@ -83,8 +91,77 @@ export function LeveragedWorkspace({ onError }: Props) {
     }
   }
 
+  const regime = universe?.regime
+  const regimeTone =
+    regime?.regime === 'risk_on'
+      ? 'border-emerald-500/30 bg-emerald-500/5'
+      : regime?.regime === 'risk_off'
+        ? 'border-rose-500/30 bg-rose-500/5'
+        : 'border-border/60 bg-muted/20'
+  const regimeDot =
+    regime?.regime === 'risk_on' ? 'bg-emerald-500' : regime?.regime === 'risk_off' ? 'bg-rose-500' : 'bg-muted-foreground'
+
   return (
     <div className="space-y-6">
+      {regime ? (
+        <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-4 py-3', regimeTone)}>
+          <div className="flex items-center gap-2">
+            <span className={cn('h-2.5 w-2.5 rounded-full', regimeDot)} />
+            <span className="text-sm font-semibold">Market regime: {regime.label}</span>
+            {regime.stale ? <Badge variant="outline" className="text-[10px]">degraded data</Badge> : null}
+          </div>
+          <span className="text-xs text-muted-foreground">score {regime.score >= 0 ? '+' : ''}{regime.score.toFixed(2)}</span>
+          {regime.vix != null ? (
+            <span className="text-xs text-muted-foreground">VIX {regime.vix.toFixed(1)} ({regime.vix_state})</span>
+          ) : null}
+          <span className="text-xs text-muted-foreground">
+            tilt: {regime.regime === 'risk_on' ? '3x long favoured' : regime.regime === 'risk_off' ? '3x inverse favoured (ISA)' : 'no strong tilt'}
+          </span>
+          <span className="ml-auto hidden text-xs text-muted-foreground sm:inline">{regime.rationale}</span>
+        </div>
+      ) : null}
+
+      {universe && universe.ranked.length > 0 ? (
+        <SectionCard
+          title="Today's Universe"
+          description={`Regime-gated movers from ${universe.available_underlyings} live T212 leveraged products`}
+        >
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Underlying</TableHead>
+                  <TableHead>Direction</TableHead>
+                  <TableHead>ETP</TableHead>
+                  <TableHead className="text-right">Move</TableHead>
+                  <TableHead className="text-right">Trend</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {universe.ranked.map((row) => (
+                  <TableRow key={row.etp_ticker}>
+                    <TableCell className="font-medium">
+                      {row.underlying}
+                      {row.underlying_name ? (
+                        <span className="ml-2 hidden text-xs text-muted-foreground md:inline">{row.underlying_name}</span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={row.direction === 'long' ? 'text-emerald-500' : 'text-rose-500'}>
+                        {row.direction === 'long' ? 'Long' : 'Inverse'} {row.factor ? `${row.factor}x` : ''}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{row.etp_ticker}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.move_score >= 0 ? '+' : ''}{row.move_score.toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-xs capitalize text-muted-foreground">{row.trend}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </SectionCard>
+      ) : null}
+
       <SectionCard
         title="Leveraged Desk"
         description="ISA leveraged positions tracked in SQLite + markdown logs"
