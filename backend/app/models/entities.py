@@ -235,7 +235,7 @@ class ScheduledTask(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     cron_expr: Mapped[str] = mapped_column(String(80))
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/London")
-    model: Mapped[str] = mapped_column(String(64), default="claude-sonnet-4-20250514")
+    model: Mapped[str] = mapped_column(String(64), default="claude-sonnet-4-6")
     prompt: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)

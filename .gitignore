@@ -40,3 +40,11 @@ backend/logs/
 
 # Docker
 *.tar
+
+# Kronos forecasting — model weights are pulled from Hugging Face at
+# runtime, not committed. Ignore HF cache and demo-script plot output.
+.cache/huggingface/
+backend/kronos_forecast_*.png
+
+# Long-running server logs/pids (scripts/serve.sh)
+.run/

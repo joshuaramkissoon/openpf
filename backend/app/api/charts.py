@@ -3,11 +3,16 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 import app.quant as quant
-from app.schemas.charts import ChartResponse
+from app.schemas.charts import ChartResponse, ForecastResponse
 from app.services.leveraged_market import (
     LeveragedMarketError,
     _download_history_frame,
     to_yfinance_ticker,
+)
+from app.services.kronos_service import (
+    ForecastError,
+    ForecastUnavailableError,
+    forecast as run_forecast,
 )
 
 router = APIRouter(prefix="/charts", tags=["charts"])
@@ -119,3 +124,36 @@ def get_candles(
         panels=panels,
         markers=[],
     )
+
+
+@router.get("/forecast", response_model=ForecastResponse)
+def get_forecast(
+    ticker: str = Query(..., description="Ticker symbol (T212 code or raw symbol)"),
+    horizon: int = Query(30, ge=1, le=120, description="Trading days to forecast ahead"),
+    lookback: int = Query(256, ge=32, le=2048, description="Historical trading days fed to the model"),
+    samples: int = Query(20, ge=1, le=60, description="Independent sample paths for the uncertainty bands"),
+    temperature: float = Query(1.0, gt=0.0, le=2.0, description="Sampling temperature"),
+    top_p: float = Query(0.9, gt=0.0, le=1.0, description="Nucleus sampling threshold"),
+) -> ForecastResponse:
+    """Probabilistic close-price forecast for a ticker via the Kronos model.
+
+    Returns the historical close tail plus per-step p10/p50/p90 bands. The
+    Kronos model + torch load lazily on first call (downloading weights once);
+    requests before that are cheap.
+    """
+    try:
+        result = run_forecast(
+            ticker,
+            horizon=horizon,
+            lookback=lookback,
+            samples=samples,
+            temperature=temperature,
+            top_p=top_p,
+        )
+    except ForecastUnavailableError as exc:
+        # 503: feature not installed/loadable on this host.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ForecastError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return ForecastResponse(**result)

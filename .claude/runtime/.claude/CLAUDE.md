@@ -20,9 +20,13 @@ Read `memory/README.md` for full guidelines.
 | `memory/lessons.md` | Mistakes & insights | When lessons emerge |
 | `memory/context.md` | Background facts about Josh | Rarely |
 | `memory/session_notes/YYYY-MM-DD.md` | Daily session summaries | End of each session |
-| `memory/instruments/leveraged-products.md` | Curated 3x long/short products (ISA) | When new products discovered |
-| `memory/instruments/all-instruments.json` | Full T212 instrument cache | Auto-updated by script |
 | `memory/trades/` | Leveraged trade log with entry/exit/P&L | After each leveraged trade |
+
+> **Leveraged products are identified LIVE from T212 instrument metadata** — there is no
+> curated products file. `get_positions` returns each holding's real `name` and a `leverage`
+> field ({factor, direction, underlying}); the name itself disambiguates (e.g. `3SNDl` =
+> "Leverage Shares 3x Long SanDisk SNDK", not the SNDL cannabis stock). Always trust the
+> T212 metadata name over ticker-letter guessing.
 
 ### Memory Rules
 - Read relevant memory files BEFORE answering portfolio questions
@@ -86,24 +90,55 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
 
 ## Tooling You Have
 
-### Market Data MCP — use for ALL price/technical queries (no rate limits)
+### Market Data MCP — use for ALL price/technical/risk queries (no rate limits)
 - `get_price_snapshot` — spot price, daily change, volume
 - `get_price_history_rows` — historical OHLCV candles
 - `get_technical_snapshot` — RSI, SMA, MACD, Bollinger Bands, ATR
+- `get_indicator_series` — indicator time series (e.g. SMA50/200 for regime reads)
+- `get_risk_metrics` — volatility, beta, drawdown
+- `get_correlation_matrix` — correlation across holdings/instruments
+- `compare_assets` — relative performance / ranking across symbols
+
+### Fundamentals MCP — company facts, valuation, statements, earnings
+- `get_fundamentals` — profile, profitability, growth, balance-sheet health
+- `get_valuation` — valuation ratios (P/E, P/S, EV/EBITDA, etc.)
+- `get_financial_statements` — income / balance sheet / cash flow
+- `get_earnings_calendar` — next earnings date + history (for pre-earnings vol/risk)
+- Use these whenever a question touches valuation, profitability, growth, financial health, or earnings timing.
+
+### Forecast MCP — Kronos probabilistic price forecast
+- `forecast_prices` — projects a holding's close over a future horizon with **p10/p50/p90** bands
+- `forecast_status` — model availability
+- Treat forecasts as probabilistic analysis with explicit uncertainty — **never** as certainties or executed trades.
 
 ### Trading 212 MCP — use ONLY for account-specific operations (strict rate limits)
 - Account summary, positions, pending orders
 - Order placement and cancellation
-- Order history, dividends, transactions
+- Order history, dividends, transactions; instrument search (`search_instruments`)
 - **Never use T212 tools to look up prices or market data** — T212 has strict API rate limits (1 req/s for positions, 1 req/50s for instrument search)
+- **No short selling on T212.** Downside/short exposure is achieved only via **INVERSE (3x short) ETPs**, which are **ISA-only**. Identify these from the live T212 instrument metadata (the name encodes factor/direction/underlying).
 
 ### Scheduler MCP
 - List, create, pause, resume, delete, and run scheduled tasks
 - Inspect task logs
 
+### Leveraged engine (3x ISA ETPs)
+- A scan/monitor/execute engine for 3x **long** and **inverse** ISA ETPs, governed by hard daily risk rails
+  (profit target / loss limit / max trades) and exposure/per-position/open-count caps.
+- An autonomous daily loop runs it (morning cycle, midday + EOD monitors) plus a weekly review and an
+  optional daily-alpha goal task. Inspect/manage via the scheduler tools.
+- Map underlyings → the correct long/inverse ETP via the **live T212 instrument metadata**: every
+  position's `name` + `leverage` field state the factor, direction, and underlying authoritatively
+  (e.g. `3SNDl` = "3x Long SanDisk SNDK"), so no ticker-letter guessing is needed. Never bypass a rail.
+
 ### Tool Routing Rule
-When you need a price, quote, candle data, or technical indicator: **always use marketdata MCP**.
+When you need a price, quote, candle data, technical indicator, risk metric, or correlation: **always use marketdata MCP**.
+When you need valuation, financials, fundamentals, or earnings dates: **use fundamentals MCP**.
+When you need a forward price cone: **use forecast MCP** (`forecast_prices`, p10/p50/p90).
 When you need account balances, held positions, or to place/cancel orders: **use T212 MCP**.
 Never call `search_instruments` or other T212 endpoints to look up market data — use yfinance-backed marketdata tools instead.
+
+### CRITICAL: No Cached Prices
+The portfolio context contains **cost basis data only** (quantity, average_price, total_cost). It does NOT contain current market prices. **Never quote a price without fetching it live from marketdata MCP first.** If you cannot fetch a price, say so — do not guess or use stale data.
 
 - If unsure whether a capability is available, check tools first before saying it is unavailable

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
+import { ArrowRight, Inbox, RefreshCw, RotateCcw, Scan, TrendingUp } from 'lucide-react'
 
 import {
   closeLeveragedTrade,
@@ -10,14 +11,23 @@ import {
   runLeveragedCycle,
   runLeveragedScan,
 } from '../api/client'
+import { Money, MoneyDelta, Pct, SectionCard, StatCard } from '@/components/kit'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import type { LeveragedConfig, LeveragedSnapshot } from '../types'
 
 interface Props {
   onError: (message: string | null) => void
-}
-
-function money(value: number, symbol = '\u00a3') {
-  return `${symbol}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
 export function LeveragedWorkspace({ onError }: Props) {
@@ -74,202 +84,296 @@ export function LeveragedWorkspace({ onError }: Props) {
   }
 
   return (
-    <div className="leveraged-grid">
-      <section className="glass-card leveraged-summary-card">
-        <div className="section-heading-row">
-          <h2>Leveraged Desk</h2>
-          <div className="intent-actions">
-            <button className="btn" onClick={() => void loadAll()} disabled={busy}>Refresh</button>
-            <button className="btn" onClick={() => void runLeveragedScan().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'scan failed'))} disabled={busy}>Scan</button>
-            <button className="btn primary" onClick={() => void runLeveragedCycle().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'cycle failed'))} disabled={busy}>Run Cycle</button>
-            <button className="btn ghost" onClick={() => void refreshInstrumentCache().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'cache refresh failed'))} disabled={busy}>Refresh Instruments</button>
-          </div>
+    <div className="space-y-6">
+      <SectionCard
+        title="Leveraged Desk"
+        description="ISA leveraged positions tracked in SQLite + markdown logs"
+        action={
+          <>
+            <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={busy} title="Refresh" className="px-2 sm:px-3">
+              <RefreshCw />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runLeveragedScan().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'scan failed'))}
+              disabled={busy}
+              title="Scan"
+              className="px-2 sm:px-3"
+            >
+              <Scan />
+              <span className="hidden sm:inline">Scan</span>
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void runLeveragedCycle().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'cycle failed'))}
+              disabled={busy}
+              title="Run Cycle"
+              className="px-2 sm:px-3"
+            >
+              <TrendingUp />
+              <span className="hidden sm:inline">Run Cycle</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void refreshInstrumentCache().then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'cache refresh failed'))}
+              disabled={busy}
+              title="Refresh Instruments"
+              className="px-2 sm:px-3"
+            >
+              <RotateCcw />
+              <span className="hidden sm:inline">Refresh Instruments</span>
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            label="Open Exposure"
+            value={summary ? <Money value={summary.open_exposure} /> : '—'}
+          />
+          <StatCard
+            label="Open Unrealised"
+            value={summary ? <MoneyDelta value={summary.open_unrealized_pnl} /> : '—'}
+          />
+          <StatCard
+            label="Realised P/L"
+            value={summary ? <MoneyDelta value={summary.closed_realized_pnl} /> : '—'}
+          />
+          <StatCard
+            label="Win Rate"
+            value={summary ? <Pct value={summary.win_rate} /> : '—'}
+          />
         </div>
-        <div className="metric-grid leveraged-metrics">
-          <article className="glass-card metric-card">
-            <span className="metric-label">Open Exposure</span>
-            <strong className="metric-value">{summary ? money(summary.open_exposure) : '\u2014'}</strong>
-          </article>
-          <article className="glass-card metric-card">
-            <span className="metric-label">Open Unrealized</span>
-            <strong className="metric-value">{summary ? money(summary.open_unrealized_pnl) : '\u2014'}</strong>
-          </article>
-          <article className="glass-card metric-card">
-            <span className="metric-label">Realized P/L</span>
-            <strong className="metric-value">{summary ? money(summary.closed_realized_pnl) : '\u2014'}</strong>
-          </article>
-          <article className="glass-card metric-card">
-            <span className="metric-label">Win Rate</span>
-            <strong className="metric-value">{summary ? `${(summary.win_rate * 100).toFixed(1)}%` : '\u2014'}</strong>
-          </article>
-        </div>
-      </section>
+      </SectionCard>
 
-      <section className="glass-card leveraged-policy-card">
-        <div className="section-heading-row">
-          <h2>Risk Rails</h2>
-          <button className="btn" onClick={() => void savePolicy()} disabled={!policy || busy}>Save</button>
-        </div>
+      <SectionCard
+        title="Risk Rails"
+        description="Guardrails for leveraged execution"
+        action={
+          <Button size="sm" onClick={() => void savePolicy()} disabled={!policy || busy}>
+            Save
+          </Button>
+        }
+      >
         {policy && (
-          <div className="leveraged-policy-form">
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={policy.enabled}
-                onChange={(e) => setPolicyDraft({ ...policy, enabled: e.target.checked })}
-              />
-              Leveraged system enabled
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={policy.auto_execute_enabled}
-                onChange={(e) => setPolicyDraft({ ...policy, auto_execute_enabled: e.target.checked })}
-              />
-              Auto execute within rails
-            </label>
-            <label>
-              Per position ({'\u00a3'})
-              <input
-                value={policy.per_position_notional}
-                onChange={(e) => setPolicyDraft({ ...policy, per_position_notional: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Max exposure ({'\u00a3'})
-              <input
-                value={policy.max_total_exposure}
-                onChange={(e) => setPolicyDraft({ ...policy, max_total_exposure: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Max open positions
-              <input
-                value={policy.max_open_positions}
-                onChange={(e) => setPolicyDraft({ ...policy, max_open_positions: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Take profit (%)
-              <input
-                value={(policy.take_profit_pct * 100).toFixed(2)}
-                onChange={(e) => setPolicyDraft({ ...policy, take_profit_pct: Number(e.target.value) / 100 })}
-              />
-            </label>
-            <label>
-              Stop loss (%)
-              <input
-                value={(policy.stop_loss_pct * 100).toFixed(2)}
-                onChange={(e) => setPolicyDraft({ ...policy, stop_loss_pct: Number(e.target.value) / 100 })}
-              />
-            </label>
-            <label>
-              Close time UK
-              <input
-                value={policy.close_time_uk}
-                onChange={(e) => setPolicyDraft({ ...policy, close_time_uk: e.target.value })}
-              />
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
+          <div className="space-y-5">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+                <Label htmlFor="lev-enabled" className="text-sm">Leveraged system enabled</Label>
+                <Switch
+                  id="lev-enabled"
+                  checked={policy.enabled}
+                  onCheckedChange={(checked) => setPolicyDraft({ ...policy, enabled: checked })}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+                <Label htmlFor="lev-auto-execute" className="text-sm">Auto execute within rails</Label>
+                <Switch
+                  id="lev-auto-execute"
+                  checked={policy.auto_execute_enabled}
+                  onCheckedChange={(checked) => setPolicyDraft({ ...policy, auto_execute_enabled: checked })}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-per-position" className="text-xs text-muted-foreground">Per position (£)</Label>
+                <Input
+                  id="lev-per-position"
+                  className="font-mono tabular-nums"
+                  value={policy.per_position_notional}
+                  onChange={(e) => setPolicyDraft({ ...policy, per_position_notional: Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-max-exposure" className="text-xs text-muted-foreground">Max exposure (£)</Label>
+                <Input
+                  id="lev-max-exposure"
+                  className="font-mono tabular-nums"
+                  value={policy.max_total_exposure}
+                  onChange={(e) => setPolicyDraft({ ...policy, max_total_exposure: Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-max-open" className="text-xs text-muted-foreground">Max open positions</Label>
+                <Input
+                  id="lev-max-open"
+                  className="font-mono tabular-nums"
+                  value={policy.max_open_positions}
+                  onChange={(e) => setPolicyDraft({ ...policy, max_open_positions: Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-close-time" className="text-xs text-muted-foreground">Close time UK</Label>
+                <Input
+                  id="lev-close-time"
+                  className="font-mono tabular-nums"
+                  value={policy.close_time_uk}
+                  onChange={(e) => setPolicyDraft({ ...policy, close_time_uk: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-take-profit" className="text-xs text-muted-foreground">Take profit (%)</Label>
+                <Input
+                  id="lev-take-profit"
+                  className="font-mono tabular-nums"
+                  value={(policy.take_profit_pct * 100).toFixed(2)}
+                  onChange={(e) => setPolicyDraft({ ...policy, take_profit_pct: Number(e.target.value) / 100 })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-stop-loss" className="text-xs text-muted-foreground">Stop loss (%)</Label>
+                <Input
+                  id="lev-stop-loss"
+                  className="font-mono tabular-nums"
+                  value={(policy.stop_loss_pct * 100).toFixed(2)}
+                  onChange={(e) => setPolicyDraft({ ...policy, stop_loss_pct: Number(e.target.value) / 100 })}
+                />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="lev-scan-symbols" className="text-xs text-muted-foreground">Scan symbols (comma separated)</Label>
+                <Input
+                  id="lev-scan-symbols"
+                  value={policy.scan_symbols.join(', ')}
+                  onChange={(e) => setPolicyDraft({ ...policy, scan_symbols: e.target.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean) })}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5 sm:w-1/2">
+              <Label htmlFor="lev-overnight" className="text-sm">Allow overnight holds</Label>
+              <Switch
+                id="lev-overnight"
                 checked={policy.allow_overnight}
-                onChange={(e) => setPolicyDraft({ ...policy, allow_overnight: e.target.checked })}
+                onCheckedChange={(checked) => setPolicyDraft({ ...policy, allow_overnight: checked })}
               />
-              Allow overnight holds
-            </label>
-            <label>
-              Scan symbols (comma separated)
-              <input
-                value={policy.scan_symbols.join(', ')}
-                onChange={(e) => setPolicyDraft({ ...policy, scan_symbols: e.target.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean) })}
-              />
-            </label>
+            </div>
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      <section className="glass-card leveraged-open-trades">
-        <div className="section-heading-row">
-          <h2>Open Trades</h2>
-          <span className="hint">ISA leveraged positions tracked in SQLite + markdown logs</span>
-        </div>
-        <div className="table-scroll leveraged-table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Dir</th>
-                <th>Qty</th>
-                <th>Entry</th>
-                <th>Current</th>
-                <th>Notional</th>
-                <th>P/L</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
+      <SectionCard
+        title="Open Trades"
+        description="Live leveraged positions"
+        noPadding
+      >
+        {openTrades.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+            <Inbox className="size-5 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No open leveraged trades.</p>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-xs">Symbol</TableHead>
+                <TableHead className="text-xs">Dir</TableHead>
+                <TableHead className="text-right text-xs">Qty</TableHead>
+                <TableHead className="text-right text-xs">Entry</TableHead>
+                <TableHead className="text-right text-xs">Current</TableHead>
+                <TableHead className="text-right text-xs">Notional</TableHead>
+                <TableHead className="text-right text-xs">P/L</TableHead>
+                <TableHead className="text-right text-xs"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {openTrades.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.symbol}</td>
-                  <td>{row.direction.toUpperCase()}</td>
-                  <td>{row.quantity.toFixed(4)}</td>
-                  <td>{money(row.entry_price)}</td>
-                  <td>{row.current_price ? money(row.current_price) : '\u2014'}</td>
-                  <td>{money(row.entry_notional)}</td>
-                  <td className={(row.current_pnl_value || 0) >= 0 ? 'up' : 'down'}>
-                    {row.current_pnl_value !== null && row.current_pnl_value !== undefined
-                      ? `${money(row.current_pnl_value)} (${((row.current_pnl_pct || 0) * 100).toFixed(2)}%)`
-                      : '\u2014'}
-                  </td>
-                  <td>
-                    <button
-                      className="btn ghost"
+                <TableRow key={row.id}>
+                  <TableCell className="font-medium">{row.symbol}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{row.direction.toUpperCase()}</TableCell>
+                  <TableCell className="text-right font-mono text-muted-foreground tabular-nums">
+                    {row.quantity.toFixed(4)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Money value={row.entry_price} />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {row.current_price ? <Money value={row.current_price} /> : '—'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Money value={row.entry_notional} />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {row.current_pnl_value !== null && row.current_pnl_value !== undefined ? (
+                      <span className="font-mono tabular-nums">
+                        <MoneyDelta value={row.current_pnl_value} />
+                        <span className={(row.current_pnl_value || 0) >= 0 ? 'text-positive' : 'text-negative'}>
+                          {' '}({((row.current_pnl_pct || 0) * 100).toFixed(2)}%)
+                        </span>
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => void closeLeveragedTrade(row.id, 'manual').then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'close failed'))}
                     >
                       Close
-                    </button>
-                  </td>
-                </tr>
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
-              {openTrades.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="muted">No open leveraged trades.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </TableBody>
+          </Table>
+        )}
+      </SectionCard>
 
-      <section className="glass-card leveraged-signals-card">
-        <div className="section-heading-row">
-          <h2>Signal Queue</h2>
-          <span className="hint">Archie proposals before execution</span>
-        </div>
-        <div className="intents-list leveraged-signals-list">
-          {signals.map((row) => (
-            <article key={row.id} className="intent-item">
-              <div className="intent-head">
-                <div>
-                  <span className="pill ok">{row.direction.toUpperCase()}</span>
-                  <strong>{row.symbol}</strong>
-                  <span className="muted">{dayjs(row.created_at).format('MMM D HH:mm')}</span>
+      <SectionCard
+        title="Signal Queue"
+        description="Archie proposals before execution"
+        noPadding
+      >
+        {signals.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+            <Inbox className="size-5 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No proposed signals right now.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/60">
+            {signals.map((row) => (
+              <div key={row.id} className="space-y-2 px-5 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-md bg-positive/10 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-positive">
+                      {row.direction.toUpperCase()}
+                    </span>
+                    <span className="font-medium">{row.symbol}</span>
+                    <span className="text-xs text-muted-foreground">{dayjs(row.created_at).format('MMM D HH:mm')}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      Conf <span className="font-mono tabular-nums text-foreground">{Math.round(row.confidence * 100)}%</span>
+                    </span>
+                    <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      Edge <span className="font-mono tabular-nums text-foreground">{(row.expected_edge * 100).toFixed(1)}%</span>
+                    </span>
+                  </div>
                 </div>
-                <span className="status approved">{Math.round(row.confidence * 100)}%</span>
+                <p className="text-sm text-muted-foreground">{row.rationale}</p>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted-foreground">
+                    Target <Money value={row.target_notional} className="text-foreground" />
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() => void executeLeveragedSignal(row.id).then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'execute failed'))}
+                  >
+                    Execute
+                    <ArrowRight />
+                  </Button>
+                </div>
               </div>
-              <p>{row.rationale}</p>
-              <div className="intent-actions">
-                <span className="muted">Target {money(row.target_notional)}</span>
-                <button className="btn" onClick={() => void executeLeveragedSignal(row.id).then(loadAll).catch((e) => onError(e instanceof Error ? e.message : 'execute failed'))}>
-                  Execute
-                </button>
-              </div>
-            </article>
-          ))}
-          {signals.length === 0 && <p className="muted">No proposed signals right now.</p>}
-        </div>
-      </section>
+            ))}
+          </div>
+        )}
+      </SectionCard>
     </div>
   )
 }

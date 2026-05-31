@@ -1,8 +1,16 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import dayjs from 'dayjs'
 
-import { getChatMessages, streamChatMessage, type StreamHandle } from '../api/client'
+import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Sparkles, Square, Wrench } from 'lucide-react'
+
+import { getChatMessages, stopChat, streamChatMessage, type StreamHandle } from '../api/client'
 import type { ChatMessage, ChatSession, ToolCallEntry } from '../types'
+import { cn } from '../lib/utils'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from './ui/input-group'
 import { RichMarkdown } from './RichMarkdown'
 
 type SegmentGroup =
@@ -31,42 +39,97 @@ function groupSegments(segments: StreamSegment[]): SegmentGroup[] {
   return groups
 }
 
+// Phase → dot tint. Quiet, theme-token only.
+function dotColor(phase: string): string {
+  if (phase === 'tool_result') return 'bg-positive'
+  if (phase === 'tool_start') return 'bg-warning'
+  if (phase === 'subagent_start') return 'bg-primary'
+  if (phase === 'error') return 'bg-negative'
+  return 'bg-muted-foreground'
+}
+
+function ToolArgs({ input }: { input: Record<string, unknown> }) {
+  const entries = Object.entries(input).slice(0, 4)
+  if (entries.length === 0) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {entries.map(([k, v]) => (
+        <span
+          key={k}
+          className="inline-flex items-center gap-1 rounded bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+        >
+          <span className="text-foreground/70">{k}</span>
+          <span className="opacity-70">{String(v).slice(0, 40)}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function ToolStep({
+  phase,
+  message,
+  input,
+  children,
+}: {
+  phase: string
+  message: string
+  input?: Record<string, unknown>
+  children?: React.ReactNode
+}) {
+  return (
+    <div className="flex items-start gap-2 text-xs text-muted-foreground">
+      <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', dotColor(phase))} />
+      <div className="min-w-0 flex-1">
+        <span className="leading-relaxed">{message}</span>
+        {input ? <ToolArgs input={input} /> : null}
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function ToolCallsSummary({ toolCalls, expanded, onToggle }: {
   toolCalls: ToolCallEntry[]
   expanded: boolean
   onToggle: () => void
 }) {
-  const toolCount = toolCalls.filter(tc => tc.phase === 'tool_start').length
+  const toolCount = toolCalls.filter(tc => tc.phase === 'tool_start' || tc.phase === 'subagent_start').length
   if (toolCount === 0) return null
 
   return (
-    <div className="chat-tool-summary">
-      <button className="chat-tool-summary-toggle" onClick={onToggle}>
-        <span className="chat-tool-summary-icon">{expanded ? '\u25BE' : '\u25B8'}</span>
-        <span className="chat-tool-summary-count">
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        <Wrench className="size-3.5" />
+        <span>
           {toolCount} tool{toolCount !== 1 ? 's' : ''} used
         </span>
       </button>
       {expanded && (
-        <div className="chat-tool-timeline chat-tool-timeline-done">
-          {toolCalls.map((tc, i) => (
-            <div key={i} className={`chat-tool-step ${tc.phase}`}>
-              <span className={`chat-tool-dot done ${tc.phase}`} />
-              <div className="chat-tool-step-body">
-                <span className="chat-tool-step-text">{tc.message}</span>
-                {tc.tool_input && Object.keys(tc.tool_input).length > 0 && (
-                  <div className="chat-tool-args">
-                    {Object.entries(tc.tool_input).slice(0, 4).map(([k, v]) => (
-                      <span key={k} className="chat-tool-arg">
-                        <span className="chat-tool-arg-key">{k}</span>
-                        <span className="chat-tool-arg-val">{String(v).slice(0, 40)}</span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="mt-2 space-y-2 border-l border-border/60 pl-3">
+          {toolCalls.map((tc, i) => {
+            // Subagent entries carry nested_calls; regular entries carry tool_input.
+            // Narrow via `in` because the regular `phase` widens to string.
+            if ('nested_calls' in tc) {
+              return (
+                <ToolStep key={i} phase="subagent_start" message={tc.message}>
+                  {tc.nested_calls.length > 0 && (
+                    <div className="mt-2 space-y-2 border-l border-border/60 pl-3">
+                      {tc.nested_calls.map((nc, j) => (
+                        <ToolStep key={j} phase={nc.phase} message={nc.message} input={nc.tool_input} />
+                      ))}
+                    </div>
+                  )}
+                </ToolStep>
+              )
+            }
+            return <ToolStep key={i} phase={tc.phase} message={tc.message} input={tc.tool_input} />
+          })}
         </div>
       )}
     </div>
@@ -80,6 +143,9 @@ const SUGGESTED_PROMPTS = [
   'Summarise my allocation',
 ]
 
+const MARKDOWN_CLASS =
+  'text-sm leading-relaxed [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ul]:list-disc [&_ul]:pl-5 [&_table]:w-full'
+
 type StatusItem = { id: string; phase: string; message: string }
 type StreamSegment = {
   id: string
@@ -91,6 +157,7 @@ type StreamSegment = {
 interface SessionState {
   messages: ChatMessage[]
   sending: boolean
+  stopping: boolean
   streamStatus: string | null
   hasStreamedText: boolean
   statusTrail: StatusItem[]
@@ -105,6 +172,7 @@ function freshSession(): SessionState {
   return {
     messages: [],
     sending: false,
+    stopping: false,
     streamStatus: null,
     hasStreamedText: false,
     statusTrail: [],
@@ -147,6 +215,7 @@ interface Props {
   onSessionTouched?: (session: ChatSession) => void
   onError: (message: string | null) => void
   deletingSessionId?: string | null
+  onOpenSessions?: () => void
 }
 
 export function AgentChatPanel({
@@ -158,6 +227,7 @@ export function AgentChatPanel({
   onSessionTouched,
   onError,
   deletingSessionId = null,
+  onOpenSessions,
 }: Props) {
   const sessionsRef = useRef(new Map<string, SessionState>())
   const activeStreamsRef = useRef(new Map<string, StreamHandle>())
@@ -497,6 +567,64 @@ export function AgentChatPanel({
     void submitContent(input)
   }
 
+  function partialTextFromSegments(segments: StreamSegment[]): string {
+    return segments
+      .filter((seg) => seg.kind === 'text')
+      .map((seg) => seg.text)
+      .join('')
+      .trim()
+  }
+
+  async function stopStream(sessionId: string) {
+    const session = getSession(sessionId)
+    if (!session.sending || session.stopping) return
+
+    patchSession(sessionId, (s) => {
+      s.stopping = true
+      s.streamStatus = 'Stopping…'
+    })
+
+    // Tear down the socket first so no further deltas arrive, then ask the
+    // backend to interrupt the in-flight turn. The StreamHandle's abort()
+    // marks itself settled before closing, so onError won't fire.
+    const handle = activeStreamsRef.current.get(sessionId)
+    handle?.abort()
+    activeStreamsRef.current.delete(sessionId)
+
+    try {
+      await stopChat(sessionId)
+    } catch {
+      // Best-effort: even if the stop call fails, we still finalize the UI
+      // locally so the user isn't stuck in a streaming state.
+    }
+
+    // Finalize the partial response: keep whatever streamed so far and drop
+    // any queued follow-ups, returning the composer to idle.
+    patchSession(sessionId, (s) => {
+      const partial = partialTextFromSegments(s.streamSegments)
+      const assistantId = s.streamAssistantId
+      if (assistantId !== null) {
+        s.messages = s.messages.map((row) =>
+          row.id === assistantId
+            ? { ...row, content: partial || row.content }
+            : row
+        )
+        // Drop an empty optimistic assistant bubble if nothing streamed.
+        if (!partial) {
+          s.messages = s.messages.filter((row) => row.id !== assistantId)
+        }
+      }
+      s.sending = false
+      s.stopping = false
+      s.hasStreamedText = false
+      s.streamStatus = null
+      s.streamSegments = []
+      s.streamAssistantId = null
+      s.pendingMessages = []
+      s.stopNotice = 'Response stopped.'
+    })
+  }
+
   function onPromptChipClick(prompt: string) {
     void submitContent(prompt)
   }
@@ -510,49 +638,74 @@ export function AgentChatPanel({
     }
   }
 
+  const sendDisabled = !input.trim() || !activeSessionId
+  const placeholder = activeSessionId ? 'Write a message…' : 'Select a conversation from the sidebar'
+
   return (
-    <section className="glass-card chat-card chat-card-full">
-      <div className="chat-head-actions">
-        <span className="hint">Conversation: {activeSessionTitle || 'None selected'}</span>
-        {presentationMask && <span className="hint">Demo-safe mode: numeric context is obfuscated</span>}
-        <span className="hint">Enter to send, Shift+Enter newline</span>
+    <section className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+        {onOpenSessions ? (
+          <button
+            type="button"
+            onClick={onOpenSessions}
+            aria-label="Open conversations"
+            className="-ml-1 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground md:hidden"
+          >
+            <PanelLeft className="size-4" />
+          </button>
+        ) : null}
+        <span className="mr-auto min-w-0 truncate font-medium text-foreground">
+          {activeSessionTitle || 'No conversation selected'}
+        </span>
+        {presentationMask && <span className="hidden sm:inline">Demo-safe mode: numeric context obfuscated</span>}
+        <span className="shrink-0 font-mono uppercase tracking-wide">
+          {accountView.toUpperCase()} · {displayCurrency}
+        </span>
       </div>
 
-      <div className="chat-main-pane">
-        <div className="chat-thread" ref={threadRef}>
-          {visibleMessages.length === 0 && !current.sending && (
-            <div className="chat-welcome">
-              <p className="chat-welcome-greeting">Hey Josh! I'm Archie, your portfolio copilot.</p>
-              <div className="chat-welcome-chips">
-                {SUGGESTED_PROMPTS.map((prompt) => (
-                  <button
-                    key={prompt}
-                    className="chat-prompt-chip"
-                    onClick={() => onPromptChipClick(prompt)}
-                    disabled={!activeSessionId}
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+      <div
+        ref={threadRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6"
+      >
+        {visibleMessages.length === 0 && !current.sending ? (
+          <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full bg-muted/40 text-muted-foreground">
+              <Sparkles className="size-5" />
             </div>
-          )}
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-foreground">Hey Josh! I'm Archie, your portfolio copilot.</p>
+              <p className="text-xs text-muted-foreground">Ask about performance, positions, allocation or risk.</p>
+            </div>
+            <div className="flex max-w-md flex-wrap justify-center gap-2">
+              {SUGGESTED_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => onPromptChipClick(prompt)}
+                  disabled={!activeSessionId}
+                  className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+            {visibleMessages.map((message) => {
+              if (message.role === 'assistant') {
+                const isError = message.content.startsWith('Message failed:')
+                const isStreaming = current.sending && current.streamAssistantId === message.id
+                if (isStreaming) {
+                  const groups = groupSegments(current.streamSegments)
+                  const expanded = current.toolCallsExpanded
 
-          {visibleMessages.map((message) => {
-            if (message.role === 'assistant') {
-              const isError = message.content.startsWith('Message failed:')
-              const isStreaming = current.sending && current.streamAssistantId === message.id
-              if (isStreaming) {
-                const groups = groupSegments(current.streamSegments)
-                const expanded = current.toolCallsExpanded
-
-                return (
-                  <article key={`${message.id}-${message.role}`} className="chat-response">
-                    <div className="chat-inline-stream">
+                  return (
+                    <article key={`${message.id}-${message.role}`} className="space-y-3">
                       {groups.map((group, gi) => {
                         if (group.type === 'text') {
                           return (
-                            <div key={`text-${gi}`} className="chat-markdown">
+                            <div key={`text-${gi}`} className={MARKDOWN_CLASS}>
                               <RichMarkdown markdown={group.text} />
                             </div>
                           )
@@ -563,36 +716,31 @@ export function AgentChatPanel({
                         const hiddenCount = group.segments.length - visible.length
 
                         return (
-                          <div key={`tools-${gi}`} className="chat-tool-timeline">
+                          <div
+                            key={`tools-${gi}`}
+                            className="space-y-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5"
+                          >
                             {hiddenCount > 0 && (
                               <button
-                                className="chat-tool-expand-btn"
+                                type="button"
+                                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
                                 onClick={() => patchSession(activeSessionId, s => { s.toolCallsExpanded = true })}
                               >
                                 Show {hiddenCount} earlier step{hiddenCount !== 1 ? 's' : ''}
                               </button>
                             )}
                             {visible.map((segment) => (
-                              <div key={segment.id} className={`chat-tool-step ${segment.kind}`}>
-                                <span className={`chat-tool-dot ${segment.kind}`} />
-                                <div className="chat-tool-step-body">
-                                  <span className="chat-tool-step-text">{segment.text}</span>
-                                  {segment.toolInput && Object.keys(segment.toolInput).length > 0 && (
-                                    <div className="chat-tool-args">
-                                      {Object.entries(segment.toolInput).slice(0, 4).map(([k, v]) => (
-                                        <span key={k} className="chat-tool-arg">
-                                          <span className="chat-tool-arg-key">{k}</span>
-                                          <span className="chat-tool-arg-val">{String(v).slice(0, 40)}</span>
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
+                              <ToolStep
+                                key={segment.id}
+                                phase={segment.kind}
+                                message={segment.text}
+                                input={segment.toolInput}
+                              />
                             ))}
                             {expanded && isLastToolGroup && group.segments.length > 3 && (
                               <button
-                                className="chat-tool-expand-btn"
+                                type="button"
+                                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
                                 onClick={() => patchSession(activeSessionId, s => { s.toolCallsExpanded = false })}
                               >
                                 Collapse
@@ -601,74 +749,93 @@ export function AgentChatPanel({
                           </div>
                         )
                       })}
+                    </article>
+                  )
+                }
+                const hasToolCalls = message.tool_calls && message.tool_calls.length > 0
+                return (
+                  <article key={`${message.id}-${message.role}`}>
+                    {hasToolCalls && (
+                      <ToolCallsSummary
+                        toolCalls={message.tool_calls!}
+                        expanded={expandedToolMsgIds.has(message.id)}
+                        onToggle={() => {
+                          setExpandedToolMsgIds(prev => {
+                            const next = new Set(prev)
+                            if (next.has(message.id)) {
+                              next.delete(message.id)
+                            } else {
+                              next.add(message.id)
+                            }
+                            return next
+                          })
+                        }}
+                      />
+                    )}
+                    <div className={cn(MARKDOWN_CLASS, isError && 'text-negative')}>
+                      <RichMarkdown markdown={message.content} />
                     </div>
                   </article>
                 )
               }
-              const hasToolCalls = message.tool_calls && message.tool_calls.length > 0
               return (
-                <article key={`${message.id}-${message.role}`} className={`chat-response ${isError ? 'error' : ''}`}>
-                  {hasToolCalls && (
-                    <ToolCallsSummary
-                      toolCalls={message.tool_calls!}
-                      expanded={expandedToolMsgIds.has(message.id)}
-                      onToggle={() => {
-                        setExpandedToolMsgIds(prev => {
-                          const next = new Set(prev)
-                          if (next.has(message.id)) {
-                            next.delete(message.id)
-                          } else {
-                            next.add(message.id)
-                          }
-                          return next
-                        })
-                      }}
-                    />
-                  )}
-                  <div className="chat-markdown">
-                    <RichMarkdown markdown={message.content} />
+                <div key={`${message.id}-${message.role}`} className="flex justify-end">
+                  <div className="max-w-[80%] rounded-2xl bg-secondary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+                    {message.content}
                   </div>
-                </article>
-              )
-            }
-            return (
-              <article key={`${message.id}-${message.role}`} className="chat-bubble user">
-                <div className="chat-meta">
-                  <strong>You</strong>
-                  <span>{dayjs(message.created_at).format('HH:mm:ss')}</span>
                 </div>
-                <p>{message.content}</p>
-              </article>
-            )
-          })}
+              )
+            })}
 
-          {current.stopNotice && !current.sending && (
-            <div className="chat-stop-notice">{current.stopNotice}</div>
-          )}
-        </div>
+            {current.stopNotice && !current.sending && (
+              <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                {current.stopNotice}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
-        <div className="chat-composer">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={onInputKeyDown}
-            placeholder={
-              activeSessionTitle
-                ? `Message ${activeSessionTitle} (${accountView.toUpperCase()} / ${displayCurrency})`
-                : 'Select a conversation from the sidebar'
-            }
-            rows={1}
-            disabled={!activeSessionId}
-          />
-          <button
-            className="chat-send-btn"
-            onClick={submit}
-            disabled={!input.trim() || !activeSessionId}
-            aria-label="Send message"
-          >
-            {current.sending ? 'Queue' : 'Send'}
-          </button>
+      <div className="border-t border-border px-4 py-3">
+        <div className="mx-auto w-full max-w-3xl">
+          <InputGroup>
+            <InputGroupTextarea
+              ref={textareaRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={onInputKeyDown}
+              placeholder={placeholder}
+              rows={1}
+              disabled={!activeSessionId}
+            />
+            <InputGroupAddon align="block-end">
+              <span className="text-xs text-muted-foreground">
+                {current.sending ? 'Stop to interrupt Archie' : 'Enter to send · Shift+Enter for newline'}
+              </span>
+              {current.sending ? (
+                <InputGroupButton
+                  size="icon-sm"
+                  className="ml-auto rounded-full bg-muted text-foreground hover:bg-muted/80"
+                  aria-label="Stop"
+                  title="Stop response"
+                  onClick={() => void stopStream(activeSessionId)}
+                  disabled={current.stopping || !activeSessionId}
+                >
+                  <Square className="fill-current" />
+                </InputGroupButton>
+              ) : (
+                <InputGroupButton
+                  size="icon-sm"
+                  className="ml-auto rounded-full bg-primary text-primary-foreground hover:bg-primary/90"
+                  aria-label="Send"
+                  onClick={submit}
+                  disabled={sendDisabled}
+                >
+                  <ArrowUp />
+                </InputGroupButton>
+              )}
+            </InputGroupAddon>
+          </InputGroup>
         </div>
       </div>
     </section>

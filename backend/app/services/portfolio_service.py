@@ -18,6 +18,7 @@ from app.services.analytics import (
 )
 from app.services.config_store import ACCOUNT_KINDS, ConfigStore
 from app.services.fx import get_fx_rate
+from app.services.leveraged_market import resolve_yfinance_ticker
 from app.services.t212_client import T212AuthError, T212Error, T212RateLimitError, build_t212_client, normalize_instrument_code
 
 AccountViewKind = Literal["all", "invest", "stocks_isa"]
@@ -457,10 +458,64 @@ def _latest_positions(db: Session) -> list[PositionSnapshot]:
     return list(db.execute(select(PositionSnapshot).where(PositionSnapshot.fetched_at == latest_ts)).scalars().all())
 
 
+_INSTRUMENT_NAME_TTL_SECONDS = 6 * 3600
+_instrument_meta_cache: tuple[float, dict[str, dict[str, str]]] | None = None
+
+
+def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
+    """Best-effort {UPPER instrument code: metadata} from T212 bulk metadata.
+
+    The positions feed carries no human-readable name and our DB upper-cases the
+    instrument code on ingestion (destroying the lowercase exchange letter, e.g.
+    ``NUCGl_EQ`` → ``NUCGL_EQ``). We join against the bulk
+    /equity/metadata/instruments list (one call, cached ~6h), keyed by the
+    UPPER-cased code so it matches our stored codes, but we retain the
+    ORIGINAL-case ``ticker`` so the venue can be recovered for yfinance
+    resolution. Never raises — returns {} when metadata is unavailable.
+
+    Each value: ``{"name": ..., "ticker": <original-case>, "currency": <code>}``.
+    """
+    global _instrument_meta_cache
+    now = datetime.now().timestamp()
+    if _instrument_meta_cache and (now - _instrument_meta_cache[0]) < _INSTRUMENT_NAME_TTL_SECONDS:
+        return _instrument_meta_cache[1]
+
+    mapping: dict[str, dict[str, str]] = {}
+    try:
+        store = ConfigStore(db)
+        client = None
+        for acct in ("invest", "stocks_isa"):
+            try:
+                client = build_t212_client(store, acct)
+                break
+            except Exception:  # noqa: BLE001 — try the other account's creds
+                continue
+        if client is not None:
+            for inst in client.get_instruments_metadata():
+                if not isinstance(inst, dict):
+                    continue
+                ticker = str(inst.get("ticker", "")).strip()
+                if not ticker:
+                    continue
+                name = inst.get("name") or inst.get("shortName")
+                mapping[ticker.upper()] = {
+                    "name": str(name) if name else "",
+                    "ticker": ticker,
+                    "currency": str(inst.get("currencyCode", "") or ""),
+                }
+    except Exception:  # noqa: BLE001 — metadata is best-effort, never block the snapshot
+        mapping = {}
+
+    if mapping:
+        _instrument_meta_cache = (now, mapping)
+    return mapping
+
+
 def get_portfolio_snapshot(
     db: Session,
     account_kind: AccountViewKind = "all",
     display_currency: str | None = None,
+    strip_prices: bool = False,
 ) -> dict[str, Any]:
     accounts_all = _latest_accounts(db)
     positions_all = _latest_positions(db)
@@ -510,6 +565,27 @@ def get_portfolio_snapshot(
         if p.instrument_code
     }
     signal_cache: dict[str, Any] = {}
+    meta_map = _instrument_meta_map(db)
+
+    def _resolve_meta(code: str | None, ticker: str | None, currency: str | None) -> dict[str, Any]:
+        """Resolve display name, venue currency, and yfinance ticker for a row.
+
+        Prefers original-case T212 metadata (so the lowercase exchange letter is
+        recovered) and falls back to the stored upper-cased code + currency.
+        """
+        meta = meta_map.get((code or "").upper()) or meta_map.get((ticker or "").upper()) or {}
+        original = meta.get("ticker") or code or ticker or ""
+        venue_currency = meta.get("currency") or currency or ""
+        yf_ticker = None
+        try:
+            yf_ticker = resolve_yfinance_ticker(original, venue_currency)
+        except Exception:  # noqa: BLE001 — chart ticker is best-effort
+            yf_ticker = None
+        return {
+            "name": meta.get("name") or None,
+            "instrument_currency": venue_currency or None,
+            "yfinance_ticker": yf_ticker,
+        }
 
     enriched: list[dict[str, Any]] = []
     for p in positions:
@@ -523,18 +599,27 @@ def get_portfolio_snapshot(
         converted_ppl = _to_target(p.ppl, p.currency)
         weight = (converted_value / total_value) if total_value else 0.0
 
+        resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
+
+        # Technicals must run on the resolved yfinance ticker (e.g. NUCG.L),
+        # not the raw upper-cased T212 code — otherwise London/Xetra/Euronext
+        # holdings always fall through to risk_flag="no-market-data".
         signal = None
         if p.instrument_code in signal_targets:
-            signal = signal_cache.get(p.instrument_code)
+            signal_symbol = resolved["yfinance_ticker"] or p.instrument_code
+            signal = signal_cache.get(signal_symbol)
             if signal is None:
-                signal = signal_for_symbol(p.instrument_code)
-                signal_cache[p.instrument_code] = signal
+                signal = signal_for_symbol(signal_symbol)
+                signal_cache[signal_symbol] = signal
 
         enriched.append(
             {
                 "account_kind": p.account_kind,
                 "ticker": p.ticker,
                 "instrument_code": p.instrument_code,
+                "name": resolved["name"],
+                "yfinance_ticker": resolved["yfinance_ticker"],
+                "instrument_currency": resolved["instrument_currency"],
                 "quantity": p.quantity,
                 "average_price": converted_avg_price,
                 "current_price": converted_current_price,
@@ -560,34 +645,59 @@ def get_portfolio_snapshot(
         "estimated_volatility": estimated_portfolio_volatility(enriched),
     }
 
-    account_items = [
-        {
+    # When building LLM context (strip_prices=True), drop price-derived fields:
+    # they are computed from cached T212 data and may be stale, so Archie must
+    # fetch live prices via the marketdata MCP tools instead. The UI/Telegram
+    # paths keep them so the dashboard can show value, equity, and weight.
+    if strip_prices:
+        for row in enriched:
+            for key in ("current_price", "value", "ppl", "weight"):
+                row.pop(key, None)
+
+    def _account_item(a: Any) -> dict[str, Any]:
+        item = {
             "fetched_at": a.fetched_at,
             "account_kind": a.account_kind,
             "currency": target_currency,
             "free_cash": _to_target(a.free_cash, a.currency),
-            "invested": _to_target(a.invested, a.currency),
-            "pie_cash": _to_target(a.pie_cash, a.currency),
-            "total": _to_target(a.total, a.currency),
-            "ppl": _to_target(a.ppl, a.currency),
         }
+        if not strip_prices:
+            item.update(
+                {
+                    "invested": _to_target(a.invested, a.currency),
+                    "pie_cash": _to_target(a.pie_cash, a.currency),
+                    "total": _to_target(a.total, a.currency),
+                    "ppl": _to_target(a.ppl, a.currency),
+                }
+            )
+        return item
+
+    account_items = [
+        _account_item(a)
         for a in sorted(accounts_all, key=lambda row: row.account_kind)
     ]
 
     fetched_at = max((a.fetched_at for a in accounts_all), default=datetime.utcnow())
     aggregate_kind = account_kind
 
+    aggregate_account = {
+        "fetched_at": fetched_at,
+        "account_kind": aggregate_kind,
+        "currency": target_currency,
+        "free_cash": free_cash,
+    }
+    if not strip_prices:
+        aggregate_account.update(
+            {
+                "invested": invested,
+                "pie_cash": pie_cash,
+                "total": total_value,
+                "ppl": ppl,
+            }
+        )
+
     return {
-        "account": {
-            "fetched_at": fetched_at,
-            "account_kind": aggregate_kind,
-            "currency": target_currency,
-            "free_cash": free_cash,
-            "invested": invested,
-            "pie_cash": pie_cash,
-            "total": total_value,
-            "ppl": ppl,
-        },
+        "account": aggregate_account,
         "accounts": account_items,
         "positions": enriched,
         "metrics": metrics,

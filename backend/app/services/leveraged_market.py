@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -100,6 +101,118 @@ T212_TO_YFINANCE: dict[str, str] = {
 }
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# T212 instrument code → yfinance ticker resolution
+#
+# Trading 212 instrument codes encode the listing exchange, NOT just the
+# symbol. Two forms exist:
+#   • US / country-segment form:  ``AAPL_US_EQ``  →  yfinance ``AAPL``
+#                                 ``FSZ_CA_EQ``   →  yfinance ``FSZ.TO``
+#   • Trailing exchange-letter:   ``NUCGl_EQ``    →  yfinance ``NUCG.L`` (London)
+#                                 ``SUp_EQ``      →  yfinance ``SU.PA``  (Paris)
+# The exchange letter is LOWERCASE, so any pipeline that upper-cases the code
+# before parsing (as our DB ingestion does → ``NUCGL_EQ``) destroys the hint.
+# Resolution must therefore run on the ORIGINAL-CASE code from T212 metadata.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Two-letter country segment (``_XX_EQ``) → yfinance suffix.
+_COUNTRY_SUFFIX: dict[str, str] = {
+    "US": "",      # US — bare symbol
+    "CA": ".TO",   # Toronto
+    "DE": ".DE",   # Deutsche Börse Xetra
+    "FR": ".PA",   # Euronext Paris
+    "BE": ".BR",   # Euronext Brussels
+    "BB": ".BR",
+    "AT": ".VI",   # Vienna
+    "PT": ".LS",   # Euronext Lisbon
+    "AU": ".AX",   # ASX
+}
+
+# Trailing lowercase exchange letter → yfinance suffix. London (``l``) and the
+# US bare-symbol path are the reliable ones (T212's base symbol matches the
+# venue ticker); continental venues are best-effort (T212 short codes often
+# diverge from the Xetra/Euronext symbol). Single source of truth for both the
+# chart endpoint and the leveraged engine.
+_EXCHANGE_LETTER_SUFFIX: dict[str, str] = {
+    "l": ".L",    # London Stock Exchange
+    "p": ".PA",   # Euronext Paris
+    "a": ".AS",   # Euronext Amsterdam
+    "m": ".MI",   # Borsa Italiana (Milan)
+    "e": ".MC",   # BME (Madrid)
+    "s": ".SW",   # SIX Swiss
+    "d": ".DE",   # Deutsche Börse Xetra (best-effort)
+}
+
+# Currencies that are quoted in minor units (pence) on their venue — yfinance
+# returns these LSE lines in GBp, so downstream P&L must divide by 100 to reach
+# major-unit (GBP) values.
+_MINOR_UNIT_CURRENCIES = {"GBX", "ZAC", "ILA"}
+
+
+def is_minor_unit_currency(currency_code: str | None) -> bool:
+    """True if a venue quotes this currency in minor units (e.g. GBX = pence)."""
+    return str(currency_code or "").strip().upper() in _MINOR_UNIT_CURRENCIES
+
+
+def resolve_yfinance_ticker(ticker: str, currency_code: str | None = None) -> str:
+    """Resolve a Trading 212 instrument code (or raw symbol) to a yfinance ticker.
+
+    Case-sensitive: pass the ORIGINAL-case T212 code (e.g. ``NUCGl_EQ``) so the
+    lowercase exchange letter survives. ``currency_code`` is accepted for future
+    disambiguation but resolution is driven by the code structure, which already
+    encodes the venue. Falls back to the static override map and digit-prefix
+    heuristic for leveraged LSE short codes.
+    """
+    raw = str(ticker or "").strip()
+    if not raw:
+        raise LeveragedMarketError("ticker is required")
+
+    # Already a yfinance ticker (has an exchange suffix)? pass through.
+    if "." in raw and "_" not in raw:
+        return raw.upper()
+
+    if raw.endswith("_EQ"):
+        raw = raw[:-3]
+
+    # Country-segment form: ``BASE_XX`` where XX is a two-letter country code.
+    country_match = re.match(r"^(.+)_([A-Z]{2})$", raw)
+    if country_match:
+        base, country = country_match.group(1), country_match.group(2)
+        suffix = _COUNTRY_SUFFIX.get(country)
+        if suffix is not None:
+            mapped = T212_TO_YFINANCE.get(base.upper())
+            return mapped if mapped else f"{base.upper()}{suffix}"
+        # Unknown country segment — drop it and keep parsing the base.
+        raw = base
+
+    # Trailing exchange-letter form: ``BASE`` (uppercase) + lowercase letter(s)
+    # + optional T212 dedupe digit (e.g. ``3ASMl1`` → base ``3ASM``, tail ``l``).
+    letter_match = re.match(r"^([0-9A-Z]+?)([a-z]+)\d*$", raw)
+    if letter_match:
+        base, tail = letter_match.group(1), letter_match.group(2)
+        sym = base.upper()
+        mapped = T212_TO_YFINANCE.get(sym)
+        if mapped:
+            return mapped
+        suffix = _EXCHANGE_LETTER_SUFFIX.get(tail) or _EXCHANGE_LETTER_SUFFIX.get(tail[-1])
+        if suffix:
+            return f"{sym}{suffix}"
+        return sym
+
+    # No exchange hint: a bare symbol (US-style) or static-mapped short code.
+    sym = raw.upper()
+    if "." in sym:
+        return sym
+    mapped = T212_TO_YFINANCE.get(sym)
+    if mapped:
+        return mapped
+    # Many leveraged LSE products are alphanumeric short codes starting with a
+    # digit (e.g. ``3NVD`` → ``3NVD.L``).
+    if sym and sym[0].isdigit():
+        return f"{sym}.L"
+    return sym
+
+
 def _cache_get(cache: dict[Any, tuple[float, Any]], key: Any) -> Any | None:
     now = time.time()
     with _cache_lock:
@@ -123,25 +236,15 @@ def _cache_set(cache: dict[Any, tuple[float, Any]], key: Any, value: Any) -> Any
 
 
 def to_yfinance_ticker(ticker: str) -> str:
-    raw = str(ticker or "").strip().upper()
-    if not raw:
-        raise LeveragedMarketError("ticker is required")
+    """Back-compat wrapper around :func:`resolve_yfinance_ticker`.
 
-    # Accept Trading 212 instrument codes and raw symbols.
-    if raw.endswith("_EQ"):
-        raw = raw[:-3]
-    if "_" in raw:
-        raw = raw.split("_", 1)[0]
-
-    mapped = T212_TO_YFINANCE.get(raw)
-    if mapped:
-        return mapped
-
-    # Heuristic: many leveraged LSE products are alphanumeric short codes.
-    if raw[0].isdigit() and "." not in raw:
-        return f"{raw}.L"
-
-    return raw
+    Callers that already hold an explicit ``yfinance_ticker`` (resolved upstream
+    from original-case T212 metadata) should pass it directly — it round-trips
+    cleanly. For raw uppercased codes this still recovers London / US / static
+    mappings, but the lowercase exchange letter cannot be recovered once lost,
+    so prefer resolving from metadata at the payload layer.
+    """
+    return resolve_yfinance_ticker(ticker)
 
 
 def _fetch_via_ticker(yf_ticker: str, period: str, interval: str) -> pd.DataFrame:
@@ -157,7 +260,6 @@ def _fetch_via_ticker(yf_ticker: str, period: str, interval: str) -> pd.DataFram
         interval=interval,
         auto_adjust=True,
         timeout=10,
-        raise_errors=True,
     )
     return frame
 
@@ -245,7 +347,37 @@ def get_price_history(ticker: str, period: str = "3mo", interval: str = "1d") ->
     return _cache_set(_history_cache, key, rows)
 
 
-def get_price(ticker: str) -> dict[str, Any]:
+# yfinance exchange suffix → venue quote currency. ``.L`` (LSE) is the common
+# trap: most London ETPs/equities are quoted in GBX (pence), NOT GBP or USD —
+# treating them as USD silently mis-scales P&L in the ISA by ~100x and the FX
+# leg. When the caller knows the authoritative T212 ``currencyCode`` it should
+# pass it via ``currency_code``; otherwise we infer from the suffix.
+_YF_SUFFIX_CURRENCY: dict[str, str] = {
+    ".L": "GBX",   # London — pence (minor unit); see is_minor_unit_currency
+    ".DE": "EUR",
+    ".PA": "EUR",
+    ".AS": "EUR",
+    ".MI": "EUR",
+    ".MC": "EUR",
+    ".BR": "EUR",
+    ".VI": "EUR",
+    ".LS": "EUR",
+    ".SW": "CHF",
+    ".TO": "CAD",
+    ".AX": "AUD",
+}
+
+
+def infer_currency(yf_ticker: str) -> str:
+    """Best-effort venue currency from a yfinance ticker suffix (USD default)."""
+    sym = str(yf_ticker or "").upper()
+    if "." in sym:
+        suffix = "." + sym.rsplit(".", 1)[-1]
+        return _YF_SUFFIX_CURRENCY.get(suffix, "USD")
+    return "USD"
+
+
+def get_price(ticker: str, currency_code: str | None = None) -> dict[str, Any]:
     key = ticker.upper().strip()
     cached = _cache_get(_price_cache, key)
     if cached is not None:
@@ -264,11 +396,16 @@ def get_price(ticker: str) -> dict[str, Any]:
     if prev_close > 0:
         change_pct = (last_close / prev_close) - 1.0
 
+    yf_ticker = to_yfinance_ticker(ticker)
+    # Authoritative T212 currency wins; else infer from the venue suffix.
+    currency = (currency_code or "").strip().upper() or infer_currency(yf_ticker)
+
     payload = {
         "ticker": ticker.upper().strip(),
-        "yfinance_ticker": to_yfinance_ticker(ticker),
+        "yfinance_ticker": yf_ticker,
         "price": last_close,
-        "currency": "USD",  # best-effort; yfinance history endpoint does not always expose currency
+        "currency": currency,
+        "is_minor_unit": is_minor_unit_currency(currency),
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "change_pct": change_pct,
     }

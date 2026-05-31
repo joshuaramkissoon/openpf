@@ -4,8 +4,17 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from app.services.market_data import fetch_history
+from app.services.market_data import MarketDataError, fetch_history
 from app.utils.indicators import max_drawdown, sharpe_ratio
+
+
+class BacktestDataError(ValueError):
+    """No real market data available to run the backtest.
+
+    Subclasses ``ValueError`` so API layers that map ``ValueError`` to a
+    clear 4xx (bad request / data unavailable) surface a meaningful message
+    instead of an opaque 500. We NEVER substitute fabricated prices.
+    """
 
 
 @dataclass
@@ -26,7 +35,13 @@ def run_ma_crossover_backtest(symbol: str, lookback_days: int, fast_window: int,
     if fast_window >= slow_window:
         raise ValueError("fast_window must be smaller than slow_window")
 
-    history = fetch_history(symbol, lookback_days=max(lookback_days + slow_window + 30, 220))
+    try:
+        history = fetch_history(symbol, lookback_days=max(lookback_days + slow_window + 30, 220))
+    except MarketDataError as exc:
+        # Surface a clear, non-500 error instead of fabricating prices.
+        raise BacktestDataError(
+            f"No market data available to backtest {symbol!r}: {exc}"
+        ) from exc
     prices = history["close"]
 
     fast = prices.rolling(fast_window).mean()

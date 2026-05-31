@@ -47,3 +47,42 @@ class ChartResponse(BaseModel):
 class ChartErrorResponse(BaseModel):
     ok: bool = False
     error: str
+
+
+# ── Kronos forecast schemas ───────────────────────────────────────────────
+
+
+class ForecastHistoryPoint(BaseModel):
+    date: str
+    close: float
+
+
+class ForecastBandPoint(BaseModel):
+    date: str
+    p10: float
+    p50: float
+    p90: float
+
+
+class ForecastSummary(BaseModel):
+    median_terminal_close: float
+    expected_return_pct: float
+    prob_up: float
+    terminal_spread_pct: float
+
+
+class ForecastResponse(BaseModel):
+    ok: bool
+    symbol: str
+    yfinance_ticker: str
+    model: str
+    device: str | None = None
+    generated_at: str
+    horizon: int
+    lookback: int
+    samples: int
+    last_close: float
+    last_date: str
+    summary: ForecastSummary
+    history: list[ForecastHistoryPoint]
+    forecast: list[ForecastBandPoint]

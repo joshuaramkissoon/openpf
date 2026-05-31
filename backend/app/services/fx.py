@@ -9,13 +9,15 @@ _CACHE_TTL = timedelta(minutes=30)
 _cache_lock = Lock()
 _rate_cache: dict[tuple[str, str], tuple[float, datetime]] = {}
 
+# Last-resort static rates, used only if every live provider is unreachable.
+# Kept roughly current so a fallback never produces a wildly wrong figure.
 _FALLBACK_RATES: dict[tuple[str, str], float] = {
-    ("USD", "GBP"): 0.79,
-    ("GBP", "USD"): 1.27,
-    ("EUR", "GBP"): 0.86,
-    ("GBP", "EUR"): 1.16,
-    ("EUR", "USD"): 1.10,
-    ("USD", "EUR"): 0.91,
+    ("USD", "GBP"): 0.745,
+    ("GBP", "USD"): 1.342,
+    ("EUR", "GBP"): 0.855,
+    ("GBP", "EUR"): 1.170,
+    ("EUR", "USD"): 1.147,
+    ("USD", "EUR"): 0.872,
 }
 
 
@@ -62,15 +64,33 @@ def get_fx_rate(base_currency: str, quote_currency: str) -> float:
     if cached is not None:
         return cached
 
+    # Primary: Frankfurter (ECB daily rates). follow_redirects is essential —
+    # the old api.frankfurter.app host now 301-redirects, and without following
+    # it httpx returns the redirect (status != 200) and we silently fall back.
     try:
         response = httpx.get(
-            "https://api.frankfurter.app/latest",
-            params={"from": base, "to": quote},
+            "https://api.frankfurter.dev/v1/latest",
+            params={"base": base, "symbols": quote},
             timeout=5.0,
+            follow_redirects=True,
         )
         if response.status_code == 200:
-            payload = response.json()
-            rate = float((payload.get("rates") or {}).get(quote) or 0.0)
+            rate = float((response.json().get("rates") or {}).get(quote) or 0.0)
+            if rate > 0:
+                _set_cache(base, quote, rate)
+                return rate
+    except Exception:
+        pass
+
+    # Secondary: open.er-api.com (keyless; all rates quoted against `base`).
+    try:
+        response = httpx.get(
+            f"https://open.er-api.com/v6/latest/{base}",
+            timeout=5.0,
+            follow_redirects=True,
+        )
+        if response.status_code == 200:
+            rate = float((response.json().get("rates") or {}).get(quote) or 0.0)
             if rate > 0:
                 _set_cache(base, quote, rate)
                 return rate

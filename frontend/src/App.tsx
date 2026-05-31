@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
+import { Loader2, Menu, Play, Plus, RefreshCw, X } from 'lucide-react'
 
 import {
   archiveThesis,
@@ -21,14 +22,10 @@ import {
   updateThesisStatus,
   type ApiError,
 } from './api/client'
-import { AgentBrief } from './components/AgentBrief'
 import { AgentChatPanel } from './components/AgentChatPanel'
-import { AllocationChart } from './components/AllocationChart'
 import { BacktestLab } from './components/BacktestLab'
 import { EventsFeed } from './components/EventsFeed'
 import { IntentQueue } from './components/IntentQueue'
-import { MetricGrid } from './components/MetricGrid'
-import { PortfolioTable } from './components/PortfolioTable'
 import { RuntimeDiagnosticsPanel } from './components/RuntimeDiagnosticsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ThesisBoard } from './components/ThesisBoard'
@@ -36,6 +33,19 @@ import { LeveragedWorkspace } from './components/LeveragedWorkspace'
 import { ScheduledJobsWorkspace } from './components/ScheduledJobsWorkspace'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { CostsWorkspace } from './components/CostsWorkspace'
+import { AppSidebar, SidebarBody, type SectionKey } from '@/components/layout/app-sidebar'
+import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
+import { ResearchDesk } from '@/components/research/research-desk'
+import { HelpGuide } from '@/components/help/help-guide'
+import { SectionCard } from '@/components/kit'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 import type { AgentRun, AgentRunDetail, AppConfig, ChatSession, ExecutionEvent, PortfolioSnapshot, PositionItem, Thesis, TradeIntent } from './types'
 
 function parseApiError(error: unknown): string {
@@ -123,6 +133,9 @@ function aggregatePositionsByTicker(positions: PositionItem[], portfolioTotal: n
       account_kind: accountKind,
       ticker: row.ticker,
       instrument_code: row.instrument_code,
+      name: row.name,
+      yfinance_ticker: row.yfinance_ticker,
+      instrument_currency: row.instrument_currency,
       quantity: row.quantity,
       average_price: avgPrice,
       current_price: currentPrice,
@@ -184,8 +197,35 @@ function obfuscateSnapshot(snapshot: PortfolioSnapshot): PortfolioSnapshot {
   }
 }
 
+const SECTION_LABELS: Record<SectionKey, string> = {
+  overview: 'Portfolio',
+  chat: 'Archie',
+  execution: 'Execution',
+  leveraged: 'Leveraged Desk',
+  jobs: 'Scheduled Jobs',
+  artifacts: 'Artifacts',
+  analysis: 'Research Desk',
+  research: 'Insights',
+  costs: 'Usage',
+  diagnostics: 'Diagnostics',
+  help: 'Help & Guide',
+}
+
+const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
+  overview: 'Holdings, allocation, and risk at a glance.',
+  execution: 'Review and act on proposed trade intents.',
+  leveraged: 'Leveraged positions, rails, and signal queue.',
+  jobs: 'Automated agent routines on a schedule.',
+  artifacts: 'Generated briefings and reports.',
+  analysis: 'Ask Archie to analyze a holding or a new idea — live data, forecast, verdict.',
+  research: 'Theses, backtests, and agent reasoning history.',
+  costs: 'Token usage on your Claude subscription (estimated).',
+  diagnostics: 'Runtime, MCP servers, and capabilities.',
+  help: 'What the app can do and how to use it.',
+}
+
 export default function App() {
-  const [activeSection, setActiveSection] = useState<'overview' | 'research' | 'execution' | 'leveraged' | 'jobs' | 'artifacts' | 'costs' | 'chat' | 'diagnostics'>('overview')
+  const [activeSection, setActiveSection] = useState<SectionKey>('overview')
   const [accountView, setAccountView] = useState<'all' | 'invest' | 'stocks_isa'>('all')
   const [displayCurrency, setDisplayCurrency] = useState<'GBP' | 'USD'>('GBP')
   const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null)
@@ -200,12 +240,12 @@ export default function App() {
   const [deletingChatSessionId, setDeletingChatSessionId] = useState<string | null>(null)
   const [chatSessionBusy, setChatSessionBusy] = useState(false)
 
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
-
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdate, setLastUpdate] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [chatRailOpen, setChatRailOpen] = useState(false)
   const [maskSensitiveValues, setMaskSensitiveValues] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('mypf.presentation.mask') === '1'
@@ -325,6 +365,7 @@ export default function App() {
     () => chatSessions.find((row) => row.id === activeChatSessionId) || null,
     [chatSessions, activeChatSessionId]
   )
+  const activeThesesCount = useMemo(() => theses.filter((row) => row.status === 'active').length, [theses])
 
   async function handleCreateChatSession() {
     if (chatSessionBusy || deletingChatSessionId) return
@@ -437,426 +478,339 @@ export default function App() {
   }
 
   const runHistoryCard = (
-    <section className="glass-card runs-card">
-      <div className="section-heading-row">
-        <h2>Agent Run History</h2>
-        <span className="hint">Most recent reasoning cycles</span>
-      </div>
-      <div className="runs-list">
-        {runs.map((run) => (
-          <button
-            key={run.id}
-            className={`run-item ${activeRun?.run_id === run.id ? 'active' : ''}`}
-            onClick={async () => {
-              try {
-                const detail = await getRun(run.id)
-                setActiveRun(detail)
-              } catch (err) {
-                setError(parseApiError(err))
-              }
-            }}
-          >
-            <span>{dayjs(run.created_at).format('MMM D HH:mm')}</span>
-            <span>{run.market_regime}</span>
-            <span>{(run.portfolio_score * 100).toFixed(1)} score</span>
-          </button>
-        ))}
-      </div>
-    </section>
+    <SectionCard title="Agent Run History" description="Most recent reasoning cycles" noPadding>
+      <ScrollArea className="max-h-[420px]">
+        <div className="divide-y divide-border/50">
+          {runs.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">No agent runs yet.</p>
+          ) : (
+            runs.map((run) => (
+              <button
+                key={run.id}
+                className={cn(
+                  'flex w-full items-center justify-between gap-3 px-5 py-3 text-left text-sm transition-colors hover:bg-muted/40',
+                  activeRun?.run_id === run.id && 'bg-muted/50',
+                )}
+                onClick={async () => {
+                  try {
+                    const detail = await getRun(run.id)
+                    setActiveRun(detail)
+                  } catch (err) {
+                    setError(parseApiError(err))
+                  }
+                }}
+              >
+                <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                  {dayjs(run.created_at).format('MMM D HH:mm')}
+                </span>
+                <span className="capitalize">{run.market_regime}</span>
+                <span className="font-mono text-xs tabular-nums">{(run.portfolio_score * 100).toFixed(1)}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </ScrollArea>
+    </SectionCard>
   )
 
-  const sectionLabels: Record<string, string> = {
-    overview: 'Overview',
-    research: 'Research',
-    execution: 'Execution',
-    leveraged: 'Leveraged',
-    jobs: 'Jobs',
-    artifacts: 'Artifacts',
-    costs: 'Costs',
-    chat: 'Archie',
-    diagnostics: 'Diagnostics',
+  const chatRail = (
+    <>
+      <div className="flex items-center justify-between px-3 py-2.5">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Conversations
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={() => void handleCreateChatSession()}
+          disabled={chatSessionBusy}
+        >
+          <Plus className="size-4" />
+        </Button>
+      </div>
+      <ScrollArea className="flex-1">
+        <div className="flex flex-col gap-0.5 px-2 pb-2">
+          {chatSessions.length === 0 ? (
+            <p className="px-2 py-3 text-xs text-muted-foreground">No chats yet.</p>
+          ) : (
+            chatSessions.map((session) => (
+              <div
+                key={session.id}
+                className={cn(
+                  'group flex items-center gap-1 rounded-lg px-2.5 py-2 text-sm transition-colors',
+                  session.id === activeChatSessionId
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                    : 'text-muted-foreground hover:bg-sidebar-accent/50',
+                )}
+              >
+                <button
+                  className="flex min-w-0 flex-1 flex-col items-start text-left"
+                  onClick={() => {
+                    setActiveChatSessionId(session.id)
+                    setChatRailOpen(false)
+                  }}
+                  disabled={chatSessionBusy || Boolean(deletingChatSessionId)}
+                >
+                  <span className="w-full truncate font-medium text-foreground">{session.title}</span>
+                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {dayjs(session.updated_at).format('MMM D HH:mm')}
+                  </span>
+                </button>
+                <button
+                  className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-negative group-hover:opacity-100 disabled:opacity-50"
+                  onClick={() => void handleDeleteChatSession(session.id)}
+                  disabled={chatSessionBusy || deletingChatSessionId === session.id}
+                  title="Delete chat"
+                >
+                  {deletingChatSessionId === session.id ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <X className="size-3.5" />
+                  )}
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </ScrollArea>
+    </>
+  )
+
+  const statusBits: string[] = []
+  if (config) {
+    statusBits.push(`${config.broker.broker_mode.toUpperCase()} · ${config.broker.t212_base_env.toUpperCase()}`)
+  }
+  if (pendingIntents.length) statusBits.push(`${pendingIntents.length} pending`)
+  if (lastUpdate) statusBits.push(`updated ${dayjs(lastUpdate).format('HH:mm:ss')}`)
+  if (maskSensitiveValues) statusBits.push('presentation mode')
+
+  function renderSection() {
+    if (activeSection === 'overview') {
+      if (!displaySnapshot) {
+        return (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-24 rounded-xl" />
+            ))}
+          </div>
+        )
+      }
+      return (
+        <PortfolioOverview
+          snapshot={displaySnapshot}
+          positions={displayPositions}
+          accountView={accountView}
+          displayCurrency={displayCurrency}
+          briefMarkdown={activeRun?.summary_markdown || null}
+        />
+      )
+    }
+
+    if (activeSection === 'execution') {
+      return (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="min-w-0 lg:col-span-2">
+            <IntentQueue intents={queueIntents} onApprove={handleApprove} onReject={handleReject} onExecute={handleExecute} />
+          </div>
+          <div className="min-w-0 lg:col-span-1">
+            <EventsFeed events={events} />
+          </div>
+        </div>
+      )
+    }
+
+    if (activeSection === 'research') {
+      return (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="min-w-0 space-y-4 lg:col-span-2">
+            <ThesisBoard theses={theses} onArchive={handleArchiveThesis} onActivate={handleActivateThesis} />
+            <BacktestLab onError={setError} />
+          </div>
+          <div className="min-w-0 lg:col-span-1">{runHistoryCard}</div>
+        </div>
+      )
+    }
+
+    if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} />
+    if (activeSection === 'leveraged') return <LeveragedWorkspace onError={setError} />
+    if (activeSection === 'jobs') return <ScheduledJobsWorkspace onError={setError} />
+    if (activeSection === 'artifacts') return <ArtifactsWorkspace onError={setError} />
+    if (activeSection === 'costs') return <CostsWorkspace onError={setError} />
+    if (activeSection === 'diagnostics') return <RuntimeDiagnosticsPanel onError={setError} />
+    if (activeSection === 'help') return <HelpGuide />
+    return null
   }
 
   return (
-    <>
-    <header className="mobile-header">
-      <span className="mobile-header-title">MyPF</span>
-      <span className="mobile-header-section">{sectionLabels[activeSection] || activeSection}</span>
-    </header>
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <AppSidebar
+        active={activeSection}
+        onSelect={setActiveSection}
+        onOpenSettings={() => setSettingsOpen(true)}
+        pendingIntents={pendingIntents.length}
+        activeTheses={activeThesesCount}
+      />
 
-    <div className="workspace-shell">
-      <aside className="glass-card left-nav">
-        <p className="eyebrow">Workspace</p>
-        <button
-          className={`nav-btn ${activeSection === 'overview' ? 'active' : ''}`}
-          onClick={() => setActiveSection('overview')}
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="flex w-72 max-w-[85vw] flex-col gap-6 border-r border-border bg-sidebar px-3 py-5"
         >
-          <span className="nav-icon">&#9670;</span> Overview
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'research' ? 'active' : ''}`}
-          onClick={() => setActiveSection('research')}
-        >
-          <span className="nav-icon">&#128270;</span> Research
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'execution' ? 'active' : ''}`}
-          onClick={() => setActiveSection('execution')}
-        >
-          <span className="nav-icon">&#9889;</span> Execution
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'leveraged' ? 'active' : ''}`}
-          onClick={() => setActiveSection('leveraged')}
-        >
-          <span className="nav-icon">&#9878;</span> Leveraged
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'jobs' ? 'active' : ''}`}
-          onClick={() => setActiveSection('jobs')}
-        >
-          <span className="nav-icon">&#128337;</span> Jobs
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'artifacts' ? 'active' : ''}`}
-          onClick={() => setActiveSection('artifacts')}
-        >
-          <span className="nav-icon">&#128196;</span> Artifacts
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'costs' ? 'active' : ''}`}
-          onClick={() => setActiveSection('costs')}
-        >
-          <span className="nav-icon">&#128178;</span> Costs
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'chat' ? 'active' : ''}`}
-          onClick={() => setActiveSection('chat')}
-        >
-          <span className="nav-icon">&#128172;</span> Archie
-        </button>
-        <button
-          className={`nav-btn ${activeSection === 'diagnostics' ? 'active' : ''}`}
-          onClick={() => setActiveSection('diagnostics')}
-        >
-          <span className="nav-icon">&#128269;</span> Diagnostics
-        </button>
-        {activeSection === 'chat' && (
-          <div className="nav-chat">
-            <div className="nav-chat-head">
-              <span>Conversations</span>
-              <button className="nav-chat-new" onClick={() => void handleCreateChatSession()} disabled={chatSessionBusy}>
-                +
-              </button>
-            </div>
-            <div className="nav-chat-list">
-              {chatSessions.length === 0 && <span className="hint">No chats yet.</span>}
-              {chatSessions.map((session) => (
-                <div key={session.id} className={`nav-chat-row ${session.id === activeChatSessionId ? 'active' : ''}`}>
-                  <button
-                    className="nav-chat-item"
-                    onClick={() => setActiveChatSessionId(session.id)}
-                    disabled={chatSessionBusy || Boolean(deletingChatSessionId)}
-                  >
-                    <span>{session.title}</span>
-                    <small>{dayjs(session.updated_at).format('MMM D HH:mm')}</small>
-                  </button>
-                  <button
-                    className="nav-chat-delete"
-                    onClick={() => void handleDeleteChatSession(session.id)}
-                    disabled={chatSessionBusy || deletingChatSessionId === session.id}
-                    title="Delete chat"
-                  >
-                    {deletingChatSessionId === session.id ? '...' : '×'}
-                  </button>
-                </div>
-              ))}
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarBody
+            active={activeSection}
+            onSelect={setActiveSection}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onNavigate={() => setSidebarOpen(false)}
+            pendingIntents={pendingIntents.length}
+            activeTheses={activeThesesCount}
+          />
+        </SheetContent>
+      </Sheet>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between gap-3 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-sm sm:px-6">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0 md:hidden"
+              aria-label="Open navigation"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu className="size-5" />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">{SECTION_LABELS[activeSection]}</h1>
+              <p className="truncate text-xs text-muted-foreground">
+                {SECTION_DESCRIPTIONS[activeSection] ?? statusBits.join(' · ')}
+              </p>
             </div>
           </div>
-        )}
-        <button
-          className="nav-btn"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <span className="nav-icon">&#9881;</span> Settings
-        </button>
-        <div className="nav-meta">
-          <span>{pendingIntents.length} pending intents</span>
-          <span>{theses.filter((row) => row.status === 'active').length} active theses</span>
-        </div>
-      </aside>
-
-      <div className="app-shell">
-        {activeSection !== 'chat' && (
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">MYPF</p>
-            <h1>Portfolio Operator</h1>
-            <p className="muted">
-              Signal-rich dashboard with intent-driven execution and hard risk rails.
-            </p>
-          </div>
-          <div className="topbar-actions">
-            <select
+          {activeSection === 'overview' ? (
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <Select
               value={accountView}
-              onChange={(e) => {
-                const next = e.target.value as 'all' | 'invest' | 'stocks_isa'
+              onValueChange={(v) => {
+                const next = v as 'all' | 'invest' | 'stocks_isa'
                 setAccountView(next)
                 void loadAll(false, next, displayCurrency)
               }}
             >
-              <option value="all">All Accounts</option>
-              <option value="invest">Invest</option>
-              <option value="stocks_isa">Stocks ISA</option>
-            </select>
-            <select
+              <SelectTrigger size="sm" className="w-[96px] sm:w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Accounts</SelectItem>
+                <SelectItem value="invest">Invest</SelectItem>
+                <SelectItem value="stocks_isa">Stocks ISA</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
               value={displayCurrency}
-              onChange={(e) => {
-                const next = e.target.value as 'GBP' | 'USD'
+              onValueChange={(v) => {
+                const next = v as 'GBP' | 'USD'
                 setDisplayCurrency(next)
                 void loadAll(false, accountView, next)
               }}
             >
-              <option value="GBP">GBP</option>
-              <option value="USD">USD</option>
-            </select>
-            <button className="btn" onClick={() => void loadAll(true)} disabled={busy}>
-              Refresh
-            </button>
-            <button className="btn primary" onClick={() => void runAgentNow(false)} disabled={busy}>
-              Run Agent
-            </button>
-            <button className="btn danger" onClick={() => void runAgentNow(true)} disabled={busy || !config?.broker.autopilot_enabled}>
-              Autopilot
-            </button>
+              <SelectTrigger size="sm" className="hidden w-[80px] sm:flex">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="GBP">GBP</SelectItem>
+                <SelectItem value="USD">USD</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadAll(true)}
+              disabled={busy}
+              aria-label="Refresh"
+              className="px-2 sm:px-3"
+            >
+              <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void runAgentNow(false)}
+              disabled={busy}
+              aria-label="Run Agent"
+              className="px-2 sm:px-3"
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              <span className="hidden sm:inline">Run Agent</span>
+            </Button>
           </div>
+          ) : null}
         </header>
-        )}
 
-        {activeSection !== 'chat' && (
-          <div className="status-row">
-            <span>{busy ? 'Syncing...' : 'Ready'}</span>
-            {lastUpdate && <span>Last update {dayjs(lastUpdate).format('MMM D HH:mm:ss')}</span>}
-            {config && (
-              <span>
-                Mode {config.broker.broker_mode.toUpperCase()} / Env {config.broker.t212_base_env.toUpperCase()} / Autopilot{' '}
-                {config.broker.autopilot_enabled ? 'ON' : 'OFF'}
-              </span>
-            )}
-            {config && (
-              <span>
-                Invest {config.credentials.invest.configured ? 'configured' : 'missing'} / ISA{' '}
-                {config.credentials.stocks_isa.configured ? 'configured' : 'missing'}
-              </span>
-            )}
-            {maskSensitiveValues && <span>Presentation mode ON (obfuscated values)</span>}
+        <main className="min-h-0 flex-1 overflow-hidden">
+          {/* Chat stays MOUNTED across navigation (just hidden) so an in-flight
+              Archie stream keeps rendering and isn't lost when you switch tabs. */}
+          <div className={cn('h-full min-h-0', activeSection === 'chat' ? 'flex' : 'hidden')}>
+            <div className="hidden w-56 shrink-0 flex-col border-r border-border bg-card/30 md:flex">
+              {chatRail}
+            </div>
+            <Sheet open={chatRailOpen} onOpenChange={setChatRailOpen}>
+              <SheetContent
+                side="left"
+                showCloseButton={false}
+                className="flex w-72 max-w-[85vw] flex-col border-r border-border bg-card p-0"
+              >
+                <SheetTitle className="sr-only">Conversations</SheetTitle>
+                {chatRail}
+              </SheetContent>
+            </Sheet>
+            <div className="min-w-0 flex-1">
+              <AgentChatPanel
+                activeSessionId={activeChatSessionId}
+                activeSessionTitle={activeChatSession?.title || null}
+                accountView={accountView}
+                displayCurrency={displayCurrency}
+                presentationMask={maskSensitiveValues}
+                onSessionTouched={handleChatSessionTouched}
+                onError={setError}
+                deletingSessionId={deletingChatSessionId}
+                onOpenSessions={() => setChatRailOpen(true)}
+              />
+            </div>
           </div>
-        )}
 
-        {error && <div className="error-banner">{error}</div>}
-
-        {activeSection !== 'chat' && activeSection !== 'leveraged' && activeSection !== 'jobs' && activeSection !== 'artifacts' && activeSection !== 'costs' && activeSection !== 'diagnostics' && displaySnapshot && (
-          <MetricGrid snapshot={displaySnapshot} positions={displayPositions} accountView={accountView} />
-        )}
-
-        <main
-          className={
-            activeSection === 'costs'
-              ? 'costs-stage'
-              : activeSection === 'leveraged'
-                ? 'leveraged-stage'
-                : activeSection === 'jobs'
-                  ? 'jobs-stage'
-                  : activeSection === 'artifacts'
-                    ? 'artifacts-stage'
-                    : activeSection === 'diagnostics'
-                      ? 'diagnostics-stage'
-                      : 'content-grid'
-          }
-          style={activeSection === 'chat' ? { display: 'none' } : undefined}
-        >
-          {activeSection === 'overview' && (
-            <>
-              <div className="left-stack">
-                {displaySnapshot && <AllocationChart positions={displayPositions} />}
-                <AgentBrief markdown={activeRun?.summary_markdown || null} />
+          {activeSection !== 'chat' ? (
+            <ScrollArea className="h-full">
+              <div className="mx-auto w-full max-w-[1440px] space-y-6 p-4 sm:p-6">
+                {error ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                ) : null}
+                {renderSection()}
               </div>
-              <div className="right-stack">
-                {displaySnapshot && (
-                  <PortfolioTable positions={displayPositions} accountView={accountView} displayCurrency={displayCurrency} />
-                )}
-              </div>
-            </>
-          )}
-
-          {activeSection === 'research' && (
-            <>
-              <div className="left-stack">
-                <ThesisBoard theses={theses} onArchive={handleArchiveThesis} onActivate={handleActivateThesis} />
-                <BacktestLab onError={setError} />
-              </div>
-              <div className="right-stack">
-                <EventsFeed events={events} />
-                {runHistoryCard}
-              </div>
-            </>
-          )}
-
-          {activeSection === 'execution' && (
-            <>
-              <div className="left-stack">
-                <IntentQueue intents={queueIntents} onApprove={handleApprove} onReject={handleReject} onExecute={handleExecute} />
-              </div>
-              <div className="right-stack">
-                {runHistoryCard}
-                <EventsFeed events={events} />
-              </div>
-            </>
-          )}
-
-          {activeSection === 'leveraged' && (
-            <LeveragedWorkspace onError={setError} />
-          )}
-
-          {activeSection === 'jobs' && (
-            <ScheduledJobsWorkspace onError={setError} />
-          )}
-
-          {activeSection === 'artifacts' && (
-            <ArtifactsWorkspace onError={setError} />
-          )}
-
-          {activeSection === 'costs' && (
-            <CostsWorkspace onError={setError} />
-          )}
-
-          <div style={activeSection === 'diagnostics' ? undefined : { display: 'none' }}>
-            <RuntimeDiagnosticsPanel onError={setError} />
-          </div>
+            </ScrollArea>
+          ) : null}
         </main>
-
-        <div
-          className="chat-stage-wrap"
-          style={activeSection === 'chat' ? undefined : { display: 'none' }}
-        >
-          <AgentChatPanel
-            activeSessionId={activeChatSessionId}
-            activeSessionTitle={activeChatSession?.title || null}
-            accountView={accountView}
-            displayCurrency={displayCurrency}
-            presentationMask={maskSensitiveValues}
-            onSessionTouched={handleChatSessionTouched}
-            onError={setError}
-            deletingSessionId={deletingChatSessionId}
-          />
-        </div>
       </div>
 
-      {settingsOpen && (
-        <div className="modal-overlay" onClick={() => setSettingsOpen(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>Control Tower</h2>
-              <button className="btn ghost" onClick={() => setSettingsOpen(false)}>
-                Close
-              </button>
-            </div>
-            <SettingsPanel
-              config={config}
-              onReload={() => void loadAll(false)}
-              onError={(msg) => setError(msg)}
-              hideHeader
-              presentationMask={maskSensitiveValues}
-              onTogglePresentationMask={setMaskSensitiveValues}
-            />
-          </div>
-        </div>
-      )}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-h-[88vh] w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Control Tower</DialogTitle>
+          </DialogHeader>
+          <SettingsPanel
+            config={config}
+            onReload={() => void loadAll(false)}
+            onError={(msg) => setError(msg)}
+            hideHeader
+            presentationMask={maskSensitiveValues}
+            onTogglePresentationMask={setMaskSensitiveValues}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
-
-    {/* Mobile bottom navigation */}
-    <nav className="mobile-bottom-nav">
-      <button
-        className={`mobile-nav-tab${activeSection === 'overview' ? ' active' : ''}`}
-        onClick={() => { setActiveSection('overview'); setMoreMenuOpen(false) }}
-      >
-        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="3" y="14" width="7" height="7" rx="1" />
-          <rect x="14" y="14" width="7" height="7" rx="1" />
-        </svg>
-        <span className="mobile-nav-label">Overview</span>
-      </button>
-      <button
-        className={`mobile-nav-tab${activeSection === 'research' ? ' active' : ''}`}
-        onClick={() => { setActiveSection('research'); setMoreMenuOpen(false) }}
-      >
-        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-        <span className="mobile-nav-label">Research</span>
-      </button>
-      <button
-        className={`mobile-nav-tab${activeSection === 'chat' ? ' active' : ''}`}
-        onClick={() => { setActiveSection('chat'); setMoreMenuOpen(false) }}
-      >
-        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-        <span className="mobile-nav-label">Archie</span>
-      </button>
-      <button
-        className={`mobile-nav-tab${activeSection === 'jobs' ? ' active' : ''}`}
-        onClick={() => { setActiveSection('jobs'); setMoreMenuOpen(false) }}
-      >
-        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg>
-        <span className="mobile-nav-label">Jobs</span>
-      </button>
-      <button
-        className={`mobile-nav-tab${['execution', 'leveraged', 'artifacts', 'costs', 'diagnostics'].includes(activeSection) ? ' active' : ''}`}
-        onClick={() => setMoreMenuOpen((prev) => !prev)}
-      >
-        <svg className="mobile-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="5" r="1.5" fill="currentColor" />
-          <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-          <circle cx="12" cy="19" r="1.5" fill="currentColor" />
-        </svg>
-        <span className="mobile-nav-label">More</span>
-      </button>
-      {moreMenuOpen && (
-        <div className="mobile-more-menu">
-          <button className={activeSection === 'execution' ? 'active' : ''} onClick={() => { setActiveSection('execution'); setMoreMenuOpen(false) }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
-            Execution
-          </button>
-          <button className={activeSection === 'leveraged' ? 'active' : ''} onClick={() => { setActiveSection('leveraged'); setMoreMenuOpen(false) }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></svg>
-            Leveraged
-          </button>
-          <button className={activeSection === 'artifacts' ? 'active' : ''} onClick={() => { setActiveSection('artifacts'); setMoreMenuOpen(false) }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
-            Artifacts
-          </button>
-          <button className={activeSection === 'costs' ? 'active' : ''} onClick={() => { setActiveSection('costs'); setMoreMenuOpen(false) }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-            Costs
-          </button>
-          <button className={activeSection === 'diagnostics' ? 'active' : ''} onClick={() => { setActiveSection('diagnostics'); setMoreMenuOpen(false) }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-            Diagnostics
-          </button>
-          <button onClick={() => { setSettingsOpen(true); setMoreMenuOpen(false) }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-            Settings
-          </button>
-        </div>
-      )}
-    </nav>
-    </>
   )
 }

@@ -239,6 +239,19 @@ async def chat_delete_session(session_id: str, db: Session = Depends(get_db)) ->
     return ChatDeleteResponse(id=session_id, deleted=True)
 
 
+@router.post("/chat/sessions/{session_id}/stop")
+async def chat_stop(session_id: str) -> dict[str, bool | str]:
+    """Interrupt Archie's in-flight response for this session.
+
+    Operates directly on the cached SDK client (does not block on the
+    streaming turn's lock). Uses the Agent SDK's `interrupt()` when
+    available, falling back to disconnecting the client. Safe to call even
+    if no turn is active — returns interrupted=False in that case.
+    """
+    interrupted = await claude_chat_runtime.interrupt(session_id)
+    return {"id": session_id, "interrupted": interrupted}
+
+
 @router.post("/chat/sessions/{session_id}/messages", response_model=ChatSendResponse)
 async def chat_send(session_id: str, payload: ChatSendRequest, db: Session = Depends(get_db)) -> ChatSendResponse:
     session, user_row, assistant_row = await send_message(

@@ -1,15 +1,49 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
+import {
+  CalendarClock,
+  CheckCircle2,
+  Loader2,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  X,
+  XCircle,
+} from 'lucide-react'
 
 import {
+  createSchedulerTask,
   deleteSchedulerTask,
   getArtifact,
   getSchedulerTaskLogs,
   getSchedulerTasks,
   runSchedulerTask,
+  seedSchedulerDefaults,
   updateSchedulerTask,
 } from '../api/client'
 import { RichMarkdown } from './RichMarkdown'
+import { SectionCard } from '@/components/kit'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import type { ArtifactDetail, SchedulerTask, SchedulerTaskLog } from '../types'
 
 interface Props {
@@ -21,6 +55,18 @@ const MODEL_OPTIONS = [
   'claude-sonnet-4-6',
   'claude-haiku-4-5',
 ]
+
+const DEFAULT_MODEL = 'claude-sonnet-4-6'
+
+const TASK_KIND_OPTIONS = [
+  'claude',
+  'claude_with_goal',
+  'leveraged_cycle',
+  'leveraged_monitor',
+  'leveraged_scan',
+] as const
+
+type TaskKind = (typeof TASK_KIND_OPTIONS)[number]
 
 function parseCronHuman(expr: string): string {
   const parts = expr.trim().split(/\s+/)
@@ -73,54 +119,6 @@ function shortModel(model: string): string {
   return m.replace(/-\d{8}$/, '')
 }
 
-/* ── Inline SVG icon components ── */
-
-function IconPlay({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="5,3 13,8 5,13" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
-function IconPause({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" stroke="none">
-      <rect x="3.5" y="3" width="3" height="10" rx="0.8" />
-      <rect x="9.5" y="3" width="3" height="10" rx="0.8" />
-    </svg>
-  )
-}
-
-function IconResume({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" stroke="none">
-      <polygon points="4,3 12,8 4,13" />
-    </svg>
-  )
-}
-
-function IconTrash({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2.5 4.5h11" />
-      <path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5" />
-      <path d="M3.5 4.5l.7 8.5a1 1 0 0 0 1 .9h5.6a1 1 0 0 0 1-.9l.7-8.5" />
-      <path d="M6.5 7v4" />
-      <path d="M9.5 7v4" />
-    </svg>
-  )
-}
-
-function IconClose({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 4l8 8" />
-      <path d="M12 4l-8 8" />
-    </svg>
-  )
-}
-
 interface RunResult {
   status: string
   error?: string
@@ -128,8 +126,19 @@ interface RunResult {
 
 type SortMode = 'status' | 'next_run' | 'task_kind' | 'name'
 
+const SORT_LABELS: Record<SortMode, string> = {
+  status: 'Status',
+  next_run: 'Next Run',
+  task_kind: 'Kind',
+  name: 'Name',
+}
+
 const POLL_INTERVAL_MS = 3_000
 const RESULT_DISPLAY_MS = 10_000
+
+/** Markdown wrapper matching the dashboard prose style. */
+const MARKDOWN_PROSE =
+  'space-y-2 text-sm leading-relaxed [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:font-semibold [&_strong]:font-semibold [&_table]:w-full [&_ul]:list-disc [&_ul]:pl-5'
 
 export function ScheduledJobsWorkspace({ onError }: Props) {
   const [tasks, setTasks] = useState<SchedulerTask[]>([])
@@ -150,6 +159,36 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
 
   // Detail pane — selected task
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+
+  // New Job dialog
+  const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [seeding, setSeeding] = useState(false)
+  const [form, setForm] = useState({
+    name: '',
+    cron_expr: '30 7 * * 1-5',
+    timezone: 'Europe/London',
+    model: DEFAULT_MODEL,
+    prompt: '',
+    enabled: true,
+    task_kind: 'claude' as TaskKind,
+    goal_target_gbp: '',
+  })
+  const [formError, setFormError] = useState<string | null>(null)
+
+  function resetForm() {
+    setForm({
+      name: '',
+      cron_expr: '30 7 * * 1-5',
+      timezone: 'Europe/London',
+      model: DEFAULT_MODEL,
+      prompt: '',
+      enabled: true,
+      task_kind: 'claude',
+      goal_target_gbp: '',
+    })
+    setFormError(null)
+  }
 
   // Content tab and artifact viewer
   const [contentTab, setContentTab] = useState<'output' | 'prompt'>('prompt')
@@ -304,6 +343,60 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     }
   }
 
+  async function handleCreate() {
+    const name = form.name.trim()
+    const cron = form.cron_expr.trim()
+    const prompt = form.prompt.trim()
+    if (!name) return setFormError('Name is required.')
+    if (cron.split(/\s+/).length !== 5) {
+      return setFormError('Cron expression must have 5 fields (e.g. "30 7 * * 1-5").')
+    }
+    if (!prompt) return setFormError('Prompt is required.')
+
+    const meta: Record<string, unknown> = { task_kind: form.task_kind }
+    if (form.task_kind === 'claude_with_goal') {
+      const target = parseFloat(form.goal_target_gbp)
+      if (Number.isFinite(target) && target > 0) {
+        meta.goal = { target_gbp: target }
+      }
+    }
+
+    setCreating(true)
+    setFormError(null)
+    try {
+      await createSchedulerTask({
+        name,
+        cron_expr: cron,
+        timezone: form.timezone.trim() || 'Europe/London',
+        model: form.model.trim() || DEFAULT_MODEL,
+        prompt,
+        enabled: form.enabled,
+        meta,
+      })
+      setCreateOpen(false)
+      resetForm()
+      await loadTasks()
+      onError(null)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to create job')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function handleSeedDefaults() {
+    setSeeding(true)
+    try {
+      await seedSchedulerDefaults()
+      await loadTasks()
+      onError(null)
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to seed default jobs')
+    } finally {
+      setSeeding(false)
+    }
+  }
+
   async function deleteTask(task: SchedulerTask) {
     setDeleting((prev) => new Set(prev).add(task.id))
     try {
@@ -385,6 +478,13 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     }
   }
 
+  function closeDetail() {
+    setSelectedTaskId(null)
+    setTaskLogs([])
+    setActiveArtifact(null)
+    setSelectedLogId(null)
+  }
+
   // ── Auto-load latest output when logs arrive ──
 
   useEffect(() => {
@@ -402,254 +502,566 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     return task.last_status === 'running'
   }
 
+  const headerStats = (
+    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+      <span>
+        <span className="font-mono tabular-nums text-foreground">{tasks.length}</span> total
+      </span>
+      <span>
+        <span className="font-mono tabular-nums text-positive">{activeCount}</span> active
+      </span>
+      {pausedCount > 0 && (
+        <span>
+          <span className="font-mono tabular-nums text-foreground">{pausedCount}</span> paused
+        </span>
+      )}
+    </div>
+  )
+
+  const headerActions = (
+    <>
+      <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
+        <SelectTrigger size="sm" className="w-[120px] sm:w-[150px]">
+          <span className="hidden text-muted-foreground sm:inline">Sort:</span>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(SORT_LABELS) as SortMode[]).map((mode) => (
+            <SelectItem key={mode} value={mode}>{SORT_LABELS[mode]}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button variant="outline" size="sm" onClick={() => void loadTasks()} disabled={busy} title="Refresh" className="px-2 sm:px-3">
+        <RefreshCw className={cn('size-3.5', busy && 'animate-spin')} />
+        <span className="hidden sm:inline">Refresh</span>
+      </Button>
+      <Button
+        size="sm"
+        title="New Job"
+        className="px-2 sm:px-3"
+        onClick={() => {
+          resetForm()
+          setCreateOpen(true)
+        }}
+      >
+        <Plus className="size-3.5" />
+        <span className="hidden sm:inline">New Job</span>
+      </Button>
+    </>
+  )
+
   return (
-    <div className="jobs-workspace">
-      {/* Header */}
-      <section className="glass-card jobs-header-card">
-        <div className="section-heading-row">
-          <div className="jobs-header-left">
-            <h2>Scheduled Jobs</h2>
-            <div className="jobs-header-stats">
-              <span className="jobs-stat">
-                <span className="jobs-stat-count">{tasks.length}</span> total
-              </span>
-              <span className="jobs-stat">
-                <span className="jobs-stat-count up">{activeCount}</span> active
-              </span>
-              {pausedCount > 0 && (
-                <span className="jobs-stat">
-                  <span className="jobs-stat-count muted">{pausedCount}</span> paused
-                </span>
-              )}
+    <div className="space-y-6">
+      <div className={cn('grid gap-4', selectedTask && 'lg:grid-cols-2')}>
+        {/* Task list */}
+        <SectionCard title="Scheduled Jobs" action={<div className="flex items-center gap-2">{headerActions}</div>} noPadding>
+          <div className="flex items-center justify-between border-b border-border/60 px-5 py-2.5">
+            {headerStats}
+          </div>
+
+          {busy && sortedTasks.length === 0 ? (
+            <div className="divide-y divide-border/60">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="space-y-2 px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="size-2 rounded-full" />
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-5 w-24 rounded-full" />
+                  </div>
+                  <Skeleton className="h-3 w-64" />
+                </div>
+              ))}
             </div>
-          </div>
-          <div className="jobs-header-actions">
-            <select
-              className="jobs-sort-select"
-              value={sortMode}
-              onChange={(e) => setSortMode(e.target.value as SortMode)}
-            >
-              <option value="status">Sort: Status</option>
-              <option value="next_run">Sort: Next Run</option>
-              <option value="task_kind">Sort: Kind</option>
-              <option value="name">Sort: Name</option>
-            </select>
-            <button className="btn" onClick={() => void loadTasks()} disabled={busy}>
-              {busy ? 'Loading...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Main content area */}
-      <div className={`jobs-body${selectedTask ? ' with-detail' : ''}`}>
-      {/* Task list */}
-      <section className="glass-card jobs-list-card">
-        {sortedTasks.length === 0 && !busy && (
-          <div className="jobs-empty-state">
-            <div className="jobs-empty-icon">&#128197;</div>
-            <p className="jobs-empty-title">No scheduled jobs yet</p>
-            <p className="jobs-empty-hint">
-              Ask Archie to set up recurring tasks for you. For example:
-              "Schedule a daily portfolio health check at 8am" or
-              "Run a leveraged scan every weekday morning at 7:30."
-            </p>
-          </div>
-        )}
-
-        {sortedTasks.length > 0 && (
-          <div className="jobs-task-list">
-            {sortedTasks.map((task) => {
-              const running = isTaskRunning(task)
-              const result = runResults.get(task.id)
-              const taskKind = (task.meta?.task_kind as string) || null
-              const taskDesc = (task.meta?.description as string) || null
-              const isSelected = selectedTaskId === task.id
-
-              return (
-                <article
-                  key={task.id}
-                  className={`sched-task-card clickable${isSelected ? ' selected' : ''}${running ? ' running' : ''}`}
-                  onClick={() => selectTask(task.id)}
+          ) : sortedTasks.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+              <CalendarClock className="size-8 text-muted-foreground" />
+              <p className="text-sm font-medium">No scheduled jobs yet</p>
+              <p className="max-w-md text-xs text-muted-foreground">
+                Create a job manually, seed the recommended defaults, or ask Archie to set up
+                recurring tasks for you — e.g. "Schedule a daily portfolio health check at 8am"
+                or "Run a leveraged scan every weekday morning at 7:30."
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    resetForm()
+                    setCreateOpen(true)
+                  }}
                 >
-                  {/* Header row */}
-                  <div className="sched-task-header">
-                    {running
-                      ? <span className="sched-run-spinner" />
-                      : <span className={`sched-status-dot ${task.enabled ? 'active' : 'paused'}`} />
-                    }
-                    <strong>{task.name}</strong>
-                    <span className="sched-badge">{parseCronHuman(task.cron_expr)}</span>
-                    {taskKind && <span className="sched-task-kind-badge">{taskKind}</span>}
-                    {running && <span className="sched-running-badge">running</span>}
-                  </div>
+                  <Plus className="size-3.5" />
+                  New Job
+                </Button>
+                <Button variant="outline" size="sm" disabled={seeding} onClick={() => void handleSeedDefaults()}>
+                  {seeding ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  Seed defaults
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {sortedTasks.map((task) => {
+                const running = isTaskRunning(task)
+                const result = runResults.get(task.id)
+                const taskKind = (task.meta?.task_kind as string) || null
+                const taskDesc = (task.meta?.description as string) || null
+                const isSelected = selectedTaskId === task.id
+                const lastStatus = task.last_status
 
-                  {/* Meta row */}
-                  <div className="sched-task-meta">
-                    <span>
-                      <span className="sched-meta-label">Last run:</span>
-                      {task.last_run_at
-                        ? <>{dayjs(task.last_run_at).format('ddd D MMM HH:mm')} <span className={`sched-last-status ${task.last_status === 'ok' ? 'ok' : task.last_status === 'error' ? 'err' : ''}`}>{task.last_status === 'running' ? '' : (task.last_status ?? '')}</span></>
-                        : '\u2014'}
-                    </span>
-                    <span>
-                      <span className="sched-meta-label">Next:</span>
-                      {task.next_run_at ? dayjs(task.next_run_at).format('ddd D MMM HH:mm') : '\u2014'}
-                    </span>
-                    <span>
-                      <span className="sched-meta-label">runs:</span>
-                      <span className="sched-count-ok">{task.run_count ?? 0}</span>
-                    </span>
-                    <span>
-                      <span className="sched-meta-label">fails:</span>
-                      <span className="sched-count-fail">{task.failure_count ?? 0}</span>
-                    </span>
-                  </div>
-
-                  {/* Description */}
-                  {taskDesc && <p className="sched-task-desc">{taskDesc}</p>}
-
-                  {/* Transient run result */}
-                  {!running && result && (
-                    <div className="sched-run-indicator">
-                      {result.status === 'ok' && (
-                        <>
-                          <span className="sched-run-check">&#10003;</span>
-                          <span className="sched-run-label ok">Completed</span>
-                        </>
+                return (
+                  <div
+                    key={task.id}
+                    className={cn(
+                      'flex items-start gap-2 px-5 py-4 transition-colors hover:bg-muted/40',
+                      isSelected && 'bg-muted/50'
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => selectTask(task.id)}
+                      className="flex min-w-0 flex-1 flex-col gap-2 text-left"
+                    >
+                    {/* Header row */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {running ? (
+                        <RefreshCw className="size-3.5 shrink-0 animate-spin text-positive" />
+                      ) : (
+                        <span
+                          className={cn(
+                            'size-2 shrink-0 rounded-full',
+                            task.enabled ? 'bg-positive' : 'bg-muted-foreground/40'
+                          )}
+                        />
                       )}
-                      {result.status === 'error' && (
-                        <>
-                          <span className="sched-run-x">&#10007;</span>
-                          <span className="sched-run-label err">{result.error || 'Failed'}</span>
-                        </>
+                      <span className="truncate text-sm font-medium">{task.name}</span>
+                      <Badge variant="outline" className="text-muted-foreground">
+                        {parseCronHuman(task.cron_expr)}
+                      </Badge>
+                      {taskKind && <Badge variant="secondary">{taskKind}</Badge>}
+                      {running && (
+                        <Badge variant="outline" className="border-positive/30 bg-positive/10 text-positive">
+                          running
+                        </Badge>
                       )}
                     </div>
-                  )}
-                </article>
-              )
-            })}
-          </div>
-        )}
-      </section>
 
-      {/* Task detail pane */}
-      {selectedTask && (
-        <section className="glass-card jobs-detail-pane">
-          {/* Header */}
-          <div className="jobs-detail-header">
-            <div className="jobs-detail-title-row">
-              {isTaskRunning(selectedTask)
-                ? <span className="sched-run-spinner" />
-                : <span className={`sched-status-dot ${selectedTask.enabled ? 'active' : 'paused'}`} />
-              }
-              <strong>{selectedTask.name}</strong>
-              <span className="sched-badge">{parseCronHuman(selectedTask.cron_expr)}</span>
-              {isTaskRunning(selectedTask) && <span className="sched-running-badge">running</span>}
-            </div>
-            <div className="jobs-detail-icon-actions">
-              <button className="icon-btn run" title="Run now" disabled={isTaskRunning(selectedTask)} onClick={() => void handleRunTask(selectedTask.id)}>
-                {isTaskRunning(selectedTask) ? <span className="sched-run-spinner small" /> : <IconPlay size={15} />}
-              </button>
-              <button className="icon-btn" title={selectedTask.enabled ? 'Pause' : 'Resume'} onClick={() => void toggleTask(selectedTask)}>
-                {selectedTask.enabled ? <IconPause size={15} /> : <IconResume size={15} />}
-              </button>
-              <button className="icon-btn danger" title="Delete" disabled={deleting.has(selectedTask.id)} onClick={() => void deleteTask(selectedTask)}>
-                <IconTrash size={15} />
-              </button>
-              <button className="icon-btn close" title="Close" onClick={() => { setSelectedTaskId(null); setTaskLogs([]); setActiveArtifact(null); setSelectedLogId(null); }}>
-                <IconClose size={15} />
-              </button>
-            </div>
-          </div>
+                    {/* Meta row */}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        Last run{' '}
+                        {task.last_run_at ? (
+                          <>
+                            <span className="font-mono tabular-nums text-foreground">
+                              {dayjs(task.last_run_at).format('ddd D MMM HH:mm')}
+                            </span>{' '}
+                            {lastStatus && lastStatus !== 'running' && (
+                              <span
+                                className={cn(
+                                  lastStatus === 'ok' ? 'text-positive' : lastStatus === 'error' ? 'text-negative' : ''
+                                )}
+                              >
+                                {lastStatus}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </span>
+                      <span>
+                        Next{' '}
+                        <span className="font-mono tabular-nums text-foreground">
+                          {task.next_run_at ? dayjs(task.next_run_at).format('ddd D MMM HH:mm') : '—'}
+                        </span>
+                      </span>
+                      <span>
+                        runs{' '}
+                        <span className="font-mono tabular-nums text-positive">{task.run_count ?? 0}</span>
+                      </span>
+                      <span>
+                        fails{' '}
+                        <span className="font-mono tabular-nums text-negative">{task.failure_count ?? 0}</span>
+                      </span>
+                    </div>
 
-          {/* Run result banner */}
-          {runResults.has(selectedTask.id) && !isTaskRunning(selectedTask) && (
-            <div className={`sched-run-indicator ${runResults.get(selectedTask.id)?.status === 'ok' ? 'ok' : 'err'}`}>
-              {runResults.get(selectedTask.id)?.status === 'ok' ? (
-                <><span className="sched-run-check">&#10003;</span><span className="sched-run-label ok">Completed</span></>
-              ) : (
-                <><span className="sched-run-x">&#10007;</span><span className="sched-run-label err">{runResults.get(selectedTask.id)?.error || 'Failed'}</span></>
-              )}
+                    {/* Description */}
+                    {taskDesc && <p className="text-xs text-muted-foreground">{taskDesc}</p>}
+
+                    {/* Transient run result */}
+                    {!running && result && (
+                      <div className="flex items-center gap-1.5 text-xs">
+                        {result.status === 'ok' ? (
+                          <>
+                            <CheckCircle2 className="size-3.5 text-positive" />
+                            <span className="text-positive">Completed</span>
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="size-3.5 text-negative" />
+                            <span className="text-negative">{result.error || 'Failed'}</span>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    </button>
+
+                    {/* Enable / disable */}
+                    <label
+                      className="flex shrink-0 cursor-pointer items-center gap-1.5 pt-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                      title={task.enabled ? 'Enabled — click to pause' : 'Paused — click to enable'}
+                    >
+                      <span className="hidden sm:inline">{task.enabled ? 'On' : 'Off'}</span>
+                      <Switch
+                        checked={task.enabled}
+                        onCheckedChange={() => void toggleTask(task)}
+                      />
+                    </label>
+                  </div>
+                )
+              })}
             </div>
           )}
+        </SectionCard>
 
-          {/* Meta */}
-          <div className="jobs-detail-meta">
-            <span className="jobs-detail-meta-item">
-              <span className="muted">Model</span>
-              <select className="jobs-model-select" value={MODEL_OPTIONS.includes(selectedTask.model) ? selectedTask.model : ''} onChange={(e) => void handleModelChange(selectedTask.id, e.target.value)}>
-                {MODEL_OPTIONS.map((m) => (<option key={m} value={m}>{shortModel(m)}</option>))}
-                {!MODEL_OPTIONS.includes(selectedTask.model) && (<option value="" disabled>{selectedTask.model}</option>)}
-              </select>
-            </span>
-            <span><span className="muted">Timezone</span> <strong>{selectedTask.timezone}</strong></span>
-            <span><span className="muted">Cron</span> <code>{selectedTask.cron_expr}</code></span>
-            {selectedTask.meta?.task_kind ? (
-              <span><span className="muted">Kind</span> <strong>{String(selectedTask.meta.task_kind)}</strong></span>
+        {/* Task detail pane */}
+        {selectedTask && (
+          <SectionCard
+            title={
+              <span className="flex items-center gap-2">
+                {isTaskRunning(selectedTask) ? (
+                  <RefreshCw className="size-3.5 animate-spin text-positive" />
+                ) : (
+                  <span
+                    className={cn(
+                      'size-2 rounded-full',
+                      selectedTask.enabled ? 'bg-positive' : 'bg-muted-foreground/40'
+                    )}
+                  />
+                )}
+                <span className="truncate">{selectedTask.name}</span>
+              </span>
+            }
+            description={parseCronHuman(selectedTask.cron_expr)}
+            action={
+              <>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  title="Run now"
+                  disabled={isTaskRunning(selectedTask)}
+                  onClick={() => void handleRunTask(selectedTask.id)}
+                >
+                  {isTaskRunning(selectedTask) ? (
+                    <RefreshCw className="size-3.5 animate-spin" />
+                  ) : (
+                    <Play className="size-3.5" />
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  title={selectedTask.enabled ? 'Pause' : 'Resume'}
+                  onClick={() => void toggleTask(selectedTask)}
+                >
+                  {selectedTask.enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="icon-sm"
+                  title="Delete"
+                  disabled={deleting.has(selectedTask.id)}
+                  onClick={() => void deleteTask(selectedTask)}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon-sm" title="Close" onClick={closeDetail}>
+                  <X className="size-3.5" />
+                </Button>
+              </>
+            }
+          >
+            <div className="space-y-4">
+              {/* Run result banner */}
+              {runResults.has(selectedTask.id) && !isTaskRunning(selectedTask) && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  {runResults.get(selectedTask.id)?.status === 'ok' ? (
+                    <>
+                      <CheckCircle2 className="size-3.5 text-positive" />
+                      <span className="text-positive">Completed</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="size-3.5 text-negative" />
+                      <span className="text-negative">{runResults.get(selectedTask.id)?.error || 'Failed'}</span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Meta */}
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+                <span className="flex items-center gap-2">
+                  <span>Model</span>
+                  <Select
+                    value={MODEL_OPTIONS.includes(selectedTask.model) ? selectedTask.model : ''}
+                    onValueChange={(v) => void handleModelChange(selectedTask.id, v as string)}
+                  >
+                    <SelectTrigger size="sm" className="w-[130px]">
+                      <SelectValue placeholder={selectedTask.model} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MODEL_OPTIONS.map((m) => (
+                        <SelectItem key={m} value={m}>{shortModel(m)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </span>
+                <span>
+                  Timezone <span className="font-medium text-foreground">{selectedTask.timezone}</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  Cron{' '}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">
+                    {selectedTask.cron_expr}
+                  </code>
+                </span>
+                {selectedTask.meta?.task_kind ? (
+                  <span>
+                    Kind <span className="font-medium text-foreground">{String(selectedTask.meta.task_kind)}</span>
+                  </span>
+                ) : null}
+              </div>
+
+              {/* Content tabs */}
+              <Tabs value={contentTab} onValueChange={(v) => setContentTab(v as 'output' | 'prompt')}>
+                <TabsList>
+                  <TabsTrigger value="output">Output</TabsTrigger>
+                  <TabsTrigger value="prompt">Prompt</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="prompt">
+                  <div className="max-h-[420px] overflow-y-auto overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3.5">
+                    <div className={cn(MARKDOWN_PROSE, 'min-w-0')}>
+                      <RichMarkdown markdown={selectedTask.prompt} />
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="output">
+                  <div className="max-h-[420px] overflow-y-auto overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3.5">
+                    {activeArtifact?.loading && (
+                      <div className="space-y-2">
+                        <Skeleton className="h-4 w-3/4" />
+                        <Skeleton className="h-4 w-full" />
+                        <Skeleton className="h-4 w-5/6" />
+                      </div>
+                    )}
+                    {activeArtifact?.error && <p className="text-sm text-negative">{activeArtifact.error}</p>}
+                    {activeArtifact?.detail ? (
+                      <div className={MARKDOWN_PROSE}>
+                        <RichMarkdown markdown={activeArtifact.detail.content} />
+                      </div>
+                    ) : (
+                      !activeArtifact?.loading && (
+                        <p className="text-sm text-muted-foreground">
+                          No output available. Run the task to generate output.
+                        </p>
+                      )
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+
+              {/* Run history */}
+              {(logsLoading || taskLogs.length > 0) && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Run History
+                  </h3>
+                  {logsLoading && taskLogs.length === 0 ? (
+                    <div className="space-y-1.5">
+                      {Array.from({ length: 3 }).map((_, i) => (
+                        <Skeleton key={i} className="h-7 w-full" />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/60">
+                      {taskLogs.map((log) => (
+                        <button
+                          key={log.id}
+                          type="button"
+                          disabled={!log.output_path}
+                          onClick={() => log.output_path && void loadArtifactForLog(log)}
+                          className={cn(
+                            'flex w-full items-center gap-3 px-3 py-1.5 text-left text-xs transition-colors',
+                            log.output_path ? 'hover:bg-muted/40' : 'cursor-default',
+                            selectedLogId === log.id && 'bg-muted/50'
+                          )}
+                        >
+                          <span className="font-mono tabular-nums text-muted-foreground">
+                            {dayjs(log.created_at).format('MMM D HH:mm')}
+                          </span>
+                          <span className={cn(log.status === 'ok' ? 'text-positive' : 'text-negative')}>
+                            {log.status}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground">{log.message}</span>
+                          {log.output_path && (
+                            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="Has output" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </SectionCard>
+        )}
+      </div>
+
+      {/* New Job dialog */}
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open)
+          if (!open) resetForm()
+        }}
+      >
+        <DialogContent className="max-h-[88vh] w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New scheduled job</DialogTitle>
+            <DialogDescription>
+              Create a recurring task. Cron is evaluated in the job's timezone.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nj-name">Name</Label>
+              <Input
+                id="nj-name"
+                placeholder="e.g. daily_briefing"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-cron">
+                  Cron <span className="font-normal text-muted-foreground">(min hr dom mon dow)</span>
+                </Label>
+                <Input
+                  id="nj-cron"
+                  className="font-mono"
+                  placeholder="30 7 * * 1-5"
+                  value={form.cron_expr}
+                  onChange={(e) => setForm((f) => ({ ...f, cron_expr: e.target.value }))}
+                />
+                {form.cron_expr.trim().split(/\s+/).length === 5 ? (
+                  <p className="text-xs text-muted-foreground">{parseCronHuman(form.cron_expr)}</p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-tz">Timezone</Label>
+                <Input
+                  id="nj-tz"
+                  value={form.timezone}
+                  onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-model">Model</Label>
+                <Select value={form.model} onValueChange={(v) => setForm((f) => ({ ...f, model: v as string }))}>
+                  <SelectTrigger id="nj-model" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODEL_OPTIONS.map((m) => (
+                      <SelectItem key={m} value={m}>{shortModel(m)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-kind">Task kind</Label>
+                <Select
+                  value={form.task_kind}
+                  onValueChange={(v) => setForm((f) => ({ ...f, task_kind: v as TaskKind }))}
+                >
+                  <SelectTrigger id="nj-kind" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TASK_KIND_OPTIONS.map((k) => (
+                      <SelectItem key={k} value={k}>{k}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {form.task_kind === 'claude_with_goal' ? (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nj-goal">
+                  Goal target <span className="font-normal text-muted-foreground">(£ per window — optional)</span>
+                </Label>
+                <Input
+                  id="nj-goal"
+                  type="number"
+                  min={0}
+                  step="any"
+                  placeholder="e.g. 40"
+                  value={form.goal_target_gbp}
+                  onChange={(e) => setForm((f) => ({ ...f, goal_target_gbp: e.target.value }))}
+                />
+              </div>
+            ) : null}
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nj-prompt">Prompt</Label>
+              <Textarea
+                id="nj-prompt"
+                rows={5}
+                placeholder="What should Archie do on each run?"
+                value={form.prompt}
+                onChange={(e) => setForm((f) => ({ ...f, prompt: e.target.value }))}
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="nj-enabled"
+                checked={form.enabled}
+                onCheckedChange={(v) => setForm((f) => ({ ...f, enabled: v }))}
+              />
+              <Label htmlFor="nj-enabled" className="text-sm font-normal text-muted-foreground">
+                Enabled — run on schedule
+              </Label>
+            </div>
+
+            {formError ? (
+              <p className="flex items-center gap-1.5 text-xs text-negative">
+                <XCircle className="size-3.5 shrink-0" />
+                {formError}
+              </p>
             ) : null}
           </div>
 
-          {/* Tab bar */}
-          <div className="jobs-content-tabs">
-            <button
-              className={`jobs-content-tab${contentTab === 'output' ? ' active' : ''}`}
-              onClick={() => setContentTab('output')}
-            >
-              Output
-            </button>
-            <button
-              className={`jobs-content-tab${contentTab === 'prompt' ? ' active' : ''}`}
-              onClick={() => setContentTab('prompt')}
-            >
-              Prompt
-            </button>
-          </div>
-
-          {/* Content area */}
-          <div className="jobs-content-area">
-            {contentTab === 'prompt' ? (
-              <div className="chat-markdown">
-                <RichMarkdown markdown={selectedTask.prompt} />
-              </div>
-            ) : (
-              <>
-                {activeArtifact?.loading && <p className="muted">Loading output...</p>}
-                {activeArtifact?.error && <p className="error-text">{activeArtifact.error}</p>}
-                {activeArtifact?.detail ? (
-                  <div className="chat-markdown">
-                    <RichMarkdown markdown={activeArtifact.detail.content} />
-                  </div>
-                ) : !activeArtifact?.loading && (
-                  <p className="jobs-no-output muted">No output available. Run the task to generate output.</p>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Run history */}
-          {taskLogs.length > 0 && (
-            <div className="jobs-run-history">
-              <h4>Run History</h4>
-              <div className="jobs-run-history-list">
-                {taskLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className={`jobs-run-history-entry${log.status === 'error' ? ' error' : ''}${selectedLogId === log.id ? ' active' : ''}${log.output_path ? ' clickable' : ''}`}
-                    onClick={() => log.output_path && void loadArtifactForLog(log)}
-                  >
-                    <span className="jobs-run-history-time">{dayjs(log.created_at).format('MMM D HH:mm')}</span>
-                    <span className={`sched-log-status ${log.status === 'ok' ? 'ok' : 'err'}`}>{log.status}</span>
-                    <span className="jobs-run-history-msg">{log.message}</span>
-                    {log.output_path && <span className="jobs-run-history-has-output" title="Has output">&#9679;</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-      </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={creating} onClick={() => setCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={creating} onClick={() => void handleCreate()}>
+              {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              Create job
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

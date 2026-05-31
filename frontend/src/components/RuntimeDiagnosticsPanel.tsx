@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+
+import { SectionCard } from '@/components/kit'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 import { getChatRuntime, getMcpHealth } from '../api/client'
 import type { ChatRuntimeInfo } from '../types'
@@ -25,9 +32,15 @@ function statusLabel(s: CapabilityStatus): string {
 }
 
 function statusDotClass(s: CapabilityStatus): string {
-  if (s === 'ok') return 'ok'
-  if (s === 'error') return 'error'
-  return 'warn'
+  if (s === 'ok') return 'bg-positive'
+  if (s === 'error') return 'bg-negative'
+  return 'bg-muted-foreground'
+}
+
+function statusTextClass(s: CapabilityStatus): string {
+  if (s === 'ok') return 'text-positive'
+  if (s === 'error') return 'text-negative'
+  return 'text-muted-foreground'
 }
 
 export function RuntimeDiagnosticsPanel({ onError }: Props) {
@@ -158,121 +171,168 @@ export function RuntimeDiagnosticsPanel({ onError }: Props) {
   const summaryOk = capabilities.every((item) => item.status === 'ok')
 
   return (
-    <section className="glass-card runtime-diag-card">
-      <div className="runtime-diag-head">
-        <h3>Runtime Diagnostics</h3>
-        <div className="runtime-diag-actions">
-          <span className={`status-chip ${summaryOk ? 'ok' : 'warn'}`}>
+    <SectionCard
+      title="Runtime Diagnostics"
+      description="Archie's live capability and tool surface"
+      action={
+        <>
+          <Badge variant={summaryOk ? 'secondary' : 'outline'} className="gap-1.5">
+            <span className={cn('size-1.5 rounded-full', summaryOk ? 'bg-positive' : 'bg-warning')} />
             {summaryOk ? 'All systems ready' : 'Missing capabilities'}
-          </span>
-          <button className="btn ghost" onClick={() => void checkHealth()} disabled={healthLoading}>
+          </Badge>
+          <Button variant="ghost" size="sm" onClick={() => void checkHealth()} disabled={healthLoading}>
             {healthLoading ? 'Checking MCP…' : 'Check MCP Health'}
-          </button>
-          <button className="btn ghost" onClick={() => void refresh()} disabled={busy}>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={busy}>
+            <RefreshCw className={busy ? 'animate-spin' : undefined} />
             {busy ? 'Refreshing…' : 'Refresh'}
-          </button>
-        </div>
-      </div>
-
-      <div className="runtime-cap-grid">
+          </Button>
+        </>
+      }
+      contentClassName="space-y-5"
+    >
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {capabilities.map((item) => (
-          <article key={item.label} className={`runtime-cap-item ${statusDotClass(item.status)}`}>
-            <div className="runtime-cap-title">
-              <span>{item.label}</span>
-              <span className={`runtime-cap-dot ${statusDotClass(item.status)}`}>{statusLabel(item.status)}</span>
+          <Card key={item.label} className="gap-2 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{item.label}</span>
+              <span className={cn('flex items-center gap-1.5 text-xs', statusTextClass(item.status))}>
+                <span className={cn('size-1.5 rounded-full', statusDotClass(item.status))} />
+                {statusLabel(item.status)}
+              </span>
             </div>
-            <p>{item.detail}</p>
-          </article>
+            <p className="text-xs text-muted-foreground">{item.detail}</p>
+          </Card>
         ))}
       </div>
 
       {runtime && (
         <>
-          <div className="runtime-meta-grid">
-            <div><span className="muted">Model</span><strong>{runtime.claude_model}</strong></div>
-            <div><span className="muted">Memory model</span><strong>{runtime.claude_memory_model}</strong></div>
-            <div><span className="muted">Memory strategy</span><strong>{runtime.memory_strategy || 'n/a'}</strong></div>
-            <div><span className="muted">Setting sources</span><strong>{runtime.setting_sources.join(', ') || 'none'}</strong></div>
-            <div><span className="muted">MCP servers</span><strong>{runtime.mcp_servers.join(', ') || 'none'}</strong></div>
-            <div><span className="muted">Last check</span><strong>{lastChecked ? dayjs(lastChecked).format('MMM D HH:mm:ss') : '—'}</strong></div>
-          </div>
+          <dl className="grid gap-x-6 gap-y-3 rounded-lg border border-border/60 bg-muted/30 p-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">Model</dt>
+              <dd className="font-mono text-sm">{runtime.claude_model}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">Memory model</dt>
+              <dd className="font-mono text-sm">{runtime.claude_memory_model}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">Memory strategy</dt>
+              <dd className="font-mono text-sm">{runtime.memory_strategy || 'n/a'}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">Setting sources</dt>
+              <dd className="font-mono text-sm">{runtime.setting_sources.join(', ') || 'none'}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">MCP servers</dt>
+              <dd className="font-mono text-sm">{runtime.mcp_servers.join(', ') || 'none'}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">Last check</dt>
+              <dd className="font-mono text-sm">
+                {lastChecked ? dayjs(lastChecked).format('MMM D HH:mm:ss') : '—'}
+              </dd>
+            </div>
+            <div className="flex flex-col gap-0.5 sm:col-span-2 lg:col-span-3">
+              <dt className="text-xs text-muted-foreground">CWD</dt>
+              <dd className="break-all font-mono text-sm">{runtime.cwd}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5 sm:col-span-2 lg:col-span-3">
+              <dt className="text-xs text-muted-foreground">Skills dir</dt>
+              <dd className="break-all font-mono text-sm">{runtime.skills_dir}</dd>
+            </div>
+            <div className="flex flex-col gap-0.5 sm:col-span-2 lg:col-span-3">
+              <dt className="text-xs text-muted-foreground">Memory file</dt>
+              <dd className="break-all font-mono text-sm">{runtime.memory_file}</dd>
+            </div>
+          </dl>
 
-          <div className="runtime-paths">
-            <p><span className="muted">CWD</span> {runtime.cwd}</p>
-            <p><span className="muted">Skills dir</span> {runtime.skills_dir}</p>
-            <p><span className="muted">Memory file</span> {runtime.memory_file}</p>
-          </div>
-
-          <div className="runtime-skills">
-            <div className="runtime-skills-head">
-              <h4>Discovered Skills</h4>
-              <span className="muted">{skills.length} loaded</span>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold tracking-tight">Discovered Skills</h3>
+              <span className="text-xs text-muted-foreground">{skills.length} loaded</span>
             </div>
             {skills.length === 0 ? (
-              <p className="runtime-empty">No skills discovered from current setting sources.</p>
+              <p className="text-sm text-muted-foreground">
+                No skills discovered from current setting sources.
+              </p>
             ) : (
-              <ul className="runtime-skill-list">
+              <div className="flex flex-wrap gap-1.5">
                 {skills.map((skill) => (
-                  <li key={skill.path}>
-                    <span className="runtime-skill-name">{skill.label}</span>
-                    <code>{skill.path}</code>
-                  </li>
+                  <Badge key={skill.path} variant="outline" title={skill.path}>
+                    {skill.label}
+                  </Badge>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
 
-          <div className="runtime-tools-toggle">
-            <button className="btn ghost" onClick={() => setShowTools((prev) => !prev)}>
+          <div className="space-y-3">
+            <Button variant="ghost" size="sm" onClick={() => setShowTools((prev) => !prev)}>
+              {showTools ? <ChevronDown /> : <ChevronRight />}
               {showTools ? 'Hide tool map' : 'Show tool map'}
-            </button>
-          </div>
+            </Button>
 
-          {showTools && (
-            <div className="runtime-tool-groups">
-              {([
-                ['core', 'Core'],
-                ['trading212', 'Trading 212'],
-                ['marketdata', 'Market Data'],
-                ['scheduler', 'Scheduler'],
-              ] as const).map(([key, label]) => {
-                const tools = groupedTools[key]
-                const healthy = isGroupHealthy(key)
-                const cleaned = tools
-                  .map((t) => t.replace(/^mcp__[^_]+__/, ''))
-                  .sort((a, b) => a.localeCompare(b))
-                return (
-                  <div key={key} className={healthy ? '' : 'unhealthy'}>
-                    <h4>
-                      {label}
-                      <span className="tool-group-count">{cleaned.length}</span>
-                      {!healthy && <span className="tool-group-badge">server error</span>}
+            {showTools && (
+              <div className="space-y-4">
+                {([
+                  ['core', 'Core'],
+                  ['trading212', 'Trading 212'],
+                  ['marketdata', 'Market Data'],
+                  ['scheduler', 'Scheduler'],
+                ] as const).map(([key, label]) => {
+                  const tools = groupedTools[key]
+                  const healthy = isGroupHealthy(key)
+                  const cleaned = tools
+                    .map((t) => t.replace(/^mcp__[^_]+__/, ''))
+                    .sort((a, b) => a.localeCompare(b))
+                  return (
+                    <div key={key} className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          {label}
+                        </h4>
+                        <Badge variant="secondary">{cleaned.length}</Badge>
+                        {!healthy && <Badge variant="destructive">server error</Badge>}
+                      </div>
+                      {cleaned.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">none</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          {cleaned.map((t) => (
+                            <Badge key={t} variant="outline" className="font-mono">
+                              {t}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                {groupedTools.other.length > 0 && (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Other MCP
                     </h4>
-                    {cleaned.length === 0 ? (
-                      <p className="muted">none</p>
-                    ) : (
-                      <ul className="tool-grid">
-                        {cleaned.map((t) => <li key={t}>{t}</li>)}
-                      </ul>
-                    )}
+                    <div className="flex flex-wrap gap-1.5">
+                      {groupedTools.other
+                        .map((t) => t.replace(/^mcp__[^_]+__/, ''))
+                        .sort((a, b) => a.localeCompare(b))
+                        .map((t) => (
+                          <Badge key={t} variant="outline" className="font-mono">
+                            {t}
+                          </Badge>
+                        ))}
+                    </div>
                   </div>
-                )
-              })}
-              {groupedTools.other.length > 0 && (
-                <div>
-                  <h4>Other MCP</h4>
-                  <ul className="tool-grid">
-                    {groupedTools.other
-                      .map((t) => t.replace(/^mcp__[^_]+__/, ''))
-                      .sort((a, b) => a.localeCompare(b))
-                      .map((t) => <li key={t}>{t}</li>)}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </>
       )}
-    </section>
+    </SectionCard>
   )
 }

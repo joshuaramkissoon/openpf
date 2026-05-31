@@ -28,7 +28,7 @@ class SchedulerTaskCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     cron_expr: str = Field(min_length=5, max_length=80)
     timezone: str = Field(default="Europe/London", max_length=64)
-    model: str = Field(default="claude-sonnet-4-20250514", max_length=64)
+    model: str = Field(default="claude-sonnet-4-6", max_length=64)
     prompt: str = Field(default="", max_length=12000)
     enabled: bool = True
     meta: dict[str, Any] = {}

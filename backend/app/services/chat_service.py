@@ -109,6 +109,9 @@ def _build_prompt(
             "Ground recommendations in the provided portfolio and risk context.",
             "Be concise and specific.",
             f"Today is {now.strftime('%A %d %B %Y')}. Use this when referencing dates and days of the week.",
+            "Portfolio context contains cost basis data only (quantity, average_price, total_cost). "
+            "It does NOT contain current prices. ALWAYS use marketdata MCP tools to get live prices. "
+            "Never quote a price without fetching it first. If you cannot fetch a price, say so.",
         ],
     }
     return json.dumps(payload, default=_json_default)
@@ -195,7 +198,7 @@ def build_prompt_for_session(
     redact_values: bool = False,
 ) -> str:
     history = list_messages(db, session.id, limit=80)
-    snapshot = get_portfolio_snapshot(db, account_kind=account_kind, display_currency=display_currency)
+    snapshot = get_portfolio_snapshot(db, account_kind=account_kind, display_currency=display_currency, strip_prices=True)
     if redact_values:
         snapshot = _redact_snapshot(snapshot)
     return _build_prompt(snapshot, history, content, account_kind, display_currency)

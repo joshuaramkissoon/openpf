@@ -185,6 +185,13 @@ export async function deleteChatSession(sessionId: string) {
   return data
 }
 
+export async function stopChat(sessionId: string) {
+  const { data } = await api.post<{ id: string; interrupted: boolean }>(
+    `/agent/chat/sessions/${sessionId}/stop`
+  )
+  return data
+}
+
 export async function sendChatMessage(
   sessionId: string,
   payload: {
@@ -415,10 +422,43 @@ export async function getSchedulerTaskLogs(taskId: string, limit = 40) {
   return data
 }
 
+export async function seedSchedulerDefaults() {
+  const { data } = await api.post<{ message: string }>('/scheduler/seed-defaults')
+  return data
+}
+
 export type ApiError = {
   response?: {
     data?: {
       detail?: string
     }
   }
+}
+
+export interface ResearchRunRequest {
+  objective: string
+  subject?: string
+  hypothesis?: string
+  horizon_days?: number
+  account_kind?: string
+  create_thesis?: boolean
+}
+
+export interface ResearchRunResult {
+  ok: boolean
+  markdown: string
+  verdict: 'support' | 'refute' | 'mixed' | string | null
+  confidence: number | null
+  summary: string | null
+  suggested_action: string | null
+  invalidation: string | null
+  artifact_path: string | null
+  thesis_id: string | null
+  error?: string | null
+}
+
+export async function runResearch(payload: ResearchRunRequest) {
+  // Analyst runs orchestrate subagents + tools + Kronos; allow several minutes.
+  const { data } = await api.post<ResearchRunResult>('/research/run', payload, { timeout: 280000 })
+  return data
 }

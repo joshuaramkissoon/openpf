@@ -29,12 +29,20 @@ from typing import Any, Literal
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from app.services.leveraged_registry import classify_leveraged
+
 # ──────────────────────────────────────────────
 # Logging (file-based — stdout is reserved for MCP protocol)
 # ──────────────────────────────────────────────
 
-_LOG_DIR = Path(os.environ.get("MCP_LOG_DIR", "/app/logs"))
-_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_DIR = Path(os.environ.get("MCP_LOG_DIR") or (Path(__file__).resolve().parent.parent / "logs"))
+try:
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    import tempfile
+
+    _LOG_DIR = Path(tempfile.gettempdir()) / "mypf-mcp-logs"
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("t212-mcp")
 logger.setLevel(logging.INFO)
@@ -253,6 +261,38 @@ def _validate_account(account: str) -> AccountKind:
 
 
 # ──────────────────────────────────────────────
+# Instrument metadata cache
+#
+# The /equity/positions endpoint returns NO human-readable name or underlying
+# — just the instrument code (e.g. "3NBIL_EQ"). The full name lives on the
+# bulk /equity/metadata/instruments endpoint, which returns EVERY instrument in
+# a single call. We fetch it once, cache it, and use it to attribute tickers to
+# names (so "3NBIL" → "Nebius 3x Long") instead of guessing from ticker letters.
+# ──────────────────────────────────────────────
+
+_INSTRUMENT_CACHE_TTL = 6 * 3600  # instrument lists change slowly
+_instrument_cache: dict[str, tuple[float, dict[str, dict]]] = {}
+
+
+async def _get_instrument_map(account: AccountKind) -> dict[str, dict]:
+    """Return {ticker: instrument_metadata} for all T212 instruments, cached."""
+    cached = _instrument_cache.get(account)
+    if cached and (time.time() - cached[0]) < _INSTRUMENT_CACHE_TTL:
+        return cached[1]
+    data = await _request("GET", "/equity/metadata/instruments", account, rate_group="instruments")
+    mapping: dict[str, dict] = {}
+    if isinstance(data, list):
+        for inst in data:
+            if not isinstance(inst, dict):
+                continue
+            ticker = str(inst.get("ticker", "")).strip()
+            if ticker:
+                mapping[ticker] = inst
+    _instrument_cache[account] = (time.time(), mapping)
+    return mapping
+
+
+# ──────────────────────────────────────────────
 # MCP Server & Tools
 # ──────────────────────────────────────────────
 
@@ -291,6 +331,33 @@ async def get_positions(account: str = "invest") -> str:
     acct = _validate_account(account)
     data = await _request("GET", "/equity/positions", acct, rate_group="positions")
     if isinstance(data, list):
+        # Attribute each opaque ticker to its real name/type from cached metadata
+        # so the agent never has to guess the underlying from ticker letters.
+        try:
+            imap = await _get_instrument_map(acct)
+        except Exception:  # noqa: BLE001 — names are best-effort; never block positions
+            imap = {}
+        for pos in data:
+            if not isinstance(pos, dict):
+                continue
+            # T212's newer shape nests {instrument: {ticker, name, currency}};
+            # older shape is flat. Surface ticker + name from either, and fill
+            # type/short_name from the metadata cache.
+            inst = pos.get("instrument") if isinstance(pos.get("instrument"), dict) else {}
+            code = str(pos.get("ticker") or inst.get("ticker") or "").strip()
+            meta = imap.get(code, {})
+            name = inst.get("name") or meta.get("name")
+            if code and not pos.get("ticker"):
+                pos["ticker"] = code
+            if name:
+                pos["name"] = name
+                lev = classify_leveraged(name)
+                if lev:
+                    pos["leverage"] = lev  # {factor, direction, underlying_name, underlying_ticker}
+            if meta.get("type"):
+                pos["instrument_type"] = meta.get("type")
+            if meta.get("shortName"):
+                pos["short_name"] = meta.get("shortName")
         return _fmt({"count": len(data), "positions": data})
     return _fmt(data)
 
@@ -464,23 +531,19 @@ async def search_instruments(query: str, account: str = "invest") -> str:
     """Search for tradeable instruments by name or ticker.
 
     Returns matching instruments with their codes, names, and types.
-    Rate limit: 1 request per 50 seconds.
+    Backed by a cached instrument list (fetched once per ~6h), so repeated
+    searches are instant and don't hit the per-call rate limit.
 
     Args:
         query: Search term (e.g. 'Apple', 'AAPL', 'Palantir')
         account: 'invest' or 'stocks_isa' (credentials for auth)
     """
     acct = _validate_account(account)
-    all_instruments = await _request(
-        "GET", "/equity/metadata/instruments", acct, rate_group="instruments"
-    )
-
-    if not isinstance(all_instruments, list):
-        return _fmt(all_instruments)
+    instruments = await _get_instrument_map(acct)
 
     q = query.strip().lower()
     matches = []
-    for inst in all_instruments:
+    for inst in instruments.values():
         name = str(inst.get("name", "")).lower()
         ticker = str(inst.get("ticker", "")).lower()
         short_name = str(inst.get("shortName", "")).lower()

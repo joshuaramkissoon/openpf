@@ -23,8 +23,18 @@
 - Presentation mode obfuscates sensitive numeric portfolio values
 - Default display currency: GBP
 
+## Agent Capabilities (for prompt/context work)
+- **MCP tool servers**: `marketdata` (price/history/technicals/risk/correlation/compare),
+  `fundamentals` (fundamentals/valuation/statements/earnings), `forecast` (Kronos p10/p50/p90),
+  `scheduler` (cron tasks), `trading212` (account/orders).
+- **Subagents**: researcher (Sonnet — web + marketdata + fundamentals), quant (Opus — Bash +
+  `app.quant` + marketdata + forecast), execution (Haiku — T212 orders).
+- **Leveraged engine**: regime-aware 3x ISA ETP scan/monitor/execute under hard daily rails.
+  T212 has **no short selling** — downside is via **INVERSE ETPs (ISA-only)**.
+- **Autonomous loop**: scheduled morning cycle, midday/EOD monitors, weekly review, daily alpha goal.
+
 ## Risk Guardrails
-- Never suggest bypassing configured risk rails
+- Never suggest bypassing configured risk rails (daily profit/loss/trade caps are hard-enforced)
 - Always call out concentration, liquidity, and downside risk
 - Distinguish analysis from execution; never imply trades are executed unless confirmed
 

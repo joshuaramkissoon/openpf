@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -8,16 +9,21 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.main import app
 
 
-client = TestClient(app)
+@pytest.fixture()
+def client():
+    # Use TestClient as a context manager so the app lifespan runs
+    # (init_db creates the tables) — exactly how uvicorn starts the app.
+    with TestClient(app) as test_client:
+        yield test_client
 
 
-def test_health():
+def test_health(client):
     response = client.get('/health')
     assert response.status_code == 200
     assert response.json()['status'] == 'ok'
 
 
-def test_end_to_end_flow():
+def test_end_to_end_flow(client):
     refresh = client.post('/api/portfolio/refresh')
     assert refresh.status_code == 200
 

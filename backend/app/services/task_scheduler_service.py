@@ -19,8 +19,10 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
 from app.services.claude_sdk_config import (
-    build_security_hooks, build_subagents, parse_setting_sources, project_root, resolve_sdk_cwd,
+    build_security_hooks, build_subagents, configure_sdk_auth,
+    parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS,
 )
 from app.services import costs_service
 from app.services.config_store import ConfigStore
@@ -35,15 +37,21 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "lev_morning_scan",
         "cron_expr": "30 7 * * 1-5",
         "timezone": "Europe/London",
-        "model": settings.claude_model,
+        "model": settings.claude_agent_model,
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_cycle",
-            "description": "Morning leveraged scan + entries",
+            "description": "Morning leveraged cycle (monitor + scan) → markdown report",
         },
+        # NOTE: leveraged_cycle is a deterministic engine run; this prompt text
+        # is NOT sent to an LLM. The scheduler renders the engine output as a
+        # human-readable markdown report (see _render_leveraged_cycle_md), so a
+        # readable artifact is produced even when no setups qualify.
         "prompt": (
-            "Run leveraged cycle: monitor open trades, scan new setups, and execute only within configured rails. "
-            "If policy rails need adjustment, include JSON {\"policy_updates\": {...}} in your output."
+            "Deterministic leveraged morning cycle: monitor open trades against stop/take-profit/time rules, "
+            "then scan the configured universe for new setups within rails. Entries execute only if "
+            "auto-execute is enabled and rails permit; otherwise setups are logged as proposals. "
+            "Output is a rendered markdown report (monitor + scan), not raw JSON."
         ),
     },
     {
@@ -62,7 +70,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "lev_eod_close",
         "cron_expr": "30 15 * * 1-5",
         "timezone": "Europe/London",
-        "model": settings.claude_model,
+        "model": settings.claude_agent_model,
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_monitor",
@@ -74,7 +82,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "weekly_review",
         "cron_expr": "0 10 * * 0",
         "timezone": "Europe/London",
-        "model": settings.claude_model,
+        "model": settings.claude_agent_model,
         "enabled": True,
         "meta": {
             "task_kind": "claude",
@@ -97,6 +105,29 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "include a JSON block with key policy_updates.\n\n"
             "Format your response as a clean, readable markdown report with headers and tables. "
             "This is your final artifact — make it polished and information-dense, not a thinking log."
+        ),
+    },
+    {
+        "name": "daily_alpha_goal",
+        "cron_expr": "45 7 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_agent_model,
+        "enabled": False,
+        "meta": {
+            "task_kind": "claude_with_goal",
+            "description": "Daily alpha goal — scan + propose entries toward a £/day target",
+            "goal": {"target_gbp": 40.0, "loss_limit_gbp": 60.0, "max_trades": 3, "window": "day"},
+        },
+        "prompt": (
+            "Pursue today's profit target within the GOAL CONTEXT and risk rails above. Steps:\n"
+            "1. Check today's realized P&L, open positions, and trades placed so far (T212 + marketdata tools).\n"
+            "2. If the target is already hit or a limit is breached, STOP — report status only.\n"
+            "3. Otherwise scan the leveraged universe with the marketdata tools (technicals, risk metrics, "
+            "compare_assets) and a Kronos forecast on the top candidates. Delegate heavier quant work to the "
+            "'quant' subagent.\n"
+            "4. Rank the best 1-2 entries with hypothesis, forecast cone, sizing within rails, and invalidation. "
+            "Propose them as intents — DO NOT execute unless auto-execute is enabled and rails permit.\n"
+            "Output a concise markdown report ending with a JSON block {\"proposals\": [...]}."
         ),
     },
 ]
@@ -171,23 +202,9 @@ def list_task_logs(db: Session, task_id: str, limit: int = 30) -> list[dict[str,
 
 
 def _build_sdk_env() -> dict[str, str]:
-    env: dict[str, str] = {}
-
-    def _pick(key: str, archie_val: str, fallback_val: str) -> None:
-        val = (archie_val or fallback_val or "").strip()
-        if val:
-            env[key] = val
-
-    env["T212_BASE_ENV"] = settings.t212_base_env
-    _pick("T212_API_KEY_INVEST", settings.archie_t212_api_key_invest, settings.t212_api_key_invest)
-    _pick("T212_API_SECRET_INVEST", settings.archie_t212_api_secret_invest, settings.t212_api_secret_invest)
-    _pick("T212_INVEST_API_KEY", settings.archie_t212_api_key_invest, settings.t212_invest_api_key)
-    _pick("T212_INVEST_API_SECRET", settings.archie_t212_api_secret_invest, settings.t212_invest_api_secret)
-    _pick("T212_API_KEY_STOCKS_ISA", settings.archie_t212_api_key_stocks_isa, settings.t212_api_key_stocks_isa)
-    _pick("T212_API_SECRET_STOCKS_ISA", settings.archie_t212_api_secret_stocks_isa, settings.t212_api_secret_stocks_isa)
-    _pick("T212_STOCKS_ISA_API_KEY", settings.archie_t212_api_key_stocks_isa, settings.t212_stocks_isa_api_key)
-    _pick("T212_STOCKS_ISA_API_SECRET", settings.archie_t212_api_secret_stocks_isa, settings.t212_stocks_isa_api_secret)
-    return env
+    """T212 creds for the MCP subprocesses, DB-sourced (in sync with the
+    dashboard). Credentials live in subprocess memory only."""
+    return resolve_t212_env()
 
 
 def _extract_text_from_sdk_message(message: Any) -> str:
@@ -231,12 +248,10 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
+def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-    env_key = (settings.anthropic_api_key or "").strip()
-    if env_key:
-        os.environ.setdefault("ANTHROPIC_API_KEY", env_key)
+    configure_sdk_auth()
 
     cwd = resolve_sdk_cwd()
     setting_sources = parse_setting_sources(settings.claude_setting_sources, require_project=True)
@@ -249,6 +264,7 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
     t212_script = _MCP_SERVER_DIR / "t212.py"
     yfinance_script = _MCP_SERVER_DIR / "marketdata.py"
     scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
+    fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
     if t212_script.is_file():
         mcp_servers["trading212"] = {
             "type": "stdio",
@@ -291,6 +307,14 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
             "env": _mcp_env,
         }
         allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
+    if fundamentals_script.is_file():
+        mcp_servers["fundamentals"] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [str(fundamentals_script)],
+            "env": _mcp_env,
+        }
+        allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
 
     options = ClaudeAgentOptions(
         system_prompt={
@@ -326,7 +350,8 @@ def _run_claude_prompt(task: ScheduledTask) -> tuple[str, dict[str, Any], dict]:
         # tool calls, not the polished final report.
         last_text = ""
         cost_info: dict = {}
-        async for message in query(prompt=task.prompt, options=options):
+        _prompt = f"{goal_context.strip()}\n\n{task.prompt}" if goal_context.strip() else task.prompt
+        async for message in query(prompt=_prompt, options=options):
             if isinstance(message, ResultMessage):
                 cost_info = {
                     "total_cost_usd": getattr(message, "total_cost_usd", None),
@@ -379,29 +404,245 @@ def _record_log(db: Session, task: ScheduledTask, *, status: str, message: str, 
     return row
 
 
+def _build_goal_context(db: Session, task: ScheduledTask) -> str:
+    """Build a GOAL CONTEXT block for ``claude_with_goal`` scheduled tasks.
+
+    Combines the leveraged session rails (config) with any per-task goal
+    override in ``task.meta['goal']`` and instructs the agent to reason about
+    trajectory toward the target and respect hard daily limits.
+    """
+    try:
+        policy = ConfigStore(db).get_leveraged()
+    except Exception:  # noqa: BLE001
+        policy = {}
+    goal = (task.meta or {}).get("goal") or {}
+    if not isinstance(goal, dict):
+        goal = {}
+
+    def _pick_num(*vals: Any) -> float:
+        for v in vals:
+            try:
+                if v is not None and float(v) != 0.0:
+                    return float(v)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    target = _pick_num(goal.get("target_gbp"), policy.get("daily_profit_target_gbp"))
+    loss_limit = _pick_num(goal.get("loss_limit_gbp"), policy.get("daily_loss_limit_gbp"))
+    try:
+        max_trades = int(goal.get("max_trades") or policy.get("max_daily_trades") or 0)
+    except (TypeError, ValueError):
+        max_trades = 0
+    window = str(goal.get("window") or "day").strip() or "day"
+    notes = str(goal.get("notes") or "").strip()
+
+    per_pos = float(policy.get("per_position_notional", 200.0) or 200.0)
+    max_exp = float(policy.get("max_total_exposure", 600.0) or 600.0)
+    max_open = int(policy.get("max_open_positions", 3) or 3)
+    tp = float(policy.get("take_profit_pct", 0.08) or 0.08)
+    sl = float(policy.get("stop_loss_pct", 0.05) or 0.05)
+    today = datetime.now(tz=timezone.utc).strftime("%A %d %B %Y")
+
+    lines = [
+        "## GOAL CONTEXT — read before acting",
+        f"Today: {today}. This is a goal-driven session: capture small, consistent alpha within hard rails.",
+    ]
+    if target > 0:
+        lines.append(
+            f"- PROFIT TARGET: £{target:,.2f} per {window}. Once today's REALIZED P&L >= this, STOP opening "
+            "new positions (managing/closing existing ones is fine)."
+        )
+    else:
+        lines.append("- PROFIT TARGET: none set — optimise risk-adjusted return without overtrading.")
+    if loss_limit > 0:
+        lines.append(
+            f"- LOSS LIMIT: £{loss_limit:,.2f} per {window}. If today's REALIZED P&L <= -£{loss_limit:,.2f}, "
+            "STOP for the day — no new entries."
+        )
+    if max_trades > 0:
+        lines.append(f"- MAX NEW TRADES today: {max_trades}. Do not exceed.")
+    lines.append(
+        f"- EXPOSURE RAILS: <= £{max_exp:,.0f} total, <= £{per_pos:,.0f} per position, <= {max_open} open at "
+        f"once. Entries use +{tp * 100:.0f}% take-profit / -{sl * 100:.0f}% stop-loss."
+    )
+    lines.append(
+        "Before deciding: use your tools to determine TODAY's realized P&L, current open positions, and how "
+        "many trades you have already placed today. Reason about TRAJECTORY toward the target, not statelessly. "
+        "If any limit is already hit, do NOT open new positions — just report status."
+    )
+    lines.append(
+        "At the end, append ONE status line (date | realized P&L | trades today | open exposure | action taken) "
+        "to memory/leveraged/daily-goal.md (create it if absent) so future runs have continuity."
+    )
+    if notes:
+        lines.append(f"Operator notes: {notes}")
+    return "\n".join(lines)
+
+
+def _fmt_pct(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:+.2f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_gbp(value: Any) -> str:
+    try:
+        return f"£{float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _render_leveraged_monitor_md(result: dict[str, Any]) -> str:
+    """Render monitor_open_trades output as a human-readable markdown report."""
+    checked = int(result.get("checked", 0) or 0)
+    closed = int(result.get("closed", 0) or 0)
+    items = result.get("items") or []
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    lines = [
+        "# Leveraged Monitor",
+        f"_{stamp}_",
+        "",
+        f"**Open trades checked:** {checked} · **Closed this run:** {closed}",
+        "",
+    ]
+    if not items:
+        lines.append("No open leveraged positions to monitor. Nothing to do.")
+        return "\n".join(lines) + "\n"
+
+    lines.append("| Symbol | Current price | Return | Action |")
+    lines.append("|---|---|---|---|")
+    for it in items:
+        reason = it.get("close_reason")
+        action = f"CLOSED ({reason})" if reason else "held"
+        price = it.get("current_price")
+        price_str = f"{float(price):,.2f}" if isinstance(price, (int, float)) else "—"
+        lines.append(
+            f"| {it.get('symbol', '—')} | {price_str} | {_fmt_pct(it.get('return_pct'))} | {action} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_leveraged_scan_md(result: dict[str, Any]) -> str:
+    """Render scan_signals output as a human-readable markdown report.
+
+    Always produces a readable artifact — even when zero setups qualify, it
+    states what was checked and why nothing was proposed (the recurring
+    lessons.md complaint about raw-JSON 'nothing found' dumps).
+    """
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    created = int(result.get("created", 0) or 0)
+    executed = int(result.get("executed", 0) or 0)
+    signals = result.get("signals") or []
+    failures = result.get("failures") or []
+    reason = result.get("reason")
+    policy = result.get("policy") or {}
+
+    lines = [
+        "# Leveraged Scan",
+        f"_{stamp}_",
+        "",
+        f"**New setups proposed:** {created} · **Auto-executed:** {executed} · "
+        f"**Open positions:** {result.get('open_positions', 0)} · "
+        f"**Open exposure:** {_fmt_gbp(result.get('open_exposure'))}",
+        "",
+    ]
+
+    if reason:
+        lines.append(f"> No new entries: {reason}.")
+        lines.append("")
+
+    if signals:
+        lines.append("## Proposed setups")
+        lines.append("")
+        lines.append("| Symbol | Direction | Ref price | Notional | Conf. | Exp. edge | SL / TP |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for s in signals:
+            sl_tp = f"{_fmt_pct(-abs(float(s.get('stop_loss_pct') or 0)))} / {_fmt_pct(s.get('take_profit_pct'))}"
+            ref = s.get("reference_price")
+            ref_str = f"{float(ref):,.2f}" if isinstance(ref, (int, float)) else "—"
+            lines.append(
+                f"| {s.get('symbol', '—')} | {s.get('direction', '—')} | {ref_str} | "
+                f"{_fmt_gbp(s.get('target_notional'))} | "
+                f"{float(s.get('confidence') or 0):.0%} | {_fmt_pct(s.get('expected_edge'))} | {sl_tp} |"
+            )
+            rationale = str(s.get("rationale") or "").strip()
+            if rationale:
+                lines.append(f"|  | _{rationale}_ |  |  |  |  |  |")
+        lines.append("")
+    elif not reason:
+        lines.append(
+            "No setups qualified this run — the scanned universe showed no entries meeting the "
+            "momentum/technical thresholds. Nothing proposed."
+        )
+        lines.append("")
+
+    if failures:
+        lines.append("## Data / execution issues")
+        for f in failures:
+            lines.append(f"- {f}")
+        lines.append("")
+
+    lines.append("## Rails in force")
+    lines.append(
+        f"- Per-position {_fmt_gbp(policy.get('per_position_notional'))} · "
+        f"max total {_fmt_gbp(policy.get('max_total_exposure'))} · "
+        f"max open {policy.get('max_open_positions', '—')} · "
+        f"auto-execute {'ON' if policy.get('auto_execute_enabled') else 'OFF'}"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _render_leveraged_cycle_md(result: dict[str, Any]) -> str:
+    """Render run_leveraged_cycle (monitor + scan) as one markdown report."""
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    monitor = result.get("monitor") or {}
+    scan = result.get("scan") or {}
+
+    parts = [
+        "# Leveraged Morning Cycle",
+        f"_{stamp}_",
+        "",
+        "Deterministic engine run: monitor open trades, then scan for new setups within rails. "
+        "Entries execute only if auto-execute is enabled and rails permit; otherwise they are proposals.",
+        "",
+        "---",
+        "",
+        _render_leveraged_monitor_md(monitor),
+        "",
+        "---",
+        "",
+        _render_leveraged_scan_md(scan),
+    ]
+    return "\n".join(parts)
+
+
 def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any], str | None, dict]:
     kind = str((task.meta or {}).get("task_kind") or "claude").strip().lower()
     description = str((task.meta or {}).get("description") or task.name)
 
     if kind == "leveraged_cycle":
         result = run_leveraged_cycle(db, source_task_id=task.id)
-        content = "# Leveraged Cycle\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
+        content = _render_leveraged_cycle_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
     if kind == "leveraged_scan":
         result = scan_signals(db, source_task_id=task.id)
-        content = "# Leveraged Scan\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
+        content = _render_leveraged_scan_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
     if kind == "leveraged_monitor":
         result = monitor_open_trades(db)
-        content = "# Leveraged Monitor\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```\n"
+        content = _render_leveraged_monitor_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
-    output, meta, cost_info = _run_claude_prompt(task)
+    goal_context = _build_goal_context(db, task) if kind == "claude_with_goal" else ""
+    output, meta, cost_info = _run_claude_prompt(task, goal_context=goal_context)
     path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
 
     policy_updates = None

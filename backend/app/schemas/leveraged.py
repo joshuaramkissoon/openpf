@@ -15,6 +15,9 @@ class LeveragedPolicy(BaseModel):
     max_open_positions: int = Field(ge=1)
     take_profit_pct: float = Field(ge=0)
     stop_loss_pct: float = Field(ge=0)
+    daily_profit_target_gbp: float = Field(default=0.0, ge=0)
+    daily_loss_limit_gbp: float = Field(default=0.0, ge=0)
+    max_daily_trades: int = Field(default=0, ge=0)
     close_time_uk: str
     allow_overnight: bool
     scan_symbols: list[str]
@@ -29,6 +32,9 @@ class LeveragedPolicyPatch(BaseModel):
     max_open_positions: int | None = None
     take_profit_pct: float | None = None
     stop_loss_pct: float | None = None
+    daily_profit_target_gbp: float | None = Field(default=None, ge=0)
+    daily_loss_limit_gbp: float | None = Field(default=None, ge=0)
+    max_daily_trades: int | None = Field(default=None, ge=0)
     close_time_uk: str | None = None
     allow_overnight: bool | None = None
     scan_symbols: list[str] | None = None

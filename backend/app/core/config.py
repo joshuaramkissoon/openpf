@@ -54,7 +54,12 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
-    claude_model: str = Field(default="claude-sonnet-4-20250514", alias="CLAUDE_MODEL")
+    claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
+    claude_model: str = Field(default="claude-sonnet-4-6", alias="CLAUDE_MODEL")
+    # Reasoning-heavy runtimes default to Opus 4.8; routine/structured work
+    # (and any task with no explicit model) falls back to claude_model.
+    claude_chat_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_CHAT_MODEL")
+    claude_agent_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_AGENT_MODEL")
     claude_memory_model: str = Field(default="claude-haiku-4-5", alias="CLAUDE_MEMORY_MODEL")
     claude_setting_sources: str = Field(default="project", alias="CLAUDE_SETTING_SOURCES")
     claude_project_cwd: str = Field(default=".claude/runtime", alias="CLAUDE_PROJECT_CWD")
@@ -74,6 +79,11 @@ class Settings(BaseSettings):
 
     newsapi_api_key: str = Field(default="", alias="NEWSAPI_API_KEY")
     x_api_bearer_token: str = Field(default="", alias="X_API_BEARER_TOKEN")
+
+    # Optional upgrade path for fundamentals data. NOT used today — the
+    # fundamentals MCP server currently runs on keyless yfinance. Present so a
+    # future switch to the Financial Datasets API needs no schema change.
+    financial_datasets_api_key: str = Field(default="", alias="FINANCIAL_DATASETS_API_KEY")
 
     @property
     def cors_origins_list(self) -> list[str]:

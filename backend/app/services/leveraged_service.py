@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, time, timezone
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -64,6 +65,151 @@ def _audit_log(entry: dict[str, Any]) -> str:
     content += "\n".join(lines)
     path.write_text(content, encoding="utf-8")
     return str(path)
+
+
+# ── ETP → underlying map ──────────────────────────────────────────────────
+# Maps each leveraged/inverse ETP ticker to the UNDERLYING asset's tradable
+# proxy symbol (used for technicals) and a stable underlying KEY (used for
+# concentration accounting — long and inverse ETPs on the same name share a
+# key so we cap total exposure to that underlying regardless of direction).
+# NOTE: this static map is a stopgap. The authoritative source is now the live
+# T212 instrument metadata (see app.services.leveraged_registry, which derives
+# factor/direction/underlying from the instrument name); the regime/universe
+# engine will replace this hardcoded map with the derived registry.
+#
+# IMPORTANT: inverse ("short") ETPs provide DOWNSIDE exposure to the
+# underlying and are ISA-only. T212 does NOT support short selling; buying an
+# inverse ETP is the sanctioned way to express a bearish view. The leverage
+# direction is reflected by ``_is_short_product``; the underlying KEY is the
+# same for the long and inverse product on a given name.
+@dataclass(frozen=True)
+class _Underlying:
+    key: str          # stable underlying identity (for concentration accounting)
+    proxy: str        # symbol to fetch the underlying's technicals from
+    inverse: bool     # True if this ETP is an inverse/short product
+
+
+_ETP_UNDERLYING: dict[str, _Underlying] = {
+    # Index — long
+    "3USL": _Underlying("SP500", "SPY", False),
+    "3LUS": _Underlying("SP500", "SPY", False),
+    "QQQ3": _Underlying("NASDAQ100", "QQQ", False),
+    "LQQ3": _Underlying("NASDAQ100", "QQQ", False),
+    "3UKL": _Underlying("FTSE100", "^FTSE", False),
+    "3GOL": _Underlying("GOLD", "GLD", False),
+    "3LGO": _Underlying("GOLD", "GLD", False),
+    "3SLV": _Underlying("SILVER", "SLV", False),
+    "3BRL": _Underlying("BRENT", "BZ=F", False),
+    "3BLR": _Underlying("BRENT", "BZ=F", False),
+    "3NGL": _Underlying("NATGAS", "NG=F", False),
+    "AI3": _Underlying("AI_INDEX", "AI3.L", False),
+    "GPT3": _Underlying("AI_INDEX", "GPT3.L", False),
+    # Index — inverse / short
+    "3ULS": _Underlying("SP500", "SPY", True),
+    "3USS": _Underlying("SP500", "SPY", True),
+    "QQQS": _Underlying("NASDAQ100", "QQQ", True),
+    "3SGO": _Underlying("GOLD", "GLD", True),
+    "3GOS": _Underlying("GOLD", "GLD", True),
+    "3BSR": _Underlying("BRENT", "BZ=F", True),
+    "3BRS": _Underlying("BRENT", "BZ=F", True),
+    "3LGS": _Underlying("NATGAS", "NG=F", True),
+    "3NGS": _Underlying("NATGAS", "NG=F", True),
+    "3SDE": _Underlying("DAX", "^GDAXI", True),
+    "MG3S": _Underlying("MAG7", "QQQ", True),
+    "3M7S": _Underlying("MAG7", "QQQ", True),
+    "3SSM": _Underlying("SEMIS", "SOXX", True),
+    "SC3S": _Underlying("SEMIS", "SOXX", True),
+    "UL3S": _Underlying("US30Y", "^TYX", True),
+    "3TYS": _Underlying("US10Y", "^TNX", True),
+    # Single stock — long
+    "3PLT": _Underlying("PLTR", "PLTR", False),
+    "3TSM": _Underlying("TSM", "TSM", False),
+    "3MSF": _Underlying("MSFT", "MSFT", False),
+    "AMD3": _Underlying("AMD", "AMD", False),
+    "3NVD": _Underlying("NVDA", "NVDA", False),
+    "3CON": _Underlying("COIN", "COIN", False),
+    "3BAB": _Underlying("BABA", "BABA", False),
+    "3AVG": _Underlying("AVGO", "AVGO", False),
+    "3ASM": _Underlying("ASML", "ASML", False),
+    "NFL3": _Underlying("NFLX", "NFLX", False),
+    # Single stock — inverse / short
+    "3STS": _Underlying("TSLA", "TSLA", True),
+    "3SNV": _Underlying("NVDA", "NVDA", True),
+    "3SMS": _Underlying("MSFT", "MSFT", True),
+    "3SAM": _Underlying("AMD", "AMD", True),
+    "3SPL": _Underlying("PLTR", "PLTR", True),
+    "3SNP": _Underlying("NFLX", "NFLX", True),
+    "3SNPL": _Underlying("NFLX", "NFLX", True),
+}
+
+
+def _underlying_for(symbol: str) -> _Underlying | None:
+    return _ETP_UNDERLYING.get(str(symbol or "").strip().upper())
+
+
+# ── Concentration caps (configurable; sane defaults) ────────────────────────
+# Fraction of total leveraged book that a single UNDERLYING may represent.
+# Mirrors the prose caps in memory/constraints.md (PLTR≈29% / NVDA≈25%).
+# Overridable via policy["concentration_caps"] = {"PLTR": 0.29, ...}.
+DEFAULT_CONCENTRATION_CAP = 0.40
+CONCENTRATION_CAPS: dict[str, float] = {
+    "PLTR": 0.29,
+    "NVDA": 0.25,
+}
+
+
+def _concentration_cap_for(underlying_key: str, policy: dict[str, Any]) -> float:
+    overrides = policy.get("concentration_caps") or {}
+    if isinstance(overrides, dict) and underlying_key in overrides:
+        try:
+            return _clamp(float(overrides[underlying_key]), 0.01, 1.0)
+        except (TypeError, ValueError):
+            pass
+    return CONCENTRATION_CAPS.get(underlying_key, DEFAULT_CONCENTRATION_CAP)
+
+
+def _concentration_check(
+    db: Session,
+    *,
+    symbol: str,
+    add_notional: float,
+    policy: dict[str, Any],
+) -> str | None:
+    """Return a block reason if opening would push an underlying past its cap.
+
+    Computes per-underlying leveraged exposure from OPEN ``LeveragedTrade``
+    rows (long + inverse on the same name both count toward that underlying's
+    concentration) plus the proposed ``add_notional``. Uses entry notional as
+    the exposure proxy — consistent with ``_exposure``/``max_total_exposure``.
+    Returns ``None`` if within cap or the ETP's underlying is unknown.
+    """
+    under = _underlying_for(symbol)
+    if under is None:
+        # Unknown product → cannot attribute to an underlying; don't block here.
+        return None
+
+    open_trades = _open_trades(db)
+    existing = float(sum(max(float(t.entry_notional or 0.0), 0.0) for t in open_trades))
+
+    by_underlying = 0.0
+    for t in open_trades:
+        t_under = _underlying_for(t.symbol)
+        if t_under is not None and t_under.key == under.key:
+            by_underlying += max(float(t.entry_notional or 0.0), 0.0)
+
+    projected_underlying = by_underlying + max(add_notional, 0.0)
+    projected_total = existing + max(add_notional, 0.0)
+    if projected_total <= 0:
+        return None
+
+    weight = projected_underlying / projected_total
+    cap = _concentration_cap_for(under.key, policy)
+    if weight > cap:
+        return (
+            f"concentration cap exceeded for {under.key}: would be "
+            f"{weight * 100:.1f}% of leveraged book (cap {cap * 100:.0f}%)"
+        )
+    return None
 
 
 def _is_short_product(symbol: str) -> bool:
@@ -138,6 +284,11 @@ def _normalize_policy(value: dict[str, Any]) -> dict[str, Any]:
     policy["max_open_positions"] = int(_clamp(float(policy.get("max_open_positions", 3)), 1, 20))
     policy["take_profit_pct"] = _clamp(float(policy.get("take_profit_pct", 0.08)), 0.01, 0.4)
     policy["stop_loss_pct"] = _clamp(float(policy.get("stop_loss_pct", 0.05)), 0.005, 0.3)
+    # Daily session rails (0 = disabled/unlimited). Previously dropped here, so a
+    # policy round-trip silently erased them; carry them through and clamp ≥ 0.
+    policy["daily_profit_target_gbp"] = max(0.0, float(policy.get("daily_profit_target_gbp", 0.0)))
+    policy["daily_loss_limit_gbp"] = max(0.0, float(policy.get("daily_loss_limit_gbp", 0.0)))
+    policy["max_daily_trades"] = max(0, int(float(policy.get("max_daily_trades", 0))))
     policy["allow_overnight"] = bool(policy.get("allow_overnight", False))
     policy["close_time_uk"] = _sanitize_close_time(str(policy.get("close_time_uk", "15:30")))
     policy["scan_symbols"] = _dedupe_symbols(list(policy.get("scan_symbols", [])))
@@ -199,6 +350,76 @@ def _current_return_pct(trade: LeveragedTrade, current_price: float) -> float:
     return (current_price / entry) - 1.0
 
 
+def _uk_day_bounds_utc(now_uk: datetime | None = None) -> tuple[datetime, datetime]:
+    """Return [start, end) of *today's* UK trading day expressed as naive UTC.
+
+    Trade timestamps are stored as naive UTC (see ``_utcnow``), so we convert
+    the UK midnight boundaries to UTC for comparison.
+    """
+    now_uk = now_uk or datetime.now(tz=UK_TZ)
+    start_uk = now_uk.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_uk = start_uk + timedelta(days=1)
+    start_utc = start_uk.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_uk.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, end_utc
+
+
+def _daily_realized_pnl(db: Session) -> float:
+    """Sum of realized P&L (£) for leveraged trades CLOSED today (UK session)."""
+    start_utc, end_utc = _uk_day_bounds_utc()
+    rows = db.execute(
+        select(LeveragedTrade).where(
+            LeveragedTrade.status == "closed",
+            LeveragedTrade.exited_at.is_not(None),
+            LeveragedTrade.exited_at >= start_utc,
+            LeveragedTrade.exited_at < end_utc,
+        )
+    ).scalars().all()
+    return float(sum(float(r.pnl_value or 0.0) for r in rows))
+
+
+def _daily_entry_count(db: Session) -> int:
+    """Number of leveraged positions ENTERED today (UK session)."""
+    start_utc, end_utc = _uk_day_bounds_utc()
+    rows = db.execute(
+        select(LeveragedTrade).where(
+            LeveragedTrade.entered_at >= start_utc,
+            LeveragedTrade.entered_at < end_utc,
+        )
+    ).scalars().all()
+    return int(len(rows))
+
+
+def _daily_rail_block_reason(db: Session, policy: dict[str, Any]) -> str | None:
+    """Return a human-readable reason if a daily session rail blocks NEW entries.
+
+    Rails (0 = disabled):
+    - realized P&L ≥ daily_profit_target_gbp  → stop opening for the day (target hit)
+    - realized P&L ≤ -daily_loss_limit_gbp    → stop opening for the day (loss limit)
+    - entries today ≥ max_daily_trades        → stop opening (trade cap)
+
+    These gate ENTRIES only. Exits/monitoring are never blocked (we must always
+    be able to cut a losing position).
+    """
+    target = float(policy.get("daily_profit_target_gbp", 0.0) or 0.0)
+    loss_limit = float(policy.get("daily_loss_limit_gbp", 0.0) or 0.0)
+    max_trades = int(policy.get("max_daily_trades", 0) or 0)
+
+    if max_trades > 0:
+        entries = _daily_entry_count(db)
+        if entries >= max_trades:
+            return f"daily trade cap reached ({entries}/{max_trades})"
+
+    if target > 0 or loss_limit > 0:
+        realized = _daily_realized_pnl(db)
+        if target > 0 and realized >= target:
+            return f"daily profit target reached (realized £{realized:.2f} ≥ £{target:.2f})"
+        if loss_limit > 0 and realized <= -abs(loss_limit):
+            return f"daily loss limit hit (realized £{realized:.2f} ≤ -£{loss_limit:.2f})"
+
+    return None
+
+
 def _signal_risk_flag(confidence: float, expected_edge: float) -> str:
     if confidence >= 0.8 and expected_edge >= 0.01:
         return "high"
@@ -208,42 +429,96 @@ def _signal_risk_flag(confidence: float, expected_edge: float) -> str:
 
 
 def _build_signal(symbol: str, policy: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    tech = get_technicals(symbol, period="6mo")
-    price = float(tech.get("price") or 0.0)
-    rsi = float(tech.get("rsi_14") or 50.0)
-    macd = float(tech.get("macd") or 0.0)
-    macd_signal = float(tech.get("macd_signal") or 0.0)
-    sma20 = float(tech.get("sma_20") or 0.0)
-    sma50 = float(tech.get("sma_50") or 0.0)
-    trend = str(tech.get("trend_direction") or "mixed")
+    """Build a per-product entry signal.
+
+    Direction logic is driven by the UNDERLYING'S technicals, NOT the ETP's own
+    price action:
+
+      * A LONG-leveraged ETP is bought when the UNDERLYING is in an uptrend.
+      * An INVERSE ("short") ETP is bought when the UNDERLYING is in a
+        DOWNTREND — i.e. the inverse ETP is downside exposure to that
+        underlying. T212 does not support short selling; buying an inverse ETP
+        (ISA-only) is the sanctioned way to express a bearish view. This is NOT
+        shorting.
+
+    The previous logic read the *inverse ETP's own chart* and bought it when
+    that chart was falling — which is backwards (an inverse ETP falls when its
+    underlying rises). We now read the underlying's chart instead.
+
+    For unmapped symbols (e.g. raw SPY/QQQ in a scan list that are not ETPs),
+    we fall back to the symbol's own chart and treat it as a plain long.
+    """
     is_short = _is_short_product(symbol)
+    under = _underlying_for(symbol)
 
-    long_setup = trend == "uptrend" and macd >= macd_signal and rsi >= 44 and rsi <= 72 and (sma20 == 0 or price >= sma20)
-    short_setup = trend == "downtrend" and macd <= macd_signal and rsi >= 28 and rsi <= 60 and (sma20 == 0 or price <= sma20)
+    # The ETP's own price is what we actually trade — always needed for sizing.
+    etp_tech = get_technicals(symbol, period="6mo")
+    price = float(etp_tech.get("price") or 0.0)
 
-    use_signal = long_setup or short_setup
+    if under is not None:
+        # Drive direction off the UNDERLYING's chart.
+        signal_tech = get_technicals(under.proxy, period="6mo")
+        underlying_label = under.key
+    else:
+        # Unmapped: best-effort using the symbol's own chart, plain long only.
+        signal_tech = etp_tech
+        underlying_label = normalize_instrument_code(symbol)
+
+    rsi = float(signal_tech.get("rsi_14") or 50.0)
+    macd = float(signal_tech.get("macd") or 0.0)
+    macd_signal = float(signal_tech.get("macd_signal") or 0.0)
+    sma20 = float(signal_tech.get("sma_20") or 0.0)
+    sma50 = float(signal_tech.get("sma_50") or 0.0)
+    u_price = float(signal_tech.get("price") or 0.0)
+    trend = str(signal_tech.get("trend_direction") or "mixed")
+
+    # Setups evaluate the UNDERLYING's trend/momentum.
+    underlying_uptrend = (
+        trend == "uptrend"
+        and macd >= macd_signal
+        and 44 <= rsi <= 72
+        and (sma20 == 0 or u_price >= sma20)
+    )
+    underlying_downtrend = (
+        trend == "downtrend"
+        and macd <= macd_signal
+        and 28 <= rsi <= 60
+        and (sma20 == 0 or u_price <= sma20)
+    )
+
     if is_short:
-        # Short products should generally be bought when downside setup exists.
-        use_signal = short_setup
+        # Inverse ETP: buy it only when the UNDERLYING is falling (downside).
+        use_signal = underlying_downtrend
+        direction = "short"  # downside exposure to the underlying (not a short sale)
+    else:
+        # Long ETP (or unmapped plain long): buy when the UNDERLYING is rising.
+        use_signal = underlying_uptrend
+        direction = "long"
 
     if not use_signal or price <= 0:
-        return None, tech
-
-    direction = "short" if is_short else "long"
+        return None, etp_tech
 
     confidence = 0.55
     confidence += 0.08 if trend in {"uptrend", "downtrend"} else 0.0
-    confidence += 0.07 if (long_setup and rsi >= 48 and rsi <= 66) or (short_setup and rsi >= 34 and rsi <= 56) else 0.0
+    confidence += 0.07 if (underlying_uptrend and 48 <= rsi <= 66) or (underlying_downtrend and 34 <= rsi <= 56) else 0.0
     confidence += 0.07 if abs(macd - macd_signal) > 0 else 0.0
     confidence = _clamp(confidence, 0.35, 0.92)
 
     expected_edge = 0.006 + max(0.0, confidence - 0.5) * 0.02
     expected_edge = _clamp(expected_edge, 0.004, 0.03)
 
+    side = "downside" if is_short else "upside"
     rationale = (
-        f"trend={trend}, rsi={rsi:.1f}, macd={macd:.4f} vs signal={macd_signal:.4f}, "
-        f"sma20={sma20:.4f}, sma50={sma50:.4f}"
+        f"underlying={underlying_label} {side}: trend={trend}, rsi={rsi:.1f}, "
+        f"macd={macd:.4f} vs signal={macd_signal:.4f}, sma20={sma20:.4f}, sma50={sma50:.4f}"
     )
+
+    # Return the ETP's own technicals as `tech` (so meta reflects the traded
+    # instrument); the underlying read lives in the rationale + meta below.
+    out_tech = dict(etp_tech)
+    out_tech["underlying_key"] = underlying_label
+    out_tech["underlying_trend"] = trend
+    out_tech["driven_by_underlying"] = under is not None
 
     return {
         "symbol": symbol,
@@ -253,13 +528,27 @@ def _build_signal(symbol: str, policy: dict[str, Any]) -> tuple[dict[str, Any] |
         "expected_edge": expected_edge,
         "rationale": rationale,
         "risk_flag": _signal_risk_flag(confidence, expected_edge),
-    }, tech
+    }, out_tech
 
 
 def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, Any]:
     policy = get_policy(db)
     if not policy.get("enabled", True):
         return {"created": 0, "signals": [], "policy": policy, "reason": "leveraged disabled"}
+
+    # Daily session rails: once today's realized P&L hits the profit target or
+    # loss limit, or the daily trade cap is reached, stop opening new positions.
+    # We still build no signals to avoid surfacing actionable proposals the
+    # rails forbid. Monitoring/exits are handled elsewhere and never blocked.
+    daily_block = _daily_rail_block_reason(db, policy)
+    if daily_block:
+        return {
+            "created": 0,
+            "signals": [],
+            "policy": policy,
+            "reason": f"daily session rail: {daily_block}",
+            "daily_rail_blocked": True,
+        }
 
     open_trades = _open_trades(db)
     open_symbols = {row.symbol.upper() for row in open_trades}
@@ -303,6 +592,20 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
         if target_notional < 10:
             break
 
+        # Hard-flag (not block) concentration at scan time so a breaching
+        # proposal is visible; execute_signal enforces the hard stop.
+        concentration_flag = _concentration_check(
+            db, symbol=signal_data["symbol"], add_notional=target_notional, policy=policy
+        )
+
+        signal_meta: dict[str, Any] = {
+            "risk_flag": signal_data["risk_flag"],
+            "tech": tech,
+        }
+        if concentration_flag:
+            signal_meta["concentration_flag"] = concentration_flag
+            signal_meta["risk_flag"] = "blocked"
+
         row = LeveragedSignal(
             status="proposed",
             symbol=signal_data["symbol"],
@@ -319,10 +622,7 @@ def scan_signals(db: Session, source_task_id: str | None = None) -> dict[str, An
             rationale=str(signal_data["rationale"]),
             strategy_tag="leveraged-momentum",
             source_task_id=source_task_id,
-            meta={
-                "risk_flag": signal_data["risk_flag"],
-                "tech": tech,
-            },
+            meta=signal_meta,
         )
         db.add(row)
         created_rows.append(row)
@@ -403,6 +703,12 @@ def execute_signal(db: Session, signal_id: str, source: str = "manual") -> Lever
     if not policy.get("enabled", True):
         raise LeveragedError("leveraged trading is disabled")
 
+    # Hard-stop on daily session rails before opening any new position. This is
+    # the single source of truth for the rails — scan/auto-exec both flow here.
+    daily_block = _daily_rail_block_reason(db, policy)
+    if daily_block:
+        raise LeveragedError(f"daily session rail: {daily_block}")
+
     open_trades = _open_trades(db)
     if len(open_trades) >= int(policy["max_open_positions"]):
         raise LeveragedError("max open leveraged positions reached")
@@ -411,6 +717,14 @@ def execute_signal(db: Session, signal_id: str, source: str = "manual") -> Lever
     notional = min(float(signal.target_notional), float(policy["per_position_notional"]))
     if open_exposure + notional > float(policy["max_total_exposure"]):
         raise LeveragedError("max leveraged exposure exceeded")
+
+    # Concentration guardrail: block entries that would push a single
+    # underlying above its cap (long + inverse ETPs share the underlying key).
+    concentration_block = _concentration_check(
+        db, symbol=signal.symbol, add_notional=notional, policy=policy
+    )
+    if concentration_block:
+        raise LeveragedError(concentration_block)
 
     price_info = get_price(signal.symbol)
     entry_price = float(price_info.get("price") or signal.reference_price or 0.0)
