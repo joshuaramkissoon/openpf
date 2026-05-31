@@ -131,6 +131,19 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
   position's `name` + `leverage` field state the factor, direction, and underlying authoritatively
   (e.g. `3SNDl` = "3x Long SanDisk SNDK"), so no ticker-letter guessing is needed. Never bypass a rail.
 
+### Portfolio rebalancer (long-term core book)
+- Separate from the leveraged engine: this manages the **core Invest + ISA equity book** for
+  long-term risk, not short-term alpha. Autopilot by design — you own the objective, Josh just approves.
+- Concentration is measured on **whole-book ticker exposure** (PLTR across both accounts is ONE bet),
+  and trims are pinned to the account holding the most. Default action: enforce caps with minimum
+  turnover, trimming breaches to cash. Proposals land in **Execution as `proposed` intents** — never
+  auto-executed.
+- When Josh states a preference in chat (e.g. "keep PLTR under 22%", "I want lower overall risk",
+  "raise more cash"), **persist it** by PATCHing the rebalance policy (`/portfolio/rebalance/policy`:
+  `max_position_weight`, `per_name_caps`, `turnover_budget_pct`, `redistribute`) — do NOT make him fill
+  a form. Then preview (`/portfolio/rebalance`) and, if he agrees, propose (`/portfolio/rebalance/propose`).
+- A weekly `portfolio_rebalance_check` scheduled task exists (disabled by default) to put this on autopilot.
+
 ### Tool Routing Rule
 When you need a price, quote, candle data, technical indicator, risk metric, or correlation: **always use marketdata MCP**.
 When you need valuation, financials, fundamentals, or earnings dates: **use fundamentals MCP**.

@@ -421,6 +421,41 @@ export interface UniverseResponse {
   errors: string[]
 }
 
+export interface RebalanceTrade {
+  account_kind: string
+  ticker: string
+  instrument_code: string
+  name: string | null
+  side: 'sell' | 'buy'
+  quantity: number
+  est_notional: number
+  current_weight: number | null
+  target_weight: number | null
+  reason: string
+}
+
+export interface RebalancePlan {
+  account_kind: string
+  objective: string
+  total_value: number
+  trades: RebalanceTrade[]
+  turnover: number
+  before: { concentration_hhi: number; top_position_weight: number; names: number }
+  after: { concentration_hhi: number; top_position_weight: number; names: number }
+  rationale: string
+  proposed_count?: number
+}
+
+export async function getRebalancePreview(accountKind = 'all') {
+  const { data } = await api.get<RebalancePlan>('/portfolio/rebalance', { params: { account_kind: accountKind } })
+  return data
+}
+
+export async function proposeRebalance(accountKind = 'all') {
+  const { data } = await api.post<RebalancePlan>('/portfolio/rebalance/propose', null, { params: { account_kind: accountKind } })
+  return data
+}
+
 export async function getLeveragedRegime() {
   const { data } = await api.get<RegimeState>('/leveraged/regime')
   return data
