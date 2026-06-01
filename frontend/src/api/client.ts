@@ -251,14 +251,27 @@ export function streamChatMessage(
 ): StreamHandle {
   let ws: WebSocket | null = null
   let settled = false
+  // Whether we've received ANY frame for this turn. Once we have, the backend
+  // has already appended the user message and started the run — a later drop is
+  // terminal (reconnecting + resending would duplicate the turn).
+  let receivedAny = false
+  let attempt = 0
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // Bounded backoff: ~0.5s, 1s, 2s, 4s. Covers a backend that's briefly down or
+  // being restarted (e.g. a launchd respawn) without it ever started the turn.
+  const MAX_ATTEMPTS = 4
+  const BASE_DELAY_MS = 500
 
   const done = new Promise<void>((resolve, reject) => {
     const url = `${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`
-    ws = new WebSocket(url)
 
     const fail = (message: string) => {
       if (settled) return
       settled = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
       handlers.onError?.(message)
       try {
         ws?.close()
@@ -268,72 +281,117 @@ export function streamChatMessage(
       reject(new Error(message))
     }
 
-    ws.onopen = () => {
-      ws!.send(JSON.stringify(payload))
+    // A connection dropped. If the turn never started (no frame received) and we
+    // have attempts left, back off and retry; otherwise this is terminal.
+    const handleDrop = (message: string) => {
+      if (settled || reconnectTimer) return
+      if (receivedAny || attempt >= MAX_ATTEMPTS) {
+        fail(message)
+        return
+      }
+      attempt += 1
+      const delay = BASE_DELAY_MS * 2 ** (attempt - 1)
+      handlers.onStatus?.({
+        phase: 'reconnecting',
+        message: `Connection lost — reconnecting to Archie (attempt ${attempt}/${MAX_ATTEMPTS})…`,
+      })
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        connect()
+      }, delay)
     }
 
-    ws.onmessage = (event) => {
+    const connect = () => {
+      if (settled) return
+      // Detach the previous socket's handlers so a late close/error from it
+      // can't drive state after we've moved on.
+      if (ws) {
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onerror = null
+        ws.onclose = null
+      }
       try {
-        const data = JSON.parse(String(event.data || '{}')) as Record<string, unknown>
-        const type = String(data.type || '')
-        if (type === 'ack') {
-          handlers.onAck?.({
-            session: data.session as ChatSession,
-            user_message: data.user_message as ChatMessage,
-          })
-          return
-        }
-        if (type === 'status') {
-          handlers.onStatus?.({
-            phase: String(data.phase || ''),
-            message: String(data.message || ''),
-            toolInput: data.tool_input as Record<string, unknown> | undefined,
-          })
-          return
-        }
-        if (type === 'delta') {
-          handlers.onDelta?.({ delta: String(data.delta || '') })
-          return
-        }
-        if (type === 'done') {
-          handlers.onDone?.({
-            session: data.session as ChatSession,
-            assistant_message: data.assistant_message as ChatMessage,
-            stop_reason: (data.stop_reason as string) ?? null,
-            result_subtype: (data.result_subtype as string) ?? null,
-          })
-          settled = true
-          try {
-            ws?.close()
-          } catch {
-            // no-op
-          }
-          resolve()
-          return
-        }
-        if (type === 'error') {
-          fail(String(data.error || 'Chat stream failed'))
-          return
-        }
+        ws = new WebSocket(url)
       } catch {
-        fail('Invalid chat stream payload')
+        handleDrop('Chat websocket connection failed')
+        return
+      }
+
+      ws.onopen = () => {
+        ws!.send(JSON.stringify(payload))
+      }
+
+      ws.onmessage = (event) => {
+        receivedAny = true
+        try {
+          const data = JSON.parse(String(event.data || '{}')) as Record<string, unknown>
+          const type = String(data.type || '')
+          if (type === 'ack') {
+            handlers.onAck?.({
+              session: data.session as ChatSession,
+              user_message: data.user_message as ChatMessage,
+            })
+            return
+          }
+          if (type === 'status') {
+            handlers.onStatus?.({
+              phase: String(data.phase || ''),
+              message: String(data.message || ''),
+              toolInput: data.tool_input as Record<string, unknown> | undefined,
+            })
+            return
+          }
+          if (type === 'delta') {
+            handlers.onDelta?.({ delta: String(data.delta || '') })
+            return
+          }
+          if (type === 'done') {
+            handlers.onDone?.({
+              session: data.session as ChatSession,
+              assistant_message: data.assistant_message as ChatMessage,
+              stop_reason: (data.stop_reason as string) ?? null,
+              result_subtype: (data.result_subtype as string) ?? null,
+            })
+            settled = true
+            try {
+              ws?.close()
+            } catch {
+              // no-op
+            }
+            resolve()
+            return
+          }
+          if (type === 'error') {
+            fail(String(data.error || 'Chat stream failed'))
+            return
+          }
+        } catch {
+          fail('Invalid chat stream payload')
+        }
+      }
+
+      ws.onerror = () => {
+        handleDrop('Chat websocket connection failed')
+      }
+
+      ws.onclose = () => {
+        if (!settled) {
+          handleDrop('Chat websocket closed before completion')
+        }
       }
     }
 
-    ws.onerror = () => {
-      fail('Chat websocket connection failed')
-    }
-
-    ws.onclose = () => {
-      if (!settled) {
-        fail('Chat websocket closed before completion')
-      }
-    }
+    connect()
   })
 
   const abort = () => {
     if (settled) return
     settled = true
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     try {
       ws?.close()
     } catch {
