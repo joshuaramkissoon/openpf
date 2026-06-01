@@ -440,6 +440,15 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
         db.commit()
         _last_refresh_ts = fetched_at
 
+        # Keep external cashflows current (throttled, best-effort) so the return
+        # curve nets out new deposits/withdrawals without manual intervention.
+        try:
+            from app.services.cashflow_service import maybe_sync_all
+
+            maybe_sync_all(db)
+        except Exception:  # noqa: BLE001
+            pass
+
         return {
             "fetched_at": fetched_at,
             "positions_count": len(position_rows),
@@ -724,14 +733,21 @@ def portfolio_history(
     display_currency: str | None = None,
     days: int = 365,
 ) -> dict[str, Any]:
-    """Equity curve over time from stored AccountSnapshot rows.
+    """Equity curve + return curve over time from stored AccountSnapshot rows.
 
     Groups snapshots by timestamp (accounts are fetched together), sums the
-    selected account(s) converted to the display currency, then downsamples to
-    the last point per day for a clean line. Depth depends on how long the app
-    has been recording snapshots.
+    selected account(s) into the display currency at the FX rate that held on
+    each point's own date (backfilled, not spot), then downsamples to the last
+    point per day. Each point also carries ``gain`` — cumulative value change
+    net of external contributions since the window start — so the UI can toggle
+    between absolute value and true return. ``return_pct`` is a modified-Dietz
+    money-weighted return over the window (accounts for deposit/withdrawal
+    timing). Depth depends on how long the app has been recording snapshots.
     """
     from datetime import timedelta
+
+    from app.services.cashflow_service import CONTRIBUTION_TYPES, get_cashflows
+    from app.services.historical_fx import ensure_history, load_fx_history
 
     requested = (display_currency or "").upper().strip()
     if requested not in {"GBP", "USD"}:
@@ -744,29 +760,90 @@ def portfolio_history(
         q = q.filter(AccountSnapshot.account_kind == account_kind)
     rows = q.order_by(AccountSnapshot.fetched_at.asc()).all()
 
-    def conv(amount: float, src: str | None) -> float:
-        return float(amount or 0.0) * get_fx_rate((src or target).upper().strip() or target, target)
+    # Backfill daily FX across the snapshot span so each point converts at its
+    # own date's rate, then look up nearest-prior (handles weekends/holidays).
+    if rows:
+        span_start = min(r.fetched_at for r in rows).date()
+        span_end = max(r.fetched_at for r in rows).date()
+        try:
+            ensure_history(db, span_start - timedelta(days=7), span_end)
+        except Exception:  # noqa: BLE001 — never let FX backfill break the curve
+            pass
+    fx = load_fx_history(db)
+
+    def conv(amount: float, src: str | None, on: Any) -> float:
+        return float(amount or 0.0) * fx.rate((src or target), target, on)
 
     by_ts: dict[Any, dict[str, float]] = {}
     for a in rows:
+        on = a.fetched_at.date()
         d = by_ts.setdefault(a.fetched_at, {"total": 0.0, "invested": 0.0, "free_cash": 0.0})
-        d["total"] += max(conv(a.total, a.currency), 0.0)
-        d["invested"] += max(conv(a.invested, a.currency), 0.0)
-        d["free_cash"] += max(conv(a.free_cash, a.currency), 0.0)
+        d["total"] += max(conv(a.total, a.currency, on), 0.0)
+        d["invested"] += max(conv(a.invested, a.currency, on), 0.0)
+        d["free_cash"] += max(conv(a.free_cash, a.currency, on), 0.0)
 
     # Keep the LAST snapshot of each calendar day for a clean daily series.
     by_day: dict[Any, tuple[Any, dict[str, float]]] = {}
     for ts in sorted(by_ts):
         by_day[ts.date()] = (ts, by_ts[ts])
+    series = sorted(by_day.items())
 
-    points = [
-        {
-            "date": day.isoformat(),
-            "t": ts.isoformat(),
-            "total": round(v["total"], 2),
-            "invested": round(v["invested"], 2),
-            "free_cash": round(v["free_cash"], 2),
-        }
-        for day, (ts, v) in sorted(by_day.items())
+    if len(series) < 2:
+        points = [
+            {"date": day.isoformat(), "t": ts.isoformat(),
+             "total": round(v["total"], 2), "invested": round(v["invested"], 2),
+             "free_cash": round(v["free_cash"], 2), "gain": 0.0}
+            for day, (ts, v) in series
+        ]
+        return {"account_kind": account_kind, "currency": target, "points": points,
+                "return_pct": 0.0, "net_contributed": 0.0,
+                "start_value": points[0]["total"] if points else 0.0,
+                "end_value": points[-1]["total"] if points else 0.0, "window_days": 0}
+
+    # External cashflows within the window (target currency, at each flow's own
+    # date's FX). Bound to (t0, last_day] — a flow after the last snapshot isn't
+    # reflected in any value point yet, so counting it would distort the return.
+    # Summing across accounts makes internal Invest↔ISA transfers self-cancel
+    # (both legs are recorded), so no internal/external tagging is needed.
+    t0 = series[0][0]
+    last_day = series[-1][0]
+    flow_events = [
+        (f.occurred_at.date(), conv(f.amount, f.currency, f.occurred_at.date()))
+        for f in get_cashflows(db, account_kind)
+        if f.type in CONTRIBUTION_TYPES and t0 < f.occurred_at.date() <= last_day
     ]
-    return {"account_kind": account_kind, "currency": target, "points": points}
+
+    start_total = series[0][1][1]["total"]
+    end_total = series[-1][1][1]["total"]
+    points = []
+    for day, (ts, v) in series:
+        cum_flow = sum(amt for fd, amt in flow_events if fd <= day)
+        gain = (v["total"] - start_total) - cum_flow
+        points.append({
+            "date": day.isoformat(), "t": ts.isoformat(),
+            "total": round(v["total"], 2), "invested": round(v["invested"], 2),
+            "free_cash": round(v["free_cash"], 2), "gain": round(gain, 2),
+        })
+
+    # Modified-Dietz: gain over average capital, weighting each flow by the
+    # fraction of the window it was invested for. If average capital isn't
+    # positive (e.g. a large early withdrawal), the ratio is meaningless — fall
+    # back to a simple return on the starting value.
+    span_days = max((last_day - t0).days, 1)
+    net_flow = sum(amt for _, amt in flow_events)
+    weighted_flow = sum(amt * ((last_day - fd).days / span_days) for fd, amt in flow_events)
+    gain_total = (end_total - start_total) - net_flow
+    denom = start_total + weighted_flow
+    if denom > 0:
+        return_pct = gain_total / denom
+    elif start_total > 0:
+        return_pct = gain_total / start_total
+    else:
+        return_pct = 0.0
+
+    return {
+        "account_kind": account_kind, "currency": target, "points": points,
+        "return_pct": round(return_pct, 4), "net_contributed": round(net_flow, 2),
+        "start_value": round(start_total, 2), "end_value": round(end_total, 2),
+        "window_days": span_days,
+    }
