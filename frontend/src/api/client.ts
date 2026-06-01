@@ -401,11 +401,14 @@ export interface RegimeState {
 export interface UniverseRow {
   underlying: string
   underlying_name: string | null
+  is_stock?: boolean
   direction: 'long' | 'inverse'
   etp_ticker: string
   etp_name: string
   factor: number | null
   currency: string | null
+  /** Signed % distance of the underlying from its 50-day average (the real move). */
+  move_pct?: number
   move_score: number
   trend: string
   regime_aligned: boolean

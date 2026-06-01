@@ -38,10 +38,13 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "cron_expr": "30 7 * * 1-5",
         "timezone": "Europe/London",
         "model": settings.claude_agent_model,
-        "enabled": True,
+        # Disabled by default: the agentic alpha loop (alpha_loop_open) is now the
+        # active morning pass. This deterministic cycle remains as an optional
+        # rule-based fallback you can re-enable.
+        "enabled": False,
         "meta": {
             "task_kind": "leveraged_cycle",
-            "description": "Morning leveraged cycle (monitor + scan) → markdown report",
+            "description": "Morning leveraged cycle (monitor + scan) → markdown report [fallback]",
         },
         # NOTE: leveraged_cycle is a deterministic engine run; this prompt text
         # is NOT sent to an LLM. The scheduler renders the engine output as a
@@ -126,29 +129,43 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "This is your final artifact — make it polished and information-dense, not a thinking log."
         ),
     },
-    {
-        "name": "daily_alpha_goal",
-        "cron_expr": "45 7 * * 1-5",
-        "timezone": "Europe/London",
-        "model": settings.claude_agent_model,
-        "enabled": False,
-        "meta": {
-            "task_kind": "claude_with_goal",
-            "description": "Daily alpha goal — scan + propose entries toward a £/day target",
-            "goal": {"target_gbp": 40.0, "loss_limit_gbp": 60.0, "max_trades": 3, "window": "day"},
-        },
-        "prompt": (
-            "Pursue today's profit target within the GOAL CONTEXT and risk rails above. Steps:\n"
-            "1. Check today's realized P&L, open positions, and trades placed so far (T212 + marketdata tools).\n"
-            "2. If the target is already hit or a limit is breached, STOP — report status only.\n"
-            "3. Otherwise scan the leveraged universe with the marketdata tools (technicals, risk metrics, "
-            "compare_assets) and a Kronos forecast on the top candidates. Delegate heavier quant work to the "
-            "'quant' subagent.\n"
-            "4. Rank the best 1-2 entries with hypothesis, forecast cone, sizing within rails, and invalidation. "
-            "Propose them as intents — DO NOT execute unless auto-execute is enabled and rails permit.\n"
-            "Output a concise markdown report ending with a JSON block {\"proposals\": [...]}."
-        ),
-    },
+    # ── Agentic alpha loop — three reasoned passes a day (open / midday / EOD) ──
+    # Each pass runs Archie with the live regime + macro context + the day's
+    # regime-gated universe injected (see _build_goal_context) and the £/day goal.
+    # Propose-only by default (the leveraged policy's auto_execute_enabled gates
+    # live trading); flip that on once a trade-enabled, IP-allowlisted key is set.
+    *[
+        {
+            "name": name,
+            "cron_expr": cron,
+            "timezone": "Europe/London",
+            "model": settings.claude_agent_model,
+            "enabled": True,
+            "meta": {
+                "task_kind": "claude_with_goal",
+                "description": desc,
+                "goal": {"target_gbp": 50.0, "loss_limit_gbp": 75.0, "max_trades": 4, "window": "day"},
+            },
+            "prompt": (
+                f"{label} agentic alpha pass. Pursue today's profit target within the GOAL CONTEXT, "
+                "MARKET REGIME, MACRO WATCH and CANDIDATE UNIVERSE provided above, and the hard risk rails. Steps:\n"
+                "1. Check today's realized P&L, open positions, and trades placed so far (T212 + marketdata tools). "
+                "If the target is already hit or a limit is breached, STOP — report status only.\n"
+                "2. Work the regime-gated CANDIDATE UNIVERSE first (those are today's strongest movers mapped to "
+                "their 3x ETP). Confirm each with live technicals/risk and a Kronos forecast; delegate heavy quant "
+                "to the 'quant' subagent. Respect the regime tilt (long in risk-on, inverse in risk-off).\n"
+                "3. Rank the best 1-2 entries with hypothesis, forecast cone, sizing within rails, and invalidation.\n"
+                "4. PROPOSE them as intents for approval — DO NOT execute unless auto-execute is enabled and rails "
+                "permit. Size cautiously into any imminent macro event.\n"
+                "Output a concise markdown report ending with a JSON block {\"proposals\": [...]}."
+            ),
+        }
+        for name, cron, label, desc in (
+            ("alpha_loop_open", "45 7 * * 1-5", "Market-open", "Alpha loop — open: regime-gated scan + propose toward £/day target"),
+            ("alpha_loop_midday", "30 12 * * 1-5", "Midday", "Alpha loop — midday re-scan + propose"),
+            ("alpha_loop_eod", "15 15 * * 1-5", "End-of-day", "Alpha loop — EOD pass + manage open positions"),
+        )
+    ],
 ]
 
 
@@ -499,6 +516,25 @@ def _build_goal_context(db: Session, task: ScheduledTask) -> str:
             lines.append(f"- MACRO WATCH: {macro}")
     except Exception:  # noqa: BLE001
         pass
+
+    # Inject the day's regime-gated candidate universe (top movers → their 3x
+    # ETP) so the alpha loop works from a concrete shortlist instead of scanning
+    # blind. Best-effort — never block the session on it.
+    try:
+        from app.services.leveraged_universe import build_universe
+
+        uni = build_universe(db, top_n=6)
+        picks = uni.get("ranked") or []
+        if picks:
+            rows = ", ".join(
+                f"{p['underlying']} {p['direction']} ({p['etp_ticker']}, "
+                f"{p['move_pct']*100:+.0f}% vs 50d)"
+                for p in picks
+            )
+            lines.append(f"- CANDIDATE UNIVERSE (regime-gated movers): {rows}")
+    except Exception:  # noqa: BLE001
+        pass
+
     if target > 0:
         lines.append(
             f"- PROFIT TARGET: £{target:,.2f} per {window}. Once today's REALIZED P&L >= this, STOP opening "
