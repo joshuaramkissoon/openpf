@@ -34,6 +34,7 @@ import { ScheduledJobsWorkspace } from './components/ScheduledJobsWorkspace'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { CostsWorkspace } from './components/CostsWorkspace'
 import { AppSidebar, SidebarBody, type SectionKey } from '@/components/layout/app-sidebar'
+import { AttentionFeed, AttentionChip } from '@/components/attention/attention-feed'
 import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
 import { ResearchDesk } from '@/components/research/research-desk'
 import { HelpGuide } from '@/components/help/help-guide'
@@ -199,6 +200,7 @@ function obfuscateSnapshot(snapshot: PortfolioSnapshot): PortfolioSnapshot {
 
 const SECTION_LABELS: Record<SectionKey, string> = {
   overview: 'Portfolio',
+  attention: 'Attention',
   chat: 'Archie',
   execution: 'Execution',
   leveraged: 'Leveraged Desk',
@@ -213,6 +215,7 @@ const SECTION_LABELS: Record<SectionKey, string> = {
 
 const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
   overview: 'Holdings, allocation, and risk at a glance.',
+  attention: "What Archie's spotted across your holdings, news, and macro — ranked.",
   execution: 'Review and act on proposed trade intents.',
   leveraged: 'Leveraged positions, rails, and signal queue.',
   jobs: 'Automated agent routines on a schedule.',
@@ -629,13 +632,16 @@ export default function App() {
         )
       }
       return (
-        <PortfolioOverview
-          snapshot={displaySnapshot}
-          positions={displayPositions}
-          accountView={accountView}
-          displayCurrency={displayCurrency}
-          briefMarkdown={activeRun?.summary_markdown || null}
-        />
+        <div className="space-y-4">
+          <AttentionChip onOpen={() => setActiveSection('attention')} />
+          <PortfolioOverview
+            snapshot={displaySnapshot}
+            positions={displayPositions}
+            accountView={accountView}
+            displayCurrency={displayCurrency}
+            briefMarkdown={activeRun?.summary_markdown || null}
+          />
+        </div>
       )
     }
 
@@ -664,6 +670,7 @@ export default function App() {
       )
     }
 
+    if (activeSection === 'attention') return <AttentionFeed onError={setError} />
     if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} />
     if (activeSection === 'leveraged') return <LeveragedWorkspace onError={setError} />
     if (activeSection === 'jobs') return <ScheduledJobsWorkspace onError={setError} />

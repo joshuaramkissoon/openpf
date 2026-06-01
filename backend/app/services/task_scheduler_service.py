@@ -22,7 +22,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
 )
 from app.services import costs_service
 from app.services.config_store import ConfigStore
@@ -33,6 +33,53 @@ settings = get_settings()
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
 
 _DEFAULT_TASKS: list[dict[str, Any]] = [
+    {
+        "name": "morning_brief",
+        "cron_expr": "0 7 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_model,  # Sonnet — strong enough to triage news, lighter for a daily run
+        "enabled": True,
+        "meta": {
+            "task_kind": "claude",
+            "description": "Curated pre-open brief — what matters today across your holdings + macro",
+        },
+        "prompt": (
+            "Produce Josh's pre-open MARKET BRIEF as a tight markdown artifact. The goal: he has no time to "
+            "follow news, so YOU read everything and surface only what matters. Steps:\n\n"
+            "1. Pull current holdings via the T212 tools; focus on the top ~8 by value (both Invest + ISA).\n"
+            "2. For those names, call `get_company_news` (since_days=1) and `get_earnings` — note any earnings "
+            "within ~7 days.\n"
+            "3. Call `get_market_news` and `get_macro_snapshot` for the wider picture (yields, VIX, USD/GBP, "
+            "Fed funds) and read the current market regime if available.\n"
+            "4. Skim active theses/market_views in memory; flag any news that supports or threatens one.\n\n"
+            "Then CURATE hard. Output ONLY:\n"
+            "- **Top 3-5 things that matter today** — each: one-line what + why-it-matters-to-your-book + an "
+            "optional 'consider:' action. Tie each to a holding or a real macro move.\n"
+            "- **Macro line**: 10Y/2Y, VIX, USD/GBP with the day's direction.\n"
+            "- **On the radar**: earnings/events in the next 7 days for held names.\n\n"
+            "RULES: portfolio-relevant only. Ignore aggregator/SEO filler (e.g. 'most active stocks today', "
+            "generic listicles). If nothing is material, say so in one line — do NOT manufacture noise. No raw "
+            "headline dumps. Keep it a genuine 2-minute read."
+        ),
+    },
+    {
+        "name": "watch_cycle",
+        "cron_expr": "0 8-21 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_model,
+        "enabled": True,
+        "meta": {
+            "task_kind": "watch_cycle",
+            "description": "Hourly watches → ranked alerts in the Attention inbox (deterministic)",
+        },
+        # Deterministic engine run (not sent to an LLM): concentration / thesis
+        # invalidation / earnings-soon / big-move checks → deduped Alert rows.
+        "prompt": (
+            "Deterministic watch cycle: run portfolio-scoped watches (concentration breach, thesis "
+            "invalidation, earnings within 3 days, big intraday moves on holdings) and raise ranked, "
+            "deduped alerts to the Attention inbox. Materiality-gated; no LLM call."
+        ),
+    },
     {
         "name": "lev_morning_scan",
         "cron_expr": "30 7 * * 1-5",
@@ -301,6 +348,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
     yfinance_script = _MCP_SERVER_DIR / "marketdata.py"
     scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
     fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
+    intel_script = _MCP_SERVER_DIR / "intel.py"
     if t212_script.is_file():
         mcp_servers["trading212"] = {
             "type": "stdio",
@@ -351,6 +399,14 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
             "env": _mcp_env,
         }
         allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
+    if intel_script.is_file():
+        mcp_servers["intel"] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [str(intel_script)],
+            "env": _mcp_env,
+        }
+        allowed_tools.extend(_INTEL_MCP_TOOLS)
 
     options = ClaudeAgentOptions(
         system_prompt={
@@ -612,6 +668,25 @@ def _render_leveraged_monitor_md(result: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_watch_md(result: dict[str, Any]) -> str:
+    """Render a watch-cycle run as a short markdown artifact."""
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    created = int(result.get("created", 0) or 0)
+    by_cat = result.get("by_category") or {}
+    lines = [
+        "# Watch Cycle",
+        f"_{stamp}_",
+        "",
+        f"Raised **{created}** new alert(s)." if created else "No new alerts — nothing crossed a threshold.",
+    ]
+    if by_cat:
+        lines.append("")
+        lines += [f"- {cat}: {n}" for cat, n in sorted(by_cat.items())]
+    if result.get("errors"):
+        lines += ["", "Errors:"] + [f"- {e}" for e in result["errors"]]
+    return "\n".join(lines)
+
+
 def _render_rebalance_md(plan: dict[str, Any]) -> str:
     """Render a rebalance proposal as a human-readable markdown artifact."""
     stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -766,6 +841,16 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
 
         result = propose_rebalance(db, account_kind="all")
         content = _render_rebalance_md(result)
+        path = _cron_log_path(task.name, content, task_kind=kind, description=description)
+        return "ok", {"result": result}, path, {}
+
+    if kind == "watch_cycle":
+        # The 'Spot' layer: deterministic watches → ranked Alerts in the
+        # Attention inbox. Materiality-gated + deduped; never an LLM run.
+        from app.services.watch_service import run_watches
+
+        result = run_watches(db)
+        content = _render_watch_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 

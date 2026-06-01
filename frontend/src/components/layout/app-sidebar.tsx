@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bell,
   CalendarClock,
   CreditCard,
   FileText,
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils"
 
 export type SectionKey =
   | "overview"
+  | "attention"
   | "chat"
   | "execution"
   | "leveraged"
@@ -38,6 +40,7 @@ const NAV: NavGroup[] = [
     label: null,
     items: [
       { key: "overview", label: "Portfolio", icon: LayoutDashboard },
+      { key: "attention", label: "Attention", icon: Bell },
       { key: "chat", label: "Archie", icon: MessageSquare },
     ],
   },

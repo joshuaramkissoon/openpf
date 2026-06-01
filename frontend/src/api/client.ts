@@ -454,6 +454,45 @@ export interface RebalancePlan {
   proposed_count?: number
 }
 
+export interface Alert {
+  id: string
+  created_at: string | null
+  category: string
+  severity: 'critical' | 'warning' | 'info'
+  title: string
+  detail: string
+  consider?: string | null
+  ticker?: string | null
+  status: 'new' | 'seen' | 'dismissed'
+  source: string
+  meta?: Record<string, unknown>
+}
+
+export interface AttentionResponse {
+  alerts: Alert[]
+  counts: { alerts_open: number; alerts_new: number; critical: number; pending_intents: number }
+}
+
+export async function getAttention() {
+  const { data } = await api.get<AttentionResponse>('/attention')
+  return data
+}
+
+export async function runWatches() {
+  const { data } = await api.post('/attention/run')
+  return data
+}
+
+export async function setAlertStatus(id: string, action: 'seen' | 'dismiss') {
+  const { data } = await api.post(`/attention/${id}/${action}`)
+  return data
+}
+
+export async function markAllAlertsSeen() {
+  const { data } = await api.post('/attention/seen-all')
+  return data
+}
+
 export async function getRebalancePreview(accountKind = 'all') {
   const { data } = await api.get<RebalancePlan>('/portfolio/rebalance', { params: { account_kind: accountKind } })
   return data
