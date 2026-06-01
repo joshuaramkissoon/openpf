@@ -97,13 +97,13 @@ def _synthetic_history(symbol: str, lookback_days: int) -> pd.DataFrame:
     return frame.reset_index(drop=True)
 
 
-def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
+def fetch_history(symbol: str, lookback_days: int = 420, *, auto_adjust: bool = True) -> pd.DataFrame:
     global _YF_THROTTLED_UNTIL
 
     ticker = normalize_symbol_for_yf(symbol)
     if not ticker:
         raise MarketDataError(f"Invalid symbol for market data: {symbol!r}")
-    cache_key = (ticker, int(lookback_days))
+    cache_key = (ticker, int(lookback_days), auto_adjust)
 
     cached = _get_cached(cache_key)
     if cached is not None:
@@ -138,7 +138,7 @@ def fetch_history(symbol: str, lookback_days: int = 420) -> pd.DataFrame:
             data = t.history(
                 start=start.isoformat(),
                 end=end.isoformat(),
-                auto_adjust=True,
+                auto_adjust=auto_adjust,
                 timeout=6,
             )
         except Exception as exc:  # noqa: BLE001

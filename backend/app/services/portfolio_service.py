@@ -786,23 +786,71 @@ def portfolio_history(
     by_day: dict[Any, tuple[Any, dict[str, float]]] = {}
     for ts in sorted(by_ts):
         by_day[ts.date()] = (ts, by_ts[ts])
-    series = sorted(by_day.items())
+    recorded = sorted(by_day.items())  # [(day, (ts, {...}))]
+
+    # Reconstructed (estimated) history covering the period *before* the app
+    # began recording live snapshots, summed per day across the selected
+    # account(s) and converted to the display currency at each date's own FX.
+    # Lets the curve span the full account lifetime, not just the recorded window.
+    recon_by_day: dict[Any, dict[str, float]] = {}
+    try:
+        from app.services.equity_backfill import get_reconstructed_history
+
+        for r in get_reconstructed_history(db, account_kind):
+            if r.date < cutoff.date():
+                continue
+            rate = fx.rate((r.currency or target), target, r.date)
+            agg = recon_by_day.setdefault(r.date, {"total": 0.0, "invested": 0.0, "free_cash": 0.0})
+            agg["total"] += float(r.total or 0.0) * rate
+            agg["invested"] += float(r.invested or 0.0) * rate
+            agg["free_cash"] += float(r.cash or 0.0) * rate
+    except Exception:  # noqa: BLE001 — reconstructed history is additive; never block the curve
+        recon_by_day = {}
+
+    first_recorded_day = recorded[0][0] if recorded else None
+
+    # Index the reconstructed curve to the first *recorded* (exact) value at the
+    # handoff, rather than to today's holdings. The reconstruction supplies the
+    # SHAPE (from real trades + historical prices); scaling its level so it joins
+    # the known recorded value removes the seam discontinuity and the distortion
+    # from instruments yfinance can't price (delisted SPACs, Xetra ETPs). The
+    # deep-past absolute level is therefore an estimate; relative moves are real.
+    recon_scale = 1.0
+    if first_recorded_day is not None:
+        anchor = recon_by_day.get(first_recorded_day)
+        recorded_first_total = recorded[0][1][1]["total"]
+        if anchor and anchor.get("total", 0.0) > 0 and recorded_first_total > 0:
+            recon_scale = max(0.5, min(recorded_first_total / anchor["total"], 2.5))
+
+    # Unified daily series: reconstructed strictly before the first recorded
+    # snapshot (exact recorded data wins wherever it exists); source-tagged so
+    # the UI can distinguish estimated history from recorded.
+    series: list[tuple[Any, Any, dict[str, float], str]] = []
+    for day in sorted(recon_by_day):
+        if first_recorded_day is None or day < first_recorded_day:
+            raw = recon_by_day[day]
+            v = {k: raw[k] * recon_scale for k in ("total", "invested", "free_cash")}
+            ts = datetime.combine(day, datetime.min.time())
+            series.append((day, ts, v, "reconstructed"))
+    for day, (ts, v) in recorded:
+        series.append((day, ts, v, "recorded"))
+
+    def _point(day: Any, ts: Any, v: dict[str, float], source: str, gain: float) -> dict[str, Any]:
+        return {"date": day.isoformat(), "t": ts.isoformat(),
+                "total": round(v["total"], 2), "invested": round(v["invested"], 2),
+                "free_cash": round(v["free_cash"], 2), "gain": round(gain, 2),
+                "source": source}
 
     if len(series) < 2:
-        points = [
-            {"date": day.isoformat(), "t": ts.isoformat(),
-             "total": round(v["total"], 2), "invested": round(v["invested"], 2),
-             "free_cash": round(v["free_cash"], 2), "gain": 0.0}
-            for day, (ts, v) in series
-        ]
+        points = [_point(day, ts, v, source, 0.0) for day, ts, v, source in series]
         return {"account_kind": account_kind, "currency": target, "points": points,
                 "return_pct": 0.0, "net_contributed": 0.0,
                 "start_value": points[0]["total"] if points else 0.0,
                 "end_value": points[-1]["total"] if points else 0.0, "window_days": 0}
 
     # External cashflows within the window (target currency, at each flow's own
-    # date's FX). Bound to (t0, last_day] — a flow after the last snapshot isn't
-    # reflected in any value point yet, so counting it would distort the return.
+    # date's FX). Bound to (t0, last_day] — a flow after the last point isn't
+    # reflected in any value yet, so counting it would distort the return.
     # Summing across accounts makes internal Invest↔ISA transfers self-cancel
     # (both legs are recorded), so no internal/external tagging is needed.
     t0 = series[0][0]
@@ -813,17 +861,13 @@ def portfolio_history(
         if f.type in CONTRIBUTION_TYPES and t0 < f.occurred_at.date() <= last_day
     ]
 
-    start_total = series[0][1][1]["total"]
-    end_total = series[-1][1][1]["total"]
+    start_total = series[0][2]["total"]
+    end_total = series[-1][2]["total"]
     points = []
-    for day, (ts, v) in series:
+    for day, ts, v, source in series:
         cum_flow = sum(amt for fd, amt in flow_events if fd <= day)
         gain = (v["total"] - start_total) - cum_flow
-        points.append({
-            "date": day.isoformat(), "t": ts.isoformat(),
-            "total": round(v["total"], 2), "invested": round(v["invested"], 2),
-            "free_cash": round(v["free_cash"], 2), "gain": round(gain, 2),
-        })
+        points.append(_point(day, ts, v, source, gain))
 
     # Modified-Dietz: gain over average capital, weighting each flow by the
     # fraction of the window it was invested for. If average capital isn't

@@ -69,6 +69,27 @@ class CashflowEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ReconstructedEquityDaily(Base):
+    """Backfilled daily portfolio value, reconstructed from T212 order/dividend/
+    transaction history valued at historical prices + FX. Fills the equity curve
+    for the period *before* the app began recording live AccountSnapshots. Each
+    point is an estimate (exact at the right edge, where it's anchored to live
+    holdings); recorded snapshots take over from the first real snapshot onward.
+    Deduped by (account_kind, date) so a re-run overwrites cleanly."""
+
+    __tablename__ = "reconstructed_equity_daily"
+    __table_args__ = (UniqueConstraint("account_kind", "date", name="uq_recon_equity_account_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_kind: Mapped[str] = mapped_column(String(24), default="invest", index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    total: Mapped[float] = mapped_column(Float, default=0.0)     # holdings + cash, in `currency`
+    invested: Mapped[float] = mapped_column(Float, default=0.0)  # holdings (market) value
+    cash: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str] = mapped_column(String(16), default="GBP")
+    built_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class PositionSnapshot(Base):
     __tablename__ = "position_snapshots"
 
