@@ -454,6 +454,27 @@ export interface RebalancePlan {
   proposed_count?: number
 }
 
+export interface PortfolioHistoryPoint {
+  date: string
+  t: string
+  total: number
+  invested: number
+  free_cash: number
+}
+
+export interface PortfolioHistory {
+  account_kind: string
+  currency: 'GBP' | 'USD'
+  points: PortfolioHistoryPoint[]
+}
+
+export async function getPortfolioHistory(accountKind = 'all', currency: 'GBP' | 'USD' = 'GBP', days = 365) {
+  const { data } = await api.get<PortfolioHistory>('/portfolio/history', {
+    params: { account_kind: accountKind, display_currency: currency, days },
+  })
+  return data
+}
+
 export interface Alert {
   id: string
   created_at: string | null

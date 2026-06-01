@@ -1,11 +1,11 @@
 import { useState } from "react"
 
-import { Money, MoneyDelta, Pct, SectionCard, StatCard } from "@/components/kit"
-import { RichMarkdown } from "@/components/RichMarkdown"
+import { Money, MoneyDelta, Pct, StatCard } from "@/components/kit"
 import { accountLabel, formatNumber, formatPercent } from "@/utils/format"
 import type { PortfolioSnapshot, PositionItem } from "@/types"
 
 import { AllocationCard } from "./allocation-card"
+import { PortfolioHistoryCard } from "./portfolio-history-card"
 import { PositionDetailSheet } from "./position-detail-sheet"
 import { PositionsTable } from "./positions-table"
 import { RebalanceCard } from "./rebalance-card"
@@ -15,13 +15,11 @@ export function PortfolioOverview({
   positions,
   accountView,
   displayCurrency,
-  briefMarkdown,
 }: {
   snapshot: PortfolioSnapshot
   positions: PositionItem[]
   accountView: "all" | "invest" | "stocks_isa"
   displayCurrency: "GBP" | "USD"
-  briefMarkdown: string | null
 }) {
   const [selected, setSelected] = useState<PositionItem | null>(null)
   const [open, setOpen] = useState(false)
@@ -73,6 +71,8 @@ export function PortfolioOverview({
         <StatCard label="Est. Volatility" value={<Pct value={metrics.estimated_volatility} />} />
       </div>
 
+      <PortfolioHistoryCard accountView={accountView} displayCurrency={displayCurrency} />
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="min-w-0 lg:col-span-1">
           <AllocationCard positions={positions} />
@@ -88,14 +88,6 @@ export function PortfolioOverview({
       </div>
 
       <RebalanceCard accountView={accountView} />
-
-      {briefMarkdown ? (
-        <SectionCard title="Agent Brief" description="Latest reasoning-cycle summary">
-          <div className="space-y-2 text-sm leading-relaxed [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:font-semibold [&_strong]:font-semibold [&_table]:w-full [&_ul]:list-disc [&_ul]:pl-5">
-            <RichMarkdown markdown={briefMarkdown} />
-          </div>
-        </SectionCard>
-      ) : null}
 
       <PositionDetailSheet
         position={selected}
