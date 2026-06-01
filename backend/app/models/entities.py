@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -35,6 +35,38 @@ class AccountSnapshot(Base):
     pie_cash: Mapped[float] = mapped_column(Float, default=0.0)
     total: Mapped[float] = mapped_column(Float, default=0.0)
     ppl: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class FxRateDaily(Base):
+    """Backfilled daily FX so historical portfolio points convert at the rate that
+    held on their own date, not today's spot. Stored as USD per 1 GBP (FRED DEXUSUK);
+    all GBP↔USD conversions derive from this single series."""
+
+    __tablename__ = "fx_rate_daily"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    usd_per_gbp: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(16), default="fred")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CashflowEvent(Base):
+    """External account cashflows (deposits/withdrawals/transfers/fees) from the
+    T212 transactions feed. Used to net contributions out of the return curve.
+    Deduped by (account_kind, reference) so ingestion is idempotent."""
+
+    __tablename__ = "cashflow_events"
+    __table_args__ = (UniqueConstraint("account_kind", "reference", name="uq_cashflow_account_ref"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_kind: Mapped[str] = mapped_column(String(24), default="invest", index=True)
+    reference: Mapped[str] = mapped_column(String(64), index=True)
+    type: Mapped[str] = mapped_column(String(24), index=True)  # DEPOSIT/WITHDRAW/TRANSFER/FEE/...
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # signed, in `currency`
+    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class PositionSnapshot(Base):

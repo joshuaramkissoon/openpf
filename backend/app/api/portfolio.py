@@ -47,8 +47,17 @@ def history(
     days: int = Query(default=365, ge=1, le=1825),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Portfolio equity curve (total/invested/free-cash over time)."""
+    """Portfolio equity + return curve (value, gain net of contributions, Dietz %)."""
     return portfolio_history(db, account_kind=account_kind, display_currency=display_currency, days=days)
+
+
+@router.post("/cashflows/sync")
+def cashflows_sync(db: Session = Depends(get_db)) -> dict:
+    """Pull the latest deposits/withdrawals/transfers from T212 (deduped).
+    Used by the return curve to net contributions out of performance."""
+    from app.services.cashflow_service import sync_all
+
+    return sync_all(db)
 
 
 # ── Autopilot rebalancer ────────────────────────────────────────────────────
