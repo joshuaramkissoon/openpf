@@ -40,6 +40,7 @@ import { HelpGuide } from '@/components/help/help-guide'
 import { SectionCard } from '@/components/kit'
 import {
   PrivacyProvider,
+  SCRAMBLE_MONEY_FACTOR,
   loadPrivacyMode,
   nextPrivacyMode,
   privacyModeLabel,
@@ -164,7 +165,7 @@ function aggregatePositionsByTicker(positions: PositionItem[], portfolioTotal: n
 function obfuscateSnapshot(snapshot: PortfolioSnapshot): PortfolioSnapshot {
   const quantityFactor = 1.11
   const priceFactor = 1.23
-  const moneyFactor = quantityFactor * priceFactor
+  const moneyFactor = SCRAMBLE_MONEY_FACTOR // == quantityFactor * priceFactor; shared so the chart matches
 
   const obfuscateAmount = (value: number) => (Number.isFinite(value) ? value * moneyFactor : value)
   const obfuscatePrice = (value: number) => (Number.isFinite(value) ? value * priceFactor : value)

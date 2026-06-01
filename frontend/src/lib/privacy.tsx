@@ -61,6 +61,19 @@ export function privacyBlurClass(mode: PrivacyMode): string {
   return mode === "blur" ? "select-none blur-[6px]" : ""
 }
 
+/**
+ * Deterministic scale applied to money figures in `scramble` mode — preserves
+ * ratios and curve shape but changes absolute amounts so screenshots look real
+ * without leaking values. Shared by `obfuscateSnapshot` (App) and any component
+ * that renders its own un-scrambled figures (e.g. the portfolio value chart, which
+ * fetches its own series), so both stay in lockstep.
+ */
+export const SCRAMBLE_MONEY_FACTOR = 1.11 * 1.23
+
+export function scrambleMoney(value: number): number {
+  return Number.isFinite(value) ? value * SCRAMBLE_MONEY_FACTOR : value
+}
+
 const MODE_META: Record<PrivacyMode, { label: string; description: string }> = {
   off: { label: "Off", description: "Show real figures" },
   scramble: { label: "Scramble", description: "Obfuscate with non-real numbers" },
