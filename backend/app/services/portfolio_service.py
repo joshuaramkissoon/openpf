@@ -590,16 +590,27 @@ def get_portfolio_snapshot(
             "yfinance_ticker": yf_ticker,
         }
 
+    # Per-account base currency (ISA=GBP, Invest=USD) for converting money fields.
+    account_currency_map = {a.account_kind: a.currency for a in accounts_all}
+
     enriched: list[dict[str, Any]] = []
     for p in positions:
         raw_total_cost = float(getattr(p, "total_cost", 0.0) or 0.0)
         if raw_total_cost <= 0 and abs(float(p.value or 0.0) - float(p.ppl or 0.0)) > 0:
             raw_total_cost = max(float(p.value or 0.0) - float(p.ppl or 0.0), 0.0)
-        converted_total_cost = _to_target(raw_total_cost, p.currency)
-        converted_value = _to_target(p.value, p.currency)
+        # CURRENCY FIX: money fields (value / ppl / cost) are in the ACCOUNT base
+        # currency (ISA=GBP, Invest=USD); price fields (current/avg) are in the
+        # INSTRUMENT currency (USD for PLTR, GBX for LSE ETPs, …). T212 tags every
+        # position row with the *instrument* currency, so converting the money
+        # fields with it double-converts ISA holdings (~1.34x too low) and makes
+        # the sheet's value disagree with last-price × qty. Convert money from the
+        # account currency, prices from the instrument currency.
+        money_ccy = account_currency_map.get(p.account_kind) or p.currency
+        converted_total_cost = _to_target(raw_total_cost, money_ccy)
+        converted_value = _to_target(p.value, money_ccy)
+        converted_ppl = _to_target(p.ppl, money_ccy)
         converted_avg_price = _to_target(p.average_price, p.currency)
         converted_current_price = _to_target(p.current_price, p.currency)
-        converted_ppl = _to_target(p.ppl, p.currency)
         weight = (converted_value / total_value) if total_value else 0.0
 
         resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
