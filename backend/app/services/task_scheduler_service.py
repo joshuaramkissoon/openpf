@@ -22,7 +22,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
 )
 from app.services import costs_service
 from app.services.config_store import ConfigStore
@@ -301,6 +301,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
     yfinance_script = _MCP_SERVER_DIR / "marketdata.py"
     scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
     fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
+    intel_script = _MCP_SERVER_DIR / "intel.py"
     if t212_script.is_file():
         mcp_servers["trading212"] = {
             "type": "stdio",
@@ -351,6 +352,14 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
             "env": _mcp_env,
         }
         allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
+    if intel_script.is_file():
+        mcp_servers["intel"] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [str(intel_script)],
+            "env": _mcp_env,
+        }
+        allowed_tools.extend(_INTEL_MCP_TOOLS)
 
     options = ClaudeAgentOptions(
         system_prompt={

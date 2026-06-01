@@ -14,7 +14,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
 )
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
 
@@ -251,6 +251,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
         market_script = _MCP_SERVER_DIR / "marketdata.py"
         scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
         fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
+        intel_script = _MCP_SERVER_DIR / "intel.py"
 
         # Resolve a possibly-relative SQLite DATABASE_URL to an absolute
         # path so MCP subprocesses (which may run with a different CWD)
@@ -296,6 +297,14 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                 "env": _mcp_env,
             }
             allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
+        if intel_script.is_file():
+            mcp_servers["intel"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(intel_script)],
+                "env": _mcp_env,
+            }
+            allowed_tools.extend(_INTEL_MCP_TOOLS)
 
         options = ClaudeAgentOptions(
             system_prompt=(

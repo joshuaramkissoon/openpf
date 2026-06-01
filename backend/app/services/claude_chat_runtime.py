@@ -19,7 +19,7 @@ from app.services.claude_sdk_config import (
     resolve_t212_env,
     runtime_info as sdk_runtime_info,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
 )
 
 settings = get_settings()
@@ -296,6 +296,7 @@ class ClaudeChatRuntime:
         scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
         forecast_script = _MCP_SERVER_DIR / "forecast.py"
         fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
+        intel_script = _MCP_SERVER_DIR / "intel.py"
         if t212_script.is_file():
             mcp_servers["trading212"] = {
                 "type": "stdio",
@@ -360,6 +361,17 @@ class ClaudeChatRuntime:
                 "env": _mcp_env,
             }
             allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
+
+        # Intel MCP (Finnhub news + FRED macro). Reads provider keys from the DB
+        # (ConfigStore data_providers) via DATABASE_URL in _mcp_env.
+        if intel_script.is_file():
+            mcp_servers["intel"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(intel_script)],
+                "env": _mcp_env,
+            }
+            allowed_tools.extend(_INTEL_MCP_TOOLS)
 
         self._info = {
             **runtime,

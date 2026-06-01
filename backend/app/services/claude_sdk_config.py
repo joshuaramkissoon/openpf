@@ -230,6 +230,13 @@ _FUNDAMENTALS_MCP_TOOLS = [
     "mcp__fundamentals__get_earnings_calendar",
 ]
 
+_INTEL_MCP_TOOLS = [
+    "mcp__intel__get_company_news",
+    "mcp__intel__get_market_news",
+    "mcp__intel__get_macro_snapshot",
+    "mcp__intel__get_earnings",
+]
+
 # Narrow T212 subset the execution subagent is allowed to use — no CSV
 # export, no dividend/transaction history.
 _EXECUTION_T212_TOOLS = [
@@ -316,7 +323,7 @@ def build_subagents() -> dict[str, Any]:
             "structured research findings and writes artifacts when useful."
         ),
         prompt=_RESEARCHER_PROMPT,
-        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS],
+        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS, *_INTEL_MCP_TOOLS],
         model="sonnet",
     )
 
