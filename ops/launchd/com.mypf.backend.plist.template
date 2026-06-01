@@ -5,17 +5,14 @@
   <key>Label</key>
   <string>@LABEL@</string>
 
-  <!-- uvicorn wrapped in `caffeinate -i` so the Mac doesn't idle-sleep while the
-       backend (and the autonomous scheduled loop) runs — caffeinate's job, which
-       launchd's KeepAlive does NOT do. caffeinate exits when uvicorn exits, so
-       launchd still sees a crash as an exit and restarts the whole thing.
+  <!-- Supervised, NON-reload uvicorn. No caffeinate wrapper: this Mac mini
+       already has system sleep disabled on AC power (pmset 'sleep 0'), so
+       launchd only needs to handle crash-restart + start-at-login.
        `--reload` is deliberately omitted: under --reload a crashed worker leaves
        the reloader parent alive, so KeepAlive never sees an exit. Without it, a
        crash exits the process and KeepAlive brings it straight back. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/caffeinate</string>
-    <string>-i</string>
     <string>@UVICORN@</string>
     <string>app.main:app</string>
     <string>--host</string>

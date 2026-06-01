@@ -9,10 +9,12 @@ This installs the backend as a **launchd user agent** with `KeepAlive`, so any
 exit (crash included) is restarted automatically, and `RunAtLoad` keeps it
 running across login/reboot.
 
-It wraps uvicorn in **`caffeinate -i`**, so it also prevents the Mac from
-idle-sleeping (which `KeepAlive` alone does not do) — keeping the backend and
-the autonomous scheduled loop alive 24/7. This **fully replaces** the old
-`caffeinate`-based serve script: don't run both (they collide on :8000).
+No `caffeinate` wrapper: this Mac mini already has system sleep disabled on AC
+power (`pmset -g` shows `sleep 0`), so the box never idle-sleeps and launchd
+only needs to handle crash-restart + start-at-login. This **replaces** the old
+`caffeinate`-based serve script — don't run both (they collide on :8000). If the
+machine's power policy ever changes to allow sleep, re-add a `caffeinate -i`
+wrapper to `ProgramArguments`.
 
 ## Use
 
