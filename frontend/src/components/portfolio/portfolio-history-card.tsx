@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
-import { getPortfolioHistory, type PortfolioHistory } from "@/api/client"
-import { SectionCard } from "@/components/kit"
+import { getPortfolioHistory, type PortfolioHistory, type PortfolioHistoryPoint } from "@/api/client"
+import { Money, MoneyDelta, PctDelta, SectionCard } from "@/components/kit"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
-import { usePrivacyMode } from "@/lib/privacy"
+import { usePrivacyMode, scrambleMoney } from "@/lib/privacy"
+import { formatCompactMoney } from "@/utils/format"
 
 type Mode = "value" | "return"
 
@@ -17,31 +19,19 @@ const RANGES: { label: string; days: number }[] = [
   { label: "All", days: 1825 },
 ]
 
-function fmtMoney(v: number, currency: "GBP" | "USD"): string {
-  const sym = currency === "USD" ? "$" : "£"
-  const sign = v < 0 ? "-" : ""
-  const a = Math.abs(v)
-  if (a >= 1000) return `${sign}${sym}${(a / 1000).toFixed(a >= 100000 ? 0 : 1)}k`
-  return `${sign}${sym}${a.toFixed(0)}`
-}
-
-function fmtSignedMoney(v: number, currency: "GBP" | "USD"): string {
-  return `${v >= 0 ? "+" : ""}${fmtMoney(v, currency)}`
-}
-
-function HistoryTooltip({ active, payload, currency, mode, redact }: any) {
+function HistoryTooltip({ active, payload, currency, mode }: any) {
   if (!active || !payload?.length) return null
-  const p = payload[0].payload
-  const val = mode === "value" ? p.total : p.gain
-  const label = mode === "value" ? "Value" : "Gain"
+  const p = payload[0].payload as PortfolioHistoryPoint
   return (
     <div className="rounded-lg border border-border/60 bg-popover px-3 py-2 text-xs shadow-md">
       <div className="font-medium">{p.date}</div>
-      <div className="mt-0.5 text-muted-foreground">
-        {label}:{" "}
-        <span className={cn("font-semibold text-foreground", redact && "blur-[5px] select-none")}>
-          {mode === "value" ? fmtMoney(val, currency) : fmtSignedMoney(val, currency)}
-        </span>
+      <div className="mt-0.5 flex items-center gap-1 text-muted-foreground">
+        {mode === "value" ? "Value:" : "Gain:"}
+        {mode === "value" ? (
+          <Money value={p.total} currency={currency} className="text-foreground" />
+        ) : (
+          <MoneyDelta value={p.gain} currency={currency} />
+        )}
       </div>
     </div>
   )
@@ -58,9 +48,10 @@ export function PortfolioHistoryCard({
   const [days, setDays] = useState(365)
   const [mode, setMode] = useState<Mode>("value")
   const privacy = usePrivacyMode()
-  // Both modes hide the £ axis values; only full-privacy "blur" obscures the curve
-  // itself. Scramble keeps a real-looking line (shape leaks no absolute amount).
-  const hideValues = privacy !== "off"
+  // Scramble scales the figures (kit components then render them plainly, matching
+  // the rest of the dashboard); blur obscures the curve itself + the kit figures
+  // blur themselves via privacy context. So we only special-case the SVG here.
+  const scramble = privacy === "scramble"
   const blurChart = privacy === "blur"
 
   useEffect(() => {
@@ -76,17 +67,20 @@ export function PortfolioHistoryCard({
   const points = data?.points ?? []
   const rangeLabel = RANGES.find((r) => r.days === days)?.label ?? "period"
 
-  const valueChange = useMemo(() => {
-    if (points.length < 2) return 0
-    return points[points.length - 1].total - points[0].total
-  }, [points])
+  // In scramble mode, scale the plotted series so the axis/curve look real without
+  // leaking absolute amounts (same deterministic factor the stat cards use).
+  const chartData = useMemo(
+    () => (scramble ? points.map((p) => ({ ...p, total: scrambleMoney(p.total), gain: scrambleMoney(p.gain) })) : points),
+    [points, scramble],
+  )
 
-  // value mode coloured by the value delta; return mode by the (contribution-
-  // adjusted) Dietz return.
-  const positive = mode === "value" ? valueChange >= 0 : (data?.return_pct ?? 0) >= 0
+  const valueChange = points.length >= 2 ? points[points.length - 1].total - points[0].total : 0
+  const finalGain = points.length ? points[points.length - 1].gain : 0
+  const returnPct = data?.return_pct ?? 0
+
+  const positive = mode === "value" ? valueChange >= 0 : returnPct >= 0
   const stroke = positive ? "var(--positive, #10b981)" : "var(--destructive, #ef4444)"
   const dataKey = mode === "value" ? "total" : "gain"
-  const finalGain = points.length ? points[points.length - 1].gain : 0
 
   return (
     <SectionCard
@@ -121,39 +115,33 @@ export function PortfolioHistoryCard({
       ) : (
         <>
           <div className="mb-3 flex items-center justify-between gap-3">
-            {/* Value ⇄ Return toggle */}
-            <div className="inline-flex rounded-md border border-border/60 p-0.5">
-              {(["value", "return"] as Mode[]).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  className={cn(
-                    "h-6 rounded px-2.5 text-xs font-medium capitalize transition-colors",
-                    mode === m ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
+            <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
+              <TabsList className="h-7">
+                <TabsTrigger value="value" className="px-2.5 text-xs">
+                  Value
+                </TabsTrigger>
+                <TabsTrigger value="return" className="px-2.5 text-xs">
+                  Return
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
 
-            {/* Headline metric */}
-            <div className="flex items-baseline gap-2 text-right">
+            <div className="flex items-baseline gap-2 text-right text-sm">
               {mode === "value" ? (
                 <>
-                  <span className={cn("text-sm font-medium", positive ? "text-positive" : "text-destructive", hideValues && "blur-[5px] select-none")}>
-                    {fmtSignedMoney(valueChange, displayCurrency)}
-                  </span>
+                  <MoneyDelta value={scramble ? scrambleMoney(valueChange) : valueChange} currency={displayCurrency} />
                   <span className="text-xs text-muted-foreground">over {rangeLabel}</span>
                 </>
               ) : (
                 <>
-                  <span className={cn("text-sm font-semibold", positive ? "text-positive" : "text-destructive")}>
-                    {(data?.return_pct ?? 0) >= 0 ? "+" : ""}
-                    {(((data?.return_pct ?? 0)) * 100).toFixed(1)}%
-                  </span>
-                  <span className={cn("text-xs text-muted-foreground", hideValues && "blur-[5px] select-none")}>
-                    {fmtSignedMoney(finalGain, displayCurrency)} · {rangeLabel}
+                  <PctDelta value={returnPct} className="font-semibold" />
+                  <span className="flex items-baseline gap-1 text-xs text-muted-foreground">
+                    <MoneyDelta
+                      value={scramble ? scrambleMoney(finalGain) : finalGain}
+                      currency={displayCurrency}
+                      className="text-xs"
+                    />
+                    · {rangeLabel}
                   </span>
                 </>
               )}
@@ -162,7 +150,7 @@ export function PortfolioHistoryCard({
 
           <div className={cn(blurChart && "blur-[6px] select-none")} aria-hidden={blurChart}>
             <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={points} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={stroke} stopOpacity={0.25} />
@@ -178,16 +166,16 @@ export function PortfolioHistoryCard({
                 />
                 <YAxis
                   width={48}
-                  tick={hideValues ? false : { fontSize: 10, fill: "var(--muted-foreground)" }}
+                  tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(v) => fmtMoney(v, displayCurrency)}
+                  tickFormatter={(v) => formatCompactMoney(v, displayCurrency)}
                   domain={mode === "return" ? ([(min: number) => Math.min(0, min), "auto"] as any) : ["auto", "auto"]}
                 />
                 {mode === "return" ? <ReferenceLine y={0} stroke="var(--border)" strokeDasharray="3 3" /> : null}
                 <Tooltip
                   cursor={{ stroke: "var(--border)" }}
-                  content={<HistoryTooltip currency={displayCurrency} mode={mode} redact={hideValues} />}
+                  content={<HistoryTooltip currency={displayCurrency} mode={mode} />}
                 />
                 <Area type="monotone" dataKey={dataKey} stroke={stroke} strokeWidth={2} fill="url(#equityFill)" />
               </AreaChart>
