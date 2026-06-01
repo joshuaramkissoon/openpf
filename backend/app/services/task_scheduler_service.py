@@ -63,6 +63,24 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "watch_cycle",
+        "cron_expr": "0 8-21 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_model,
+        "enabled": True,
+        "meta": {
+            "task_kind": "watch_cycle",
+            "description": "Hourly watches → ranked alerts in the Attention inbox (deterministic)",
+        },
+        # Deterministic engine run (not sent to an LLM): concentration / thesis
+        # invalidation / earnings-soon / big-move checks → deduped Alert rows.
+        "prompt": (
+            "Deterministic watch cycle: run portfolio-scoped watches (concentration breach, thesis "
+            "invalidation, earnings within 3 days, big intraday moves on holdings) and raise ranked, "
+            "deduped alerts to the Attention inbox. Materiality-gated; no LLM call."
+        ),
+    },
+    {
         "name": "lev_morning_scan",
         "cron_expr": "30 7 * * 1-5",
         "timezone": "Europe/London",
@@ -650,6 +668,25 @@ def _render_leveraged_monitor_md(result: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_watch_md(result: dict[str, Any]) -> str:
+    """Render a watch-cycle run as a short markdown artifact."""
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    created = int(result.get("created", 0) or 0)
+    by_cat = result.get("by_category") or {}
+    lines = [
+        "# Watch Cycle",
+        f"_{stamp}_",
+        "",
+        f"Raised **{created}** new alert(s)." if created else "No new alerts — nothing crossed a threshold.",
+    ]
+    if by_cat:
+        lines.append("")
+        lines += [f"- {cat}: {n}" for cat, n in sorted(by_cat.items())]
+    if result.get("errors"):
+        lines += ["", "Errors:"] + [f"- {e}" for e in result["errors"]]
+    return "\n".join(lines)
+
+
 def _render_rebalance_md(plan: dict[str, Any]) -> str:
     """Render a rebalance proposal as a human-readable markdown artifact."""
     stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -804,6 +841,16 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
 
         result = propose_rebalance(db, account_kind="all")
         content = _render_rebalance_md(result)
+        path = _cron_log_path(task.name, content, task_kind=kind, description=description)
+        return "ok", {"result": result}, path, {}
+
+    if kind == "watch_cycle":
+        # The 'Spot' layer: deterministic watches → ranked Alerts in the
+        # Attention inbox. Materiality-gated + deduped; never an LLM run.
+        from app.services.watch_service import run_watches
+
+        result = run_watches(db)
+        content = _render_watch_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
