@@ -8,6 +8,7 @@ import type { PortfolioSnapshot, PositionItem } from "@/types"
 import { AllocationCard } from "./allocation-card"
 import { PositionDetailSheet } from "./position-detail-sheet"
 import { PositionsTable } from "./positions-table"
+import { RebalanceCard } from "./rebalance-card"
 
 export function PortfolioOverview({
   snapshot,
@@ -85,6 +86,8 @@ export function PortfolioOverview({
           />
         </div>
       </div>
+
+      <RebalanceCard accountView={accountView} />
 
       {briefMarkdown ? (
         <SectionCard title="Agent Brief" description="Latest reasoning-cycle summary">

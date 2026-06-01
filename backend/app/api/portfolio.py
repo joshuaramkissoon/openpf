@@ -1,11 +1,13 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.schemas.portfolio import PortfolioSnapshotResponse, RefreshResponse
+from app.services.config_store import ConfigStore
+from app.services.portfolio_optimizer import compute_rebalance, propose_rebalance
 from app.services.portfolio_service import get_portfolio_snapshot, refresh_portfolio
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -36,3 +38,42 @@ def snapshot(
 ) -> PortfolioSnapshotResponse:
     result = get_portfolio_snapshot(db, account_kind=account_kind, display_currency=display_currency)
     return PortfolioSnapshotResponse(**result)
+
+
+# ── Autopilot rebalancer ────────────────────────────────────────────────────
+
+
+@router.get("/rebalance")
+def rebalance_preview(
+    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Preview the autopilot rebalance plan (no intents created)."""
+    try:
+        return compute_rebalance(db, account_kind=account_kind)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/rebalance/propose")
+def rebalance_propose(
+    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Compute a rebalance and queue its trades as PROPOSED intents for approval."""
+    try:
+        return propose_rebalance(db, account_kind=account_kind)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/rebalance/policy")
+def rebalance_policy(db: Session = Depends(get_db)) -> dict:
+    """The rebalance policy (caps, min-trade, turnover budget) Archie operates under."""
+    return ConfigStore(db).get_rebalance()
+
+
+@router.patch("/rebalance/policy")
+def patch_rebalance_policy(payload: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict:
+    """Tune the rebalance policy (e.g. set a per-name cap). Archie does this when you ask in chat."""
+    return ConfigStore(db).set_rebalance(payload or {})

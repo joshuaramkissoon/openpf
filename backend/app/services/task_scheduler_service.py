@@ -79,6 +79,25 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "prompt": "Run open-trade monitor and enforce close-time rules for non-overnight leveraged positions.",
     },
     {
+        "name": "portfolio_rebalance_check",
+        "cron_expr": "0 9 * * 0",
+        "timezone": "Europe/London",
+        "model": settings.claude_agent_model,
+        "enabled": False,
+        "meta": {
+            "task_kind": "portfolio_rebalance",
+            "description": "Weekly core-book drift check → proposes concentration trims for approval",
+        },
+        # Deterministic engine run (not sent to an LLM): detects cap breaches and
+        # queues trim proposals into Execution. Disabled by default — enable it
+        # to put core-book rebalancing on autopilot.
+        "prompt": (
+            "Deterministic portfolio rebalance check: aggregate holdings by ticker across accounts, "
+            "flag any name over its concentration cap, and queue minimum-turnover trim proposals for "
+            "approval. Renders a markdown report; never auto-executes."
+        ),
+    },
+    {
         "name": "weekly_review",
         "cron_expr": "0 10 * * 0",
         "timezone": "Europe/London",
@@ -557,6 +576,37 @@ def _render_leveraged_monitor_md(result: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_rebalance_md(plan: dict[str, Any]) -> str:
+    """Render a rebalance proposal as a human-readable markdown artifact."""
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    trades = plan.get("trades") or []
+    before = plan.get("before") or {}
+    after = plan.get("after") or {}
+    lines = [
+        "# Portfolio Rebalance Check",
+        f"_{stamp}_",
+        "",
+        plan.get("rationale", ""),
+        "",
+        f"- Top weight: {before.get('top_position_weight', 0):.1%} → {after.get('top_position_weight', 0):.1%}",
+        f"- Concentration (HHI): {before.get('concentration_hhi')} → {after.get('concentration_hhi')}",
+        f"- Proposed intents queued for approval: {plan.get('proposed_count', 0)}",
+        "",
+    ]
+    if trades:
+        lines += ["| Side | Ticker | Account | Notional | Current → Target |", "|---|---|---|---|---|"]
+        for t in trades:
+            cur = f"{(t.get('current_weight') or 0):.1%}"
+            tgt = f"{(t.get('target_weight') or 0):.0%}" if t.get("target_weight") else "—"
+            lines.append(
+                f"| {t.get('side')} | {t.get('ticker')} | {t.get('account_kind')} | "
+                f"£{float(t.get('est_notional') or 0):,.0f} | {cur} → {tgt} |"
+            )
+    else:
+        lines.append("No trades — the core book is within its concentration caps.")
+    return "\n".join(lines)
+
+
 def _render_leveraged_scan_md(result: dict[str, Any]) -> str:
     """Render scan_signals output as a human-readable markdown report.
 
@@ -670,6 +720,16 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
     if kind == "leveraged_monitor":
         result = monitor_open_trades(db)
         content = _render_leveraged_monitor_md(result)
+        path = _cron_log_path(task.name, content, task_kind=kind, description=description)
+        return "ok", {"result": result}, path, {}
+
+    if kind == "portfolio_rebalance":
+        # Autopilot core-book check: detect concentration drift and queue trims
+        # as proposed intents for the operator to approve. Never auto-executes.
+        from app.services.portfolio_optimizer import propose_rebalance
+
+        result = propose_rebalance(db, account_kind="all")
+        content = _render_rebalance_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 

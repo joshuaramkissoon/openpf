@@ -338,6 +338,15 @@ class ConfigStore:
         ]
         return self.set("leveraged_config", normalized)
 
+    def get_rebalance(self) -> dict[str, Any]:
+        from app.services.portfolio_optimizer import REBALANCE_DEFAULT
+
+        return {**REBALANCE_DEFAULT, **(self.get("rebalance_config", REBALANCE_DEFAULT) or {})}
+
+    def set_rebalance(self, value: dict[str, Any]) -> dict[str, Any]:
+        merged = {**self.get_rebalance(), **value}
+        return self.set("rebalance_config", merged)
+
     def assembled_public(self) -> dict[str, Any]:
         risk = self.get_risk()
         broker = self.get_broker()
