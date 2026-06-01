@@ -14,9 +14,9 @@ router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
 @router.post("/refresh", response_model=RefreshResponse)
-def refresh(db: Session = Depends(get_db)) -> RefreshResponse:
+def refresh(force: bool = Query(default=False), db: Session = Depends(get_db)) -> RefreshResponse:
     try:
-        result = refresh_portfolio(db)
+        result = refresh_portfolio(db, force=force)
         return RefreshResponse(**result)
     except Exception:
         # Keep UI usable under upstream rate-limit spikes by falling back to latest snapshot.

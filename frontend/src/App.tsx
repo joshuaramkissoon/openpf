@@ -254,13 +254,14 @@ export default function App() {
   const loadAll = useCallback(async (
     withRefresh = false,
     selectedAccount: 'all' | 'invest' | 'stocks_isa' = accountView,
-    selectedCurrency: 'GBP' | 'USD' = displayCurrency
+    selectedCurrency: 'GBP' | 'USD' = displayCurrency,
+    force = false
   ) => {
     setBusy(true)
     setError(null)
     try {
       if (withRefresh) {
-        await refreshPortfolio()
+        await refreshPortfolio(force)
       }
 
       const [cfg, snap, runList, intentList, eventList, thesisList] = await Promise.all([
@@ -295,9 +296,40 @@ export default function App() {
   }, [accountView, displayCurrency])
 
   useEffect(() => {
-    void loadAll(false)
+    // Refresh-on-load: pull live data when the dashboard opens (server cooldown
+    // collapses rapid reloads, so this is cheap).
+    void loadAll(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Silent snapshot refresh used by the 60s poll + tab-focus — no busy spinner,
+  // snapshot-only, errors swallowed (a transient poll failure shouldn't banner).
+  const refreshSnapshotSilently = useCallback(async () => {
+    try {
+      await refreshPortfolio()
+      const snap = await getSnapshot(accountView, displayCurrency)
+      setSnapshot(snap)
+      setLastUpdate(new Date().toISOString())
+    } catch {
+      /* silent — poll failures are non-fatal */
+    }
+  }, [accountView, displayCurrency])
+
+  // Auto-refresh the dashboard every 60s while the Portfolio tab is active and
+  // the browser tab is visible, plus immediately when the tab regains focus.
+  useEffect(() => {
+    function maybeRefresh() {
+      if (activeSection === 'overview' && document.visibilityState === 'visible') {
+        void refreshSnapshotSilently()
+      }
+    }
+    const id = window.setInterval(maybeRefresh, 60_000)
+    document.addEventListener('visibilitychange', maybeRefresh)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', maybeRefresh)
+    }
+  }, [activeSection, refreshSnapshotSilently])
 
   const bootstrapChatSessions = useCallback(async () => {
     setChatSessionBusy(true)
@@ -727,7 +759,7 @@ export default function App() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void loadAll(true)}
+              onClick={() => void loadAll(true, accountView, displayCurrency, true)}
               disabled={busy}
               aria-label="Refresh"
               className="px-2 sm:px-3"
