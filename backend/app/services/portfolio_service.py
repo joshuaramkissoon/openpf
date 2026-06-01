@@ -716,3 +716,57 @@ def get_portfolio_snapshot(
         "positions": enriched,
         "metrics": metrics,
     }
+
+
+def portfolio_history(
+    db: Session,
+    account_kind: AccountViewKind = "all",
+    display_currency: str | None = None,
+    days: int = 365,
+) -> dict[str, Any]:
+    """Equity curve over time from stored AccountSnapshot rows.
+
+    Groups snapshots by timestamp (accounts are fetched together), sums the
+    selected account(s) converted to the display currency, then downsamples to
+    the last point per day for a clean line. Depth depends on how long the app
+    has been recording snapshots.
+    """
+    from datetime import timedelta
+
+    requested = (display_currency or "").upper().strip()
+    if requested not in {"GBP", "USD"}:
+        requested = (settings.portfolio_display_currency or "").upper().strip()
+    target = requested if requested in {"GBP", "USD"} else "GBP"
+
+    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    q = db.query(AccountSnapshot).filter(AccountSnapshot.fetched_at >= cutoff)
+    if account_kind != "all":
+        q = q.filter(AccountSnapshot.account_kind == account_kind)
+    rows = q.order_by(AccountSnapshot.fetched_at.asc()).all()
+
+    def conv(amount: float, src: str | None) -> float:
+        return float(amount or 0.0) * get_fx_rate((src or target).upper().strip() or target, target)
+
+    by_ts: dict[Any, dict[str, float]] = {}
+    for a in rows:
+        d = by_ts.setdefault(a.fetched_at, {"total": 0.0, "invested": 0.0, "free_cash": 0.0})
+        d["total"] += max(conv(a.total, a.currency), 0.0)
+        d["invested"] += max(conv(a.invested, a.currency), 0.0)
+        d["free_cash"] += max(conv(a.free_cash, a.currency), 0.0)
+
+    # Keep the LAST snapshot of each calendar day for a clean daily series.
+    by_day: dict[Any, tuple[Any, dict[str, float]]] = {}
+    for ts in sorted(by_ts):
+        by_day[ts.date()] = (ts, by_ts[ts])
+
+    points = [
+        {
+            "date": day.isoformat(),
+            "t": ts.isoformat(),
+            "total": round(v["total"], 2),
+            "invested": round(v["invested"], 2),
+            "free_cash": round(v["free_cash"], 2),
+        }
+        for day, (ts, v) in sorted(by_day.items())
+    ]
+    return {"account_kind": account_kind, "currency": target, "points": points}
