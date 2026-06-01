@@ -590,16 +590,27 @@ def get_portfolio_snapshot(
             "yfinance_ticker": yf_ticker,
         }
 
+    # Per-account base currency (ISA=GBP, Invest=USD) for converting money fields.
+    account_currency_map = {a.account_kind: a.currency for a in accounts_all}
+
     enriched: list[dict[str, Any]] = []
     for p in positions:
         raw_total_cost = float(getattr(p, "total_cost", 0.0) or 0.0)
         if raw_total_cost <= 0 and abs(float(p.value or 0.0) - float(p.ppl or 0.0)) > 0:
             raw_total_cost = max(float(p.value or 0.0) - float(p.ppl or 0.0), 0.0)
-        converted_total_cost = _to_target(raw_total_cost, p.currency)
-        converted_value = _to_target(p.value, p.currency)
+        # CURRENCY FIX: money fields (value / ppl / cost) are in the ACCOUNT base
+        # currency (ISA=GBP, Invest=USD); price fields (current/avg) are in the
+        # INSTRUMENT currency (USD for PLTR, GBX for LSE ETPs, …). T212 tags every
+        # position row with the *instrument* currency, so converting the money
+        # fields with it double-converts ISA holdings (~1.34x too low) and makes
+        # the sheet's value disagree with last-price × qty. Convert money from the
+        # account currency, prices from the instrument currency.
+        money_ccy = account_currency_map.get(p.account_kind) or p.currency
+        converted_total_cost = _to_target(raw_total_cost, money_ccy)
+        converted_value = _to_target(p.value, money_ccy)
+        converted_ppl = _to_target(p.ppl, money_ccy)
         converted_avg_price = _to_target(p.average_price, p.currency)
         converted_current_price = _to_target(p.current_price, p.currency)
-        converted_ppl = _to_target(p.ppl, p.currency)
         weight = (converted_value / total_value) if total_value else 0.0
 
         resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
@@ -705,3 +716,57 @@ def get_portfolio_snapshot(
         "positions": enriched,
         "metrics": metrics,
     }
+
+
+def portfolio_history(
+    db: Session,
+    account_kind: AccountViewKind = "all",
+    display_currency: str | None = None,
+    days: int = 365,
+) -> dict[str, Any]:
+    """Equity curve over time from stored AccountSnapshot rows.
+
+    Groups snapshots by timestamp (accounts are fetched together), sums the
+    selected account(s) converted to the display currency, then downsamples to
+    the last point per day for a clean line. Depth depends on how long the app
+    has been recording snapshots.
+    """
+    from datetime import timedelta
+
+    requested = (display_currency or "").upper().strip()
+    if requested not in {"GBP", "USD"}:
+        requested = (settings.portfolio_display_currency or "").upper().strip()
+    target = requested if requested in {"GBP", "USD"} else "GBP"
+
+    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    q = db.query(AccountSnapshot).filter(AccountSnapshot.fetched_at >= cutoff)
+    if account_kind != "all":
+        q = q.filter(AccountSnapshot.account_kind == account_kind)
+    rows = q.order_by(AccountSnapshot.fetched_at.asc()).all()
+
+    def conv(amount: float, src: str | None) -> float:
+        return float(amount or 0.0) * get_fx_rate((src or target).upper().strip() or target, target)
+
+    by_ts: dict[Any, dict[str, float]] = {}
+    for a in rows:
+        d = by_ts.setdefault(a.fetched_at, {"total": 0.0, "invested": 0.0, "free_cash": 0.0})
+        d["total"] += max(conv(a.total, a.currency), 0.0)
+        d["invested"] += max(conv(a.invested, a.currency), 0.0)
+        d["free_cash"] += max(conv(a.free_cash, a.currency), 0.0)
+
+    # Keep the LAST snapshot of each calendar day for a clean daily series.
+    by_day: dict[Any, tuple[Any, dict[str, float]]] = {}
+    for ts in sorted(by_ts):
+        by_day[ts.date()] = (ts, by_ts[ts])
+
+    points = [
+        {
+            "date": day.isoformat(),
+            "t": ts.isoformat(),
+            "total": round(v["total"], 2),
+            "invested": round(v["invested"], 2),
+            "free_cash": round(v["free_cash"], 2),
+        }
+        for day, (ts, v) in sorted(by_day.items())
+    ]
+    return {"account_kind": account_kind, "currency": target, "points": points}

@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.schemas.portfolio import PortfolioSnapshotResponse, RefreshResponse
 from app.services.config_store import ConfigStore
 from app.services.portfolio_optimizer import compute_rebalance, propose_rebalance
-from app.services.portfolio_service import get_portfolio_snapshot, refresh_portfolio
+from app.services.portfolio_service import get_portfolio_snapshot, portfolio_history, refresh_portfolio
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -38,6 +38,17 @@ def snapshot(
 ) -> PortfolioSnapshotResponse:
     result = get_portfolio_snapshot(db, account_kind=account_kind, display_currency=display_currency)
     return PortfolioSnapshotResponse(**result)
+
+
+@router.get("/history")
+def history(
+    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    display_currency: Literal["GBP", "USD"] | None = Query(default=None),
+    days: int = Query(default=365, ge=1, le=1825),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Portfolio equity curve (total/invested/free-cash over time)."""
+    return portfolio_history(db, account_kind=account_kind, display_currency=display_currency, days=days)
 
 
 # ── Autopilot rebalancer ────────────────────────────────────────────────────

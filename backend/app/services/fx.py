@@ -54,9 +54,27 @@ def _fallback_rate(base: str, quote: str) -> float:
     return 1.0
 
 
+# Minor units quoted in 1/100 of a major currency (LSE prices in GBX/pence, etc.).
+# FX providers don't know these, so decompose to the major currency + a factor.
+_MINOR_UNITS: dict[str, tuple[str, float]] = {
+    "GBX": ("GBP", 0.01),
+    "GBP_PENCE": ("GBP", 0.01),
+    "ZAC": ("ZAR", 0.01),
+    "ILA": ("ILS", 0.01),
+}
+
+
 def get_fx_rate(base_currency: str, quote_currency: str) -> float:
     base = (base_currency or "").upper().strip() or "USD"
     quote = (quote_currency or "").upper().strip() or "USD"
+
+    # Handle pence-style minor units by converting to their major unit + scaling,
+    # then recursing on the (major) currency pair the providers understand.
+    if base in _MINOR_UNITS or quote in _MINOR_UNITS:
+        b_major, b_mult = _MINOR_UNITS.get(base, (base, 1.0))
+        q_major, q_mult = _MINOR_UNITS.get(quote, (quote, 1.0))
+        return get_fx_rate(b_major, q_major) * b_mult / q_mult
+
     if base == quote:
         return 1.0
 

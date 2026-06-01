@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Loader2, Menu, Play, Plus, RefreshCw, X } from 'lucide-react'
+import { Loader2, Menu, Plus, RefreshCw, X } from 'lucide-react'
 
 import {
   archiveThesis,
@@ -18,7 +18,6 @@ import {
   getTheses,
   refreshPortfolio,
   rejectIntent,
-  runAgent,
   updateThesisStatus,
   type ApiError,
 } from './api/client'
@@ -483,20 +482,6 @@ export default function App() {
     setActiveChatSessionId(session.id)
   }
 
-  async function runAgentNow(executeAuto = false) {
-    setBusy(true)
-    setError(null)
-    try {
-      const detail = await runAgent(true, executeAuto)
-      setActiveRun(detail)
-      await loadAll(false)
-    } catch (err) {
-      setError(parseApiError(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function handleApprove(id: string) {
     try {
       await approveIntent(id)
@@ -669,7 +654,6 @@ export default function App() {
             positions={displayPositions}
             accountView={accountView}
             displayCurrency={displayCurrency}
-            briefMarkdown={activeRun?.summary_markdown || null}
           />
         </div>
       )
@@ -800,24 +784,13 @@ export default function App() {
             </Select>
             <Button
               variant="outline"
-              size="sm"
+              size="icon"
               onClick={() => void loadAll(true, accountView, displayCurrency, true)}
               disabled={busy}
               aria-label="Refresh"
-              className="px-2 sm:px-3"
+              title="Refresh live data"
             >
               <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => void runAgentNow(false)}
-              disabled={busy}
-              aria-label="Run Agent"
-              className="px-2 sm:px-3"
-            >
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-              <span className="hidden sm:inline">Run Agent</span>
             </Button>
           </div>
           ) : null}

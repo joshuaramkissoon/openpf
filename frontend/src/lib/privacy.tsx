@@ -12,7 +12,9 @@ import { createContext, useContext, type ReactNode } from "react"
  */
 export type PrivacyMode = "off" | "scramble" | "blur"
 
-export const PRIVACY_MODES: PrivacyMode[] = ["off", "scramble", "blur"]
+// Cycle order (P key / sidebar toggle): Off → Blur → Scramble. Blur is the more
+// useful privacy mode, so it's the first stop from Off.
+export const PRIVACY_MODES: PrivacyMode[] = ["off", "blur", "scramble"]
 
 const STORAGE_KEY = "mypf.presentation.mode"
 const LEGACY_KEY = "mypf.presentation.mask"
