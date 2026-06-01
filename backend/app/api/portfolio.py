@@ -44,11 +44,28 @@ def snapshot(
 def history(
     account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
     display_currency: Literal["GBP", "USD"] | None = Query(default=None),
-    days: int = Query(default=365, ge=1, le=1825),
+    days: int = Query(default=365, ge=1, le=8000),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Portfolio equity + return curve (value, gain net of contributions, Dietz %)."""
+    """Portfolio equity + return curve (value, gain net of contributions, Dietz %).
+    Includes reconstructed history before the first recorded snapshot; request a
+    large ``days`` (e.g. 8000) for the full account lifetime."""
     return portfolio_history(db, account_kind=account_kind, display_currency=display_currency, days=days)
+
+
+@router.post("/history/backfill")
+def history_backfill(
+    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reconstruct the historical equity curve from full T212 order/dividend
+    history (slow + rate-limited — runs synchronously here, intended for an
+    occasional manual/scheduled rebuild). Persists to reconstructed_equity_daily."""
+    from app.services.equity_backfill import backfill_account, backfill_all
+
+    if account_kind == "all":
+        return backfill_all(db)
+    return backfill_account(db, account_kind)
 
 
 @router.post("/cashflows/sync")

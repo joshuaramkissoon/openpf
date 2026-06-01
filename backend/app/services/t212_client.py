@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import base64
+import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import httpx
 
@@ -72,9 +73,14 @@ class T212Client:
             detail = response.text
             if response.status_code == 429:
                 reset_at = response.headers.get("x-ratelimit-reset", "")
-                raise T212RateLimitError(
+                err = T212RateLimitError(
                     f"Trading 212 rate limit hit (429). reset={reset_at}. detail={detail[:300]}"
                 )
+                try:
+                    err.reset_epoch = float(reset_at) if reset_at else None  # type: ignore[attr-defined]
+                except (TypeError, ValueError):
+                    err.reset_epoch = None  # type: ignore[attr-defined]
+                raise err
             raise T212Error(f"Trading 212 API error {response.status_code}: {detail[:500]}")
 
         data = response.json() if response.content else {}
@@ -105,6 +111,95 @@ class T212Client:
         if isinstance(data, dict) and "items" in data:
             return data["items"]
         return []
+
+    # ── Paginated history (orders / dividends) ───────────────────────────────
+    #
+    # T212 history endpoints are *aggressively* rate-limited (a tight per-minute
+    # budget — fast pagination trips 429 within a few calls). These walk the
+    # whole feed newest→oldest with a conservative inter-page sleep and a 429
+    # backoff that honours the ``x-ratelimit-reset`` header, so a one-time
+    # backfill completes without manual babysitting. ``on_page`` lets a caller
+    # checkpoint progress (and abort by returning False) for resumable backfills.
+
+    @staticmethod
+    def _history_next_params(next_page_path: str) -> dict[str, str]:
+        """Parse a T212 ``nextPagePath`` into query params.
+
+        The orders feed returns a *full* path
+        (``/api/v0/equity/history/orders?cursor=..&limit=50&instrumentCode=``)
+        while the transactions feed returns a bare query string
+        (``limit=50&cursor=..``). Handle both, and drop empty values (an empty
+        ``instrumentCode=`` would otherwise filter to a non-existent instrument).
+        """
+        query = next_page_path.split("?", 1)[1] if "?" in next_page_path else next_page_path
+        params: dict[str, str] = {}
+        for kv in query.split("&"):
+            if "=" not in kv:
+                continue
+            key, value = kv.split("=", 1)
+            if value != "":
+                params[key] = value
+        return params
+
+    def _paginate_history(
+        self,
+        path: str,
+        *,
+        limit: int = 50,
+        max_pages: int = 400,
+        page_sleep: float = 1.2,
+        max_429_retries: int = 6,
+        on_page: Callable[[list[dict[str, Any]], int], bool] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every item from a cursor-paginated history feed, newest first.
+
+        Retries on 429 with a bounded backoff (capped, honours reset header).
+        ``on_page(items, page_index)`` is invoked once per fetched page; return
+        False from it to stop early (resumable backfill checkpoints)."""
+        params: dict[str, Any] = {"limit": limit}
+        for page in range(max_pages):
+            attempt = 0
+            while True:
+                try:
+                    data, _meta = self._request("GET", path, params=params)
+                    break
+                except T212RateLimitError as exc:
+                    attempt += 1
+                    if attempt > max_429_retries:
+                        raise
+                    self._sleep_for_rate_limit(exc, attempt)
+            items = data.get("items", []) or []
+            if on_page is not None and on_page(items, page) is False:
+                return
+            for item in items:
+                yield item
+            nxt = data.get("nextPagePath")
+            if not nxt or not items:
+                return
+            params = self._history_next_params(nxt)
+            time.sleep(page_sleep)
+
+    def _sleep_for_rate_limit(self, exc: T212RateLimitError, attempt: int) -> None:
+        """Sleep before retrying a 429. Prefer the reset header; otherwise back
+        off geometrically. Capped so a stuck reset can't hang a backfill."""
+        delay = min(5.0 * (2 ** (attempt - 1)), 90.0)
+        reset = getattr(exc, "reset_epoch", None)
+        if isinstance(reset, (int, float)) and reset > 0:
+            wait = reset - time.time()
+            if 0 < wait < 120:
+                delay = wait + 1.0
+        time.sleep(delay)
+
+    def get_order_history(self, *, max_pages: int = 400, page_sleep: float = 2.5) -> list[dict[str, Any]]:
+        """All historical orders (each as ``{"order": {...}, "fill": {...}}``).
+        ``fill.quantity`` is signed (negative = sell); ``fill.price`` is in the
+        instrument currency; ``fill.walletImpact.netValue`` is the cash impact in
+        the account currency."""
+        return list(self._paginate_history("/equity/history/orders", max_pages=max_pages, page_sleep=page_sleep))
+
+    def get_dividends(self, *, max_pages: int = 200, page_sleep: float = 2.5) -> list[dict[str, Any]]:
+        """All dividend payments (``amount`` in ``currency``, paid ``paidOn``)."""
+        return list(self._paginate_history("/equity/history/dividends", max_pages=max_pages, page_sleep=page_sleep))
 
     def get_instruments_metadata(self) -> list[dict[str, Any]]:
         data, _ = self._request("GET", "/equity/metadata/instruments")

@@ -359,12 +359,16 @@ def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool
     broker = config.get_broker()
     watchlist = config.get_watchlist().get("symbols", [])
 
-    snapshot = get_portfolio_snapshot(db, strip_prices=True)
+    # Deterministic trims + the summary need real prices/weights; the LLM cycle
+    # gets a price-stripped view (it must pull live prices via the marketdata MCP
+    # rather than trust cached snapshot prices). So build both.
+    snapshot = get_portfolio_snapshot(db)
+    llm_snapshot = get_portfolio_snapshot(db, strip_prices=True)
     market_regime = _market_regime()
 
     ideas: list[ProposedIntent] = []
     summary_override: str | None = None
-    claude_result = run_claude_analyst_cycle(snapshot, watchlist, risk)
+    claude_result = run_claude_analyst_cycle(llm_snapshot, watchlist, risk)
 
     if claude_result and claude_result.get("ok"):
         summary_override = str(claude_result.get("summary_markdown") or "").strip() or None

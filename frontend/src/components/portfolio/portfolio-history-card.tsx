@@ -16,15 +16,19 @@ const RANGES: { label: string; days: number }[] = [
   { label: "3M", days: 93 },
   { label: "6M", days: 186 },
   { label: "1Y", days: 365 },
-  { label: "All", days: 1825 },
+  { label: "All", days: 8000 },
 ]
 
 function HistoryTooltip({ active, payload, currency, mode }: any) {
   if (!active || !payload?.length) return null
   const p = payload[0].payload as PortfolioHistoryPoint
+  const estimated = p.source === "reconstructed"
   return (
     <div className="rounded-lg border border-border/60 bg-popover px-3 py-2 text-xs shadow-md">
-      <div className="font-medium">{p.date}</div>
+      <div className="font-medium">
+        {p.date}
+        {estimated ? <span className="ml-1 font-normal text-muted-foreground">· estimated</span> : null}
+      </div>
       <div className="mt-0.5 flex items-center gap-1 text-muted-foreground">
         {mode === "value" ? "Value:" : "Gain:"}
         {mode === "value" ? (
@@ -82,13 +86,23 @@ export function PortfolioHistoryCard({
   const stroke = positive ? "var(--positive, #10b981)" : "var(--destructive, #ef4444)"
   const dataKey = mode === "value" ? "total" : "gain"
 
+  // Seam between reconstructed (estimated, from trade history) and recorded
+  // (live snapshot) data. The reconstructed portion renders faded.
+  const firstRecordedIdx = points.findIndex((p) => p.source === "recorded")
+  const hasReconstructed = firstRecordedIdx > 0 && points.some((p) => p.source === "reconstructed")
+  const seamDate = hasReconstructed ? points[firstRecordedIdx].date : null
+  const seamFrac = hasReconstructed && points.length > 1 ? firstRecordedIdx / (points.length - 1) : 0
+  const strokeRef = hasReconstructed ? "url(#equityStroke)" : stroke
+
   return (
     <SectionCard
       title="Portfolio value"
       description={
         points.length >= 2
           ? mode === "value"
-            ? "Total equity over time"
+            ? hasReconstructed
+              ? "Total equity over time — earlier portion reconstructed from trade history"
+              : "Total equity over time"
             : "Return — value change net of deposits & withdrawals"
           : "Builds up as snapshots are recorded"
       }
@@ -156,6 +170,13 @@ export function PortfolioHistoryCard({
                     <stop offset="0%" stopColor={stroke} stopOpacity={0.25} />
                     <stop offset="100%" stopColor={stroke} stopOpacity={0} />
                   </linearGradient>
+                  {/* Fade the reconstructed (estimated) span, solid from the seam onward. */}
+                  <linearGradient id="equityStroke" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset={0} stopColor={stroke} stopOpacity={0.35} />
+                    <stop offset={seamFrac} stopColor={stroke} stopOpacity={0.35} />
+                    <stop offset={seamFrac} stopColor={stroke} stopOpacity={1} />
+                    <stop offset={1} stopColor={stroke} stopOpacity={1} />
+                  </linearGradient>
                 </defs>
                 <XAxis
                   dataKey="date"
@@ -173,14 +194,29 @@ export function PortfolioHistoryCard({
                   domain={mode === "return" ? ([(min: number) => Math.min(0, min), "auto"] as any) : ["auto", "auto"]}
                 />
                 {mode === "return" ? <ReferenceLine y={0} stroke="var(--border)" strokeDasharray="3 3" /> : null}
+                {seamDate ? (
+                  <ReferenceLine
+                    x={seamDate}
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                    label={{ value: "recorded", position: "insideTopRight", fontSize: 9, fill: "var(--muted-foreground)" }}
+                  />
+                ) : null}
                 <Tooltip
                   cursor={{ stroke: "var(--border)" }}
                   content={<HistoryTooltip currency={displayCurrency} mode={mode} />}
                 />
-                <Area type="monotone" dataKey={dataKey} stroke={stroke} strokeWidth={2} fill="url(#equityFill)" />
+                <Area type="monotone" dataKey={dataKey} stroke={strokeRef} strokeWidth={2} fill="url(#equityFill)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
+
+          {hasReconstructed && seamDate ? (
+            <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+              Before {seamDate}, values are reconstructed from your T212 trade history (estimated); after, they are
+              recorded snapshots.
+            </p>
+          ) : null}
         </>
       )}
     </SectionCard>

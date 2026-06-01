@@ -519,6 +519,8 @@ export interface PortfolioHistoryPoint {
   invested: number
   free_cash: number
   gain: number
+  /** "reconstructed" = estimated from T212 trade history; "recorded" = live snapshot. */
+  source?: 'reconstructed' | 'recorded'
 }
 
 export interface PortfolioHistory {
