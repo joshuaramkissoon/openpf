@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
+import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -19,6 +20,27 @@ function pctChange(p: PositionItem): number | null {
   return p.ppl / cb
 }
 
+type SortKey = "ticker" | "quantity" | "invested" | "value" | "weight" | "ppl" | "pnl_pct"
+
+function sortValue(p: PositionItem, key: SortKey): number | string {
+  switch (key) {
+    case "ticker":
+      return p.ticker
+    case "quantity":
+      return p.quantity
+    case "invested":
+      return costBasis(p)
+    case "value":
+      return p.value
+    case "weight":
+      return p.weight
+    case "ppl":
+      return p.ppl
+    case "pnl_pct":
+      return pctChange(p) ?? Number.NEGATIVE_INFINITY
+  }
+}
+
 export function PositionsTable({
   positions,
   accountView,
@@ -31,7 +53,52 @@ export function PositionsTable({
   onSelect: (position: PositionItem) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const visible = positions
+  const [sortKey, setSortKey] = useState<SortKey>("value")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
+
+  const visible = useMemo(() => {
+    const rows = [...positions]
+    rows.sort((a, b) => {
+      const av = sortValue(a, sortKey)
+      const bv = sortValue(b, sortKey)
+      const cmp =
+        typeof av === "string" || typeof bv === "string"
+          ? String(av).localeCompare(String(bv))
+          : (av as number) - (bv as number)
+      return sortDir === "asc" ? cmp : -cmp
+    })
+    return rows
+  }, [positions, sortKey, sortDir])
+
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortKey(key)
+      setSortDir(key === "ticker" ? "asc" : "desc") // text A→Z, numbers high→low first
+    }
+  }
+
+  function SortHead({ sortKey: key, label, align = "right" }: { sortKey: SortKey; label: string; align?: "left" | "right" }) {
+    const active = sortKey === key
+    const Icon = !active ? ChevronsUpDown : sortDir === "asc" ? ArrowUp : ArrowDown
+    return (
+      <TableHead className={cn("text-xs", align === "right" && "text-right")}>
+        <button
+          type="button"
+          onClick={() => toggleSort(key)}
+          className={cn(
+            "inline-flex items-center gap-1 transition-colors hover:text-foreground",
+            align === "right" && "flex-row-reverse",
+            active ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          {label}
+          <Icon className={cn("size-3", active ? "opacity-100" : "opacity-40")} strokeWidth={2} />
+        </button>
+      </TableHead>
+    )
+  }
 
   return (
     <SectionCard
@@ -53,13 +120,13 @@ export function PositionsTable({
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="text-xs">Symbol</TableHead>
-                <TableHead className="text-right text-xs">Qty</TableHead>
-                <TableHead className="text-right text-xs">Invested</TableHead>
-                <TableHead className="text-right text-xs">Value</TableHead>
-                <TableHead className="text-right text-xs">Weight</TableHead>
-                <TableHead className="text-right text-xs">P/L</TableHead>
-                <TableHead className="text-right text-xs">P/L %</TableHead>
+                <SortHead sortKey="ticker" label="Symbol" align="left" />
+                <SortHead sortKey="quantity" label="Qty" />
+                <SortHead sortKey="invested" label="Invested" />
+                <SortHead sortKey="value" label="Value" />
+                <SortHead sortKey="weight" label="Weight" />
+                <SortHead sortKey="ppl" label="P/L" />
+                <SortHead sortKey="pnl_pct" label="P/L %" />
               </TableRow>
             </TableHeader>
             <TableBody>
