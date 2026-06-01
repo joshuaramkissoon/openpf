@@ -75,8 +75,8 @@ export async function updateAccountCredentials(
   return data
 }
 
-export async function refreshPortfolio() {
-  const { data } = await api.post('/portfolio/refresh')
+export async function refreshPortfolio(force = false) {
+  const { data } = await api.post('/portfolio/refresh', null, { params: { force } })
   return data
 }
 

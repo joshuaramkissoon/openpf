@@ -277,12 +277,15 @@ def _parse_account_summary(account_payload: dict[str, Any], positions_payload: l
     }
 
 
-def refresh_portfolio(db: Session) -> dict[str, Any]:
+def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
     global _last_refresh_ts
 
     with _refresh_lock:
         now = datetime.utcnow()
-        if _last_refresh_ts and (now - _last_refresh_ts).total_seconds() < _refresh_cooldown_seconds:
+        # `force` (explicit user click) bypasses the cooldown; auto-load + polling
+        # leave it off so the short cooldown collapses bursts and protects the
+        # T212 rate limits.
+        if not force and _last_refresh_ts and (now - _last_refresh_ts).total_seconds() < _refresh_cooldown_seconds:
             existing_accounts = _latest_accounts(db)
             if existing_accounts:
                 existing_positions = _latest_positions(db)
