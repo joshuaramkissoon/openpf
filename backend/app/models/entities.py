@@ -144,6 +144,29 @@ class Thesis(Base):
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
 
+class Alert(Base):
+    """A proactive 'needs your attention' item raised by the watch service.
+
+    Deduped via ``dedupe_key`` so the same condition doesn't re-fire every cycle.
+    """
+
+    __tablename__ = "alerts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    # thesis_invalidation | concentration | earnings | big_move | news | rebalance
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(12), default="info")  # info | warning | critical
+    title: Mapped[str] = mapped_column(String(240), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    consider: Mapped[str | None] = mapped_column(Text, nullable=True)  # optional suggested action
+    ticker: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(12), default="new", index=True)  # new | seen | dismissed
+    dedupe_key: Mapped[str] = mapped_column(String(160), index=True)
+    source: Mapped[str] = mapped_column(String(48), default="watch")
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
