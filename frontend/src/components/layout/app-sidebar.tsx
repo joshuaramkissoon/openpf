@@ -3,6 +3,8 @@ import {
   Bell,
   CalendarClock,
   CreditCard,
+  Eye,
+  EyeOff,
   FileText,
   Gauge,
   HelpCircle,
@@ -11,12 +13,24 @@ import {
   ListChecks,
   MessageSquare,
   Settings,
+  Shield,
   Telescope,
   type LucideIcon,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import {
+  privacyModeDescription,
+  privacyModeLabel,
+  type PrivacyMode,
+} from "@/lib/privacy"
+
+const PRIVACY_ICON: Record<PrivacyMode, LucideIcon> = {
+  off: Eye,
+  scramble: EyeOff,
+  blur: Shield,
+}
 
 export type SectionKey =
   | "overview"
@@ -81,6 +95,8 @@ export function SidebarBody({
   onNavigate,
   pendingIntents,
   activeTheses,
+  privacyMode,
+  onCyclePrivacyMode,
 }: {
   active: SectionKey
   onSelect: (key: SectionKey) => void
@@ -88,7 +104,10 @@ export function SidebarBody({
   onNavigate?: () => void
   pendingIntents: number
   activeTheses: number
+  privacyMode: PrivacyMode
+  onCyclePrivacyMode: () => void
 }) {
+  const PrivacyIcon = PRIVACY_ICON[privacyMode]
   function handleSelect(key: SectionKey) {
     onSelect(key)
     onNavigate?.()
@@ -146,6 +165,34 @@ export function SidebarBody({
       </nav>
 
       <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
+        <button
+          type="button"
+          onClick={onCyclePrivacyMode}
+          title={`Privacy: ${privacyModeLabel(privacyMode)} — ${privacyModeDescription(privacyMode)}. Click or press P to cycle.`}
+          aria-label={`Privacy mode: ${privacyModeLabel(privacyMode)}. Click to cycle.`}
+          className={cn(
+            "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
+            privacyMode === "off"
+              ? "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
+              : "bg-sidebar-accent/60 text-sidebar-accent-foreground hover:bg-sidebar-accent",
+          )}
+        >
+          <PrivacyIcon
+            className={cn("size-4 shrink-0", privacyMode === "off" ? "text-muted-foreground" : "text-primary")}
+            strokeWidth={2}
+          />
+          <span className="truncate">Privacy</span>
+          <span
+            className={cn(
+              "ml-auto rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide tabular-nums",
+              privacyMode === "off"
+                ? "bg-muted text-muted-foreground"
+                : "bg-primary/15 text-primary",
+            )}
+          >
+            {privacyModeLabel(privacyMode)}
+          </span>
+        </button>
         <div className="flex items-center justify-between px-2 text-[11px] text-muted-foreground">
           <span>{pendingIntents} pending</span>
           <span>{activeTheses} active theses</span>
@@ -185,6 +232,8 @@ export function AppSidebar(props: {
   onOpenSettings: () => void
   pendingIntents: number
   activeTheses: number
+  privacyMode: PrivacyMode
+  onCyclePrivacyMode: () => void
 }) {
   return (
     <aside className="hidden h-full w-60 shrink-0 flex-col gap-6 border-r border-border bg-sidebar px-3 py-5 md:flex">
