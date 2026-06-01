@@ -460,12 +460,18 @@ export interface PortfolioHistoryPoint {
   total: number
   invested: number
   free_cash: number
+  gain: number
 }
 
 export interface PortfolioHistory {
   account_kind: string
   currency: 'GBP' | 'USD'
   points: PortfolioHistoryPoint[]
+  return_pct: number
+  net_contributed: number
+  start_value: number
+  end_value: number
+  window_days: number
 }
 
 export async function getPortfolioHistory(accountKind = 'all', currency: 'GBP' | 'USD' = 'GBP', days = 365) {
