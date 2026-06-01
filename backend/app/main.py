@@ -43,6 +43,9 @@ async def lifespan(app: FastAPI):
     yield
     await claude_chat_runtime.shutdown()
     stop_scheduler()
+    from app.services.forecast_pool import shutdown as shutdown_forecast_pool
+
+    shutdown_forecast_pool()
 
 
 app = FastAPI(

@@ -9,10 +9,10 @@ from app.services.leveraged_market import (
     _download_history_frame,
     to_yfinance_ticker,
 )
+from app.services import forecast_pool
 from app.services.kronos_service import (
     ForecastError,
     ForecastUnavailableError,
-    forecast as run_forecast,
 )
 
 router = APIRouter(prefix="/charts", tags=["charts"])
@@ -127,7 +127,7 @@ def get_candles(
 
 
 @router.get("/forecast", response_model=ForecastResponse)
-def get_forecast(
+async def get_forecast(
     ticker: str = Query(..., description="Ticker symbol (T212 code or raw symbol)"),
     horizon: int = Query(30, ge=1, le=120, description="Trading days to forecast ahead"),
     lookback: int = Query(256, ge=32, le=2048, description="Historical trading days fed to the model"),
@@ -142,8 +142,8 @@ def get_forecast(
     requests before that are cheap.
     """
     try:
-        result = run_forecast(
-            ticker,
+        result = await forecast_pool.run_forecast(
+            symbol=ticker,
             horizon=horizon,
             lookback=lookback,
             samples=samples,
@@ -153,6 +153,13 @@ def get_forecast(
     except ForecastUnavailableError as exc:
         # 503: feature not installed/loadable on this host.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except forecast_pool.ForecastWorkerError as exc:
+        # 503: the worker process crashed (segfault/OOM). Transient — the pool
+        # has already spun up a fresh worker, so a retry may succeed. Crucially,
+        # the web process stayed up.
+        raise HTTPException(status_code=503, detail="Forecast worker crashed; please retry.") from exc
+    except forecast_pool.ForecastTimeout as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except ForecastError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

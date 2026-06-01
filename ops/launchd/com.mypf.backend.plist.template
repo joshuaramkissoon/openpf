@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+
+  <!-- Supervised, NON-reload uvicorn. No caffeinate wrapper: this Mac mini
+       already has system sleep disabled on AC power (pmset 'sleep 0'), so
+       launchd only needs to handle crash-restart + start-at-login.
+       `--reload` is deliberately omitted: under --reload a crashed worker leaves
+       the reloader parent alive, so KeepAlive never sees an exit. Without it, a
+       crash exits the process and KeepAlive brings it straight back. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>@UVICORN@</string>
+    <string>app.main:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8000</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@WORKDIR@</string>
+
+  <!-- The Agent SDK shells out to the `claude` CLI + node, which a bare
+       launchd PATH would not find. install.sh fills this from the live shell. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on any exit (crash included). ThrottleInterval avoids a tight
+       crash-loop hammering the machine. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>ProcessType</key>
+  <string>Standard</string>
+
+  <!-- Capture stdout/stderr to a file so a native crash (SIGSEGV) is actually
+       logged next time — the original incident logged only to a terminal. -->
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+</dict>
+</plist>
