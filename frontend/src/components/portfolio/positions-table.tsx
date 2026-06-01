@@ -1,8 +1,12 @@
+import { useState } from "react"
+
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Money, MoneyDelta, Pct, PctDelta, SectionCard } from "@/components/kit"
 import { accountTag } from "@/utils/format"
+import { cn } from "@/lib/utils"
 import type { PositionItem } from "@/types"
 
 function costBasis(p: PositionItem): number {
@@ -26,6 +30,7 @@ export function PositionsTable({
   displayCurrency: "GBP" | "USD"
   onSelect: (position: PositionItem) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const visible = positions
 
   return (
@@ -33,11 +38,18 @@ export function PositionsTable({
       title="Positions"
       description={accountView === "all" ? "Aggregated across Invest + ISA — click a row for chart, signals & forecast" : "Selected account — click a row for chart, signals & forecast"}
       noPadding
+      action={
+        visible.length > 12 ? (
+          <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Show top" : `Show all ${visible.length}`}
+          </Button>
+        ) : undefined
+      }
     >
       {visible.length === 0 ? (
         <p className="p-10 text-center text-sm text-muted-foreground">No positions to show.</p>
       ) : (
-        <ScrollArea className="max-h-[560px]">
+        <ScrollArea className={cn(expanded ? "max-h-none" : "max-h-[560px]")}>
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">

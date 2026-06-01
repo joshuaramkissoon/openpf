@@ -16,6 +16,7 @@ class BrokerConfig(BaseModel):
     broker_mode: Literal["paper", "live"]
     autopilot_enabled: bool
     t212_base_env: Literal["live", "demo"]
+    scheduler_enabled: bool = False
 
 
 class CredentialConfig(BaseModel):

@@ -20,15 +20,29 @@ logging.basicConfig(
 )
 
 
+def _scheduler_should_run() -> bool:
+    """Scheduler runs if the env flag OR the in-app toggle (DB) says so — so it
+    can be controlled from Settings without touching .env."""
+    if settings.inproc_scheduler_enabled:
+        return True
+    try:
+        from app.core.database import SessionLocal
+        from app.services.config_store import ConfigStore
+
+        with SessionLocal() as db:
+            return bool(ConfigStore(db).get_broker().get("scheduler_enabled"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    if settings.inproc_scheduler_enabled:
+    if _scheduler_should_run():
         start_scheduler()
     yield
     await claude_chat_runtime.shutdown()
-    if settings.inproc_scheduler_enabled:
-        stop_scheduler()
+    stop_scheduler()
 
 
 app = FastAPI(

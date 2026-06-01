@@ -41,7 +41,31 @@ def update_risk(payload: RiskConfig, db: Session = Depends(get_db)) -> RiskConfi
 def update_broker(payload: BrokerConfig, db: Session = Depends(get_db)) -> BrokerConfig:
     store = ConfigStore(db)
     value = store.set_broker(payload.model_dump())
+    # Apply the scheduler toggle at runtime so it takes effect without a restart
+    # or any .env change — start/stop the in-process scheduler to match.
+    try:
+        from app.services.scheduler import start_scheduler, stop_scheduler
+
+        if value.get("scheduler_enabled"):
+            start_scheduler()
+        else:
+            stop_scheduler()
+    except Exception:  # noqa: BLE001 — never fail the config save on scheduler hiccup
+        pass
     return BrokerConfig(**value)
+
+
+@router.put("/leveraged/auto-execute", response_model=LeveragedConfig)
+def set_leveraged_auto_execute(enabled: bool, db: Session = Depends(get_db)) -> LeveragedConfig:
+    """Toggle whether the leveraged alpha loop AUTO-EXECUTES within rails.
+
+    The single switch that turns the loop from propose-only into live auto-trading
+    (also needs broker_mode=live + a trade-enabled key). Kept separate so it's a
+    one-field flip from the Settings UI, not a full-policy round-trip.
+    """
+    store = ConfigStore(db)
+    value = store.set_leveraged({"auto_execute_enabled": bool(enabled)})
+    return LeveragedConfig(**value)
 
 
 @router.get("/credentials", response_model=CredentialsPublicView)

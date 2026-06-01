@@ -59,6 +59,7 @@ export interface BrokerConfig {
   broker_mode: 'paper' | 'live'
   autopilot_enabled: boolean
   t212_base_env: 'demo' | 'live'
+  scheduler_enabled?: boolean
 }
 
 export interface TelegramConfig {

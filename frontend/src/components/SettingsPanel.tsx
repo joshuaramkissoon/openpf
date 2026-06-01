@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { EyeOff, Send, ShieldCheck } from 'lucide-react'
 
-import { testTelegram, updateAccountCredentials, updateBroker, updateRisk, updateTelegram, updateWatchlist } from '../api/client'
+import { setLeveragedAutoExecute, testTelegram, updateAccountCredentials, updateBroker, updateRisk, updateTelegram, updateWatchlist } from '../api/client'
 import type { AppConfig } from '../types'
 
 import { SectionCard } from '@/components/kit'
@@ -57,6 +57,8 @@ export function SettingsPanel({
       broker_mode: config?.broker.broker_mode ?? 'paper',
       autopilot_enabled: config?.broker.autopilot_enabled ?? false,
       t212_base_env: config?.broker.t212_base_env ?? 'demo',
+      scheduler_enabled: config?.broker.scheduler_enabled ?? false,
+      auto_execute_enabled: config?.leveraged?.auto_execute_enabled ?? false,
     }),
     [config]
   )
@@ -86,7 +88,9 @@ export function SettingsPanel({
         broker_mode: String(formData.get('broker_mode')) as 'paper' | 'live',
         t212_base_env: String(formData.get('t212_base_env')) as 'demo' | 'live',
         autopilot_enabled: formData.get('autopilot_enabled') === 'on',
+        scheduler_enabled: formData.get('scheduler_enabled') === 'on',
       })
+      await setLeveragedAutoExecute(formData.get('auto_execute_enabled') === 'on')
       onReload()
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to save broker settings'
@@ -281,6 +285,25 @@ export function SettingsPanel({
                 <p className="text-xs text-muted-foreground">Allow the agent to place orders automatically.</p>
               </div>
               <Switch id="autopilot_enabled" name="autopilot_enabled" defaultChecked={brokerDefaults.autopilot_enabled} />
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 space-y-0.5">
+                <Label htmlFor="scheduler_enabled" className="text-sm font-medium">
+                  Scheduler / automation engine
+                </Label>
+                <p className="text-xs text-muted-foreground">Runs scheduled jobs incl. the alpha loop. No .env change needed.</p>
+              </div>
+              <Switch id="scheduler_enabled" name="scheduler_enabled" defaultChecked={brokerDefaults.scheduler_enabled} />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 space-y-0.5">
+                <Label htmlFor="auto_execute_enabled" className="text-sm font-medium">
+                  Auto-execute leveraged trades
+                </Label>
+                <p className="text-xs text-muted-foreground">Alpha loop places trades within rails. Needs Live mode + a trade-enabled key — otherwise propose-only.</p>
+              </div>
+              <Switch id="auto_execute_enabled" name="auto_execute_enabled" defaultChecked={brokerDefaults.auto_execute_enabled} />
             </div>
             <Separator />
             <Button type="submit" size="sm" disabled={working}>
