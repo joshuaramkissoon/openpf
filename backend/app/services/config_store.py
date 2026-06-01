@@ -26,6 +26,9 @@ BROKER_DEFAULT = {
     "broker_mode": settings.broker_mode,
     "autopilot_enabled": settings.autopilot_enabled,
     "t212_base_env": settings.t212_base_env,
+    # Runs the in-process scheduler (scheduled jobs incl. the alpha loop).
+    # Defaults to the env flag so behaviour is unchanged until toggled in-app.
+    "scheduler_enabled": settings.inproc_scheduler_enabled,
 }
 
 WATCHLIST_DEFAULT = {
@@ -110,7 +113,9 @@ class ConfigStore:
         return self.set("risk_config", merged)
 
     def get_broker(self) -> dict[str, Any]:
-        return self.get("broker_config", BROKER_DEFAULT)
+        # Merge with defaults so newly-added keys (e.g. scheduler_enabled) are
+        # always present even for broker_config rows saved before they existed.
+        return {**BROKER_DEFAULT, **(self.get("broker_config", BROKER_DEFAULT) or {})}
 
     def set_broker(self, value: dict[str, Any]) -> dict[str, Any]:
         merged = {**self.get_broker(), **value}

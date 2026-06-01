@@ -39,6 +39,11 @@ export async function updateBroker(payload: AppConfig['broker']) {
   return data
 }
 
+export async function setLeveragedAutoExecute(enabled: boolean) {
+  const { data } = await api.put('/config/leveraged/auto-execute', null, { params: { enabled } })
+  return data
+}
+
 export async function updateWatchlist(symbols: string[]) {
   const { data } = await api.put('/config/watchlist', { symbols })
   return data
