@@ -34,6 +34,35 @@ _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
 
 _DEFAULT_TASKS: list[dict[str, Any]] = [
     {
+        "name": "morning_brief",
+        "cron_expr": "0 7 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_model,  # Sonnet — strong enough to triage news, lighter for a daily run
+        "enabled": True,
+        "meta": {
+            "task_kind": "claude",
+            "description": "Curated pre-open brief — what matters today across your holdings + macro",
+        },
+        "prompt": (
+            "Produce Josh's pre-open MARKET BRIEF as a tight markdown artifact. The goal: he has no time to "
+            "follow news, so YOU read everything and surface only what matters. Steps:\n\n"
+            "1. Pull current holdings via the T212 tools; focus on the top ~8 by value (both Invest + ISA).\n"
+            "2. For those names, call `get_company_news` (since_days=1) and `get_earnings` — note any earnings "
+            "within ~7 days.\n"
+            "3. Call `get_market_news` and `get_macro_snapshot` for the wider picture (yields, VIX, USD/GBP, "
+            "Fed funds) and read the current market regime if available.\n"
+            "4. Skim active theses/market_views in memory; flag any news that supports or threatens one.\n\n"
+            "Then CURATE hard. Output ONLY:\n"
+            "- **Top 3-5 things that matter today** — each: one-line what + why-it-matters-to-your-book + an "
+            "optional 'consider:' action. Tie each to a holding or a real macro move.\n"
+            "- **Macro line**: 10Y/2Y, VIX, USD/GBP with the day's direction.\n"
+            "- **On the radar**: earnings/events in the next 7 days for held names.\n\n"
+            "RULES: portfolio-relevant only. Ignore aggregator/SEO filler (e.g. 'most active stocks today', "
+            "generic listicles). If nothing is material, say so in one line — do NOT manufacture noise. No raw "
+            "headline dumps. Keep it a genuine 2-minute read."
+        ),
+    },
+    {
         "name": "lev_morning_scan",
         "cron_expr": "30 7 * * 1-5",
         "timezone": "Europe/London",
