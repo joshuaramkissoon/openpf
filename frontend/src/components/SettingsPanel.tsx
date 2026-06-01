@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { EyeOff, Send, ShieldCheck } from 'lucide-react'
+import { Eye, EyeOff, Send, Shield, ShieldCheck } from 'lucide-react'
 
 import { setLeveragedAutoExecute, testTelegram, updateAccountCredentials, updateBroker, updateRisk, updateTelegram, updateWatchlist } from '../api/client'
 import type { AppConfig } from '../types'
@@ -12,14 +12,21 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { privacyModeDescription, type PrivacyMode } from '@/lib/privacy'
 
 interface Props {
   config: AppConfig | null
   onReload: () => void
   onError: (message: string) => void
   hideHeader?: boolean
-  presentationMask?: boolean
-  onTogglePresentationMask?: (enabled: boolean) => void
+  privacyMode?: PrivacyMode
+  onPrivacyModeChange?: (mode: PrivacyMode) => void
+}
+
+const PRIVACY_MODE_ICON: Record<PrivacyMode, typeof Eye> = {
+  off: Eye,
+  scramble: EyeOff,
+  blur: Shield,
 }
 
 export function SettingsPanel({
@@ -27,10 +34,11 @@ export function SettingsPanel({
   onReload,
   onError,
   hideHeader = false,
-  presentationMask = false,
-  onTogglePresentationMask,
+  privacyMode = 'off',
+  onPrivacyModeChange,
 }: Props) {
   const [working, setWorking] = useState(false)
+  const PrivacyModeIcon = PRIVACY_MODE_ICON[privacyMode]
 
   const [investKey, setInvestKey] = useState('')
   const [investSecret, setInvestSecret] = useState('')
@@ -221,26 +229,35 @@ export function SettingsPanel({
         </div>
       )}
 
-      {/* Presentation — prominent, full width */}
-      <SectionCard title="Presentation" description="Mask sensitive figures for safer screen sharing">
+      {/* Privacy — prominent, full width */}
+      <SectionCard title="Privacy" description="Hide sensitive figures for safer screen sharing (press P to cycle)">
         <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 bg-muted/25 px-3.5 py-3">
           <div className="flex min-w-0 gap-3">
-            <EyeOff className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <PrivacyModeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0 space-y-1">
-              <Label htmlFor="presentation-mask" className="text-sm font-medium">
-                Obfuscate portfolio values (demo mode)
+              <Label htmlFor="privacy-mode" className="text-sm font-medium">
+                Privacy mode
               </Label>
               <p className="text-xs text-muted-foreground">
-                Masks cash, totals, invested, P/L, prices, and quantities for safer screen sharing.
+                <span className="font-medium text-foreground">Off</span> shows real figures.{' '}
+                <span className="font-medium text-foreground">Scramble</span> swaps in non-real numbers.{' '}
+                <span className="font-medium text-foreground">Blur</span> keeps the real values but blurs them out — nothing
+                is misread as a different number.
               </p>
             </div>
           </div>
-          <Switch
-            id="presentation-mask"
-            checked={presentationMask}
-            onCheckedChange={(checked) => onTogglePresentationMask?.(checked)}
-          />
+          <Select value={privacyMode} onValueChange={(v) => onPrivacyModeChange?.(v as PrivacyMode)}>
+            <SelectTrigger id="privacy-mode" size="sm" className="w-[132px] shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off">Off</SelectItem>
+              <SelectItem value="scramble">Scramble</SelectItem>
+              <SelectItem value="blur">Blur</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">{privacyModeDescription(privacyMode)}</p>
       </SectionCard>
 
       <div className="grid gap-5 sm:grid-cols-2">

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils"
+import { privacyBlurClass, usePrivacyMode } from "@/lib/privacy"
 import {
   formatMoney,
   formatCompactMoney,
@@ -6,6 +7,16 @@ import {
   formatPercent,
   formatSignedPercent,
 } from "@/utils/format"
+
+/**
+ * In `blur` privacy mode we render the *real* value behind a CSS blur (rather
+ * than swapping in fake numbers). `aria-hidden` keeps the redacted figure out
+ * of the accessibility tree so screen readers don't leak it either.
+ */
+function useBlur(): { className: string; hidden: boolean } {
+  const mode = usePrivacyMode()
+  return { className: privacyBlurClass(mode), hidden: mode === "blur" }
+}
 
 /** A monetary figure. Always mono + tabular so columns align. */
 export function Money({
@@ -21,8 +32,13 @@ export function Money({
   compact?: boolean
   className?: string
 }) {
+  const blur = useBlur()
   const text = compact ? formatCompactMoney(value, currency) : formatMoney(value, currency, decimals)
-  return <span className={cn("font-mono tabular-nums", className)}>{text}</span>
+  return (
+    <span className={cn("font-mono tabular-nums", blur.className, className)} aria-hidden={blur.hidden || undefined}>
+      {text}
+    </span>
+  )
 }
 
 /** Signed money, coloured by sign (positive = gain, negative = loss). */
@@ -37,13 +53,16 @@ export function MoneyDelta({
   decimals?: number
   className?: string
 }) {
+  const blur = useBlur()
   return (
     <span
       className={cn(
         "font-mono tabular-nums",
         value >= 0 ? "text-positive" : "text-negative",
+        blur.className,
         className,
       )}
+      aria-hidden={blur.hidden || undefined}
     >
       {formatSignedMoney(value, currency, decimals)}
     </span>

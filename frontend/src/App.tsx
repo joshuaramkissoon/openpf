@@ -39,6 +39,14 @@ import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
 import { ResearchDesk } from '@/components/research/research-desk'
 import { HelpGuide } from '@/components/help/help-guide'
 import { SectionCard } from '@/components/kit'
+import {
+  PrivacyProvider,
+  loadPrivacyMode,
+  nextPrivacyMode,
+  privacyModeLabel,
+  savePrivacyMode,
+  type PrivacyMode,
+} from '@/lib/privacy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -249,10 +257,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [chatRailOpen, setChatRailOpen] = useState(false)
-  const [maskSensitiveValues, setMaskSensitiveValues] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem('mypf.presentation.mask') === '1'
-  })
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
 
   const loadAll = useCallback(async (
     withRefresh = false,
@@ -358,6 +363,17 @@ export default function App() {
   }, [bootstrapChatSessions])
 
   useEffect(() => {
+    function isTypingTarget(): boolean {
+      const el = document.activeElement
+      if (!el) return false
+      const tag = el.tagName
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        (el as HTMLElement).isContentEditable === true
+      )
+    }
     function onKeydown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         setSettingsOpen(false)
@@ -366,6 +382,19 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key === '/') {
         event.preventDefault()
         setActiveSection((prev) => (prev === 'chat' ? 'overview' : 'chat'))
+        return
+      }
+      // `p` cycles privacy mode — but only as a bare key, never while typing
+      // in a field or with a modifier held (so it doesn't hijack Cmd+P etc.).
+      if (
+        (event.key === 'p' || event.key === 'P') &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !isTypingTarget()
+      ) {
+        event.preventDefault()
+        setPrivacyMode((prev) => nextPrivacyMode(prev))
       }
     }
     window.addEventListener('keydown', onKeydown)
@@ -373,14 +402,15 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('mypf.presentation.mask', maskSensitiveValues ? '1' : '0')
-  }, [maskSensitiveValues])
+    savePrivacyMode(privacyMode)
+  }, [privacyMode])
 
+  // Scramble swaps in non-real numbers upstream; blur/off render the real
+  // snapshot (blur is applied visually by the figure components downstream).
   const displaySnapshot = useMemo(() => {
     if (!snapshot) return null
-    return maskSensitiveValues ? obfuscateSnapshot(snapshot) : snapshot
-  }, [snapshot, maskSensitiveValues])
+    return privacyMode === 'scramble' ? obfuscateSnapshot(snapshot) : snapshot
+  }, [snapshot, privacyMode])
 
   const pendingIntents = useMemo(() => intents.filter((i) => ['proposed', 'approved', 'executing'].includes(i.status)), [intents])
   const queueIntents = useMemo(
@@ -618,7 +648,7 @@ export default function App() {
   }
   if (pendingIntents.length) statusBits.push(`${pendingIntents.length} pending`)
   if (lastUpdate) statusBits.push(`updated ${dayjs(lastUpdate).format('HH:mm:ss')}`)
-  if (maskSensitiveValues) statusBits.push('presentation mode')
+  if (privacyMode !== 'off') statusBits.push(`privacy: ${privacyModeLabel(privacyMode).toLowerCase()}`)
 
   function renderSection() {
     if (activeSection === 'overview') {
@@ -682,6 +712,7 @@ export default function App() {
   }
 
   return (
+    <PrivacyProvider mode={privacyMode}>
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <AppSidebar
         active={activeSection}
@@ -689,6 +720,8 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         pendingIntents={pendingIntents.length}
         activeTheses={activeThesesCount}
+        privacyMode={privacyMode}
+        onCyclePrivacyMode={() => setPrivacyMode((prev) => nextPrivacyMode(prev))}
       />
 
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
@@ -705,6 +738,8 @@ export default function App() {
             onNavigate={() => setSidebarOpen(false)}
             pendingIntents={pendingIntents.length}
             activeTheses={activeThesesCount}
+            privacyMode={privacyMode}
+            onCyclePrivacyMode={() => setPrivacyMode((prev) => nextPrivacyMode(prev))}
           />
         </SheetContent>
       </Sheet>
@@ -811,7 +846,7 @@ export default function App() {
                 activeSessionTitle={activeChatSession?.title || null}
                 accountView={accountView}
                 displayCurrency={displayCurrency}
-                presentationMask={maskSensitiveValues}
+                presentationMask={privacyMode !== 'off'}
                 onSessionTouched={handleChatSessionTouched}
                 onError={setError}
                 deletingSessionId={deletingChatSessionId}
@@ -845,11 +880,12 @@ export default function App() {
             onReload={() => void loadAll(false)}
             onError={(msg) => setError(msg)}
             hideHeader
-            presentationMask={maskSensitiveValues}
-            onTogglePresentationMask={setMaskSensitiveValues}
+            privacyMode={privacyMode}
+            onPrivacyModeChange={setPrivacyMode}
           />
         </DialogContent>
       </Dialog>
     </div>
+    </PrivacyProvider>
   )
 }

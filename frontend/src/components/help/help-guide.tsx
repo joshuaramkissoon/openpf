@@ -121,7 +121,7 @@ const RHYTHM: { time: string; title: string; body: string }[] = [
 
 const TIPS: { label: string; body: string }[] = [
   { label: "Account & currency", body: "Top-bar selectors switch between All / Invest / ISA and GBP / USD everywhere." },
-  { label: "Presentation mode", body: "Settings → mask sensitive values to obfuscate real figures when screen-sharing." },
+  { label: "Privacy mode", body: "Press P (or the sidebar Privacy toggle) to cycle Off → Scramble → Blur. Scramble shows fake numbers; Blur hides the real ones behind a blur for safe screen-sharing." },
   { label: "Quick chat", body: "⌘/Ctrl + / toggles Archie from any screen." },
   { label: "Refresh vs Run Agent", body: "Refresh re-pulls live data; Run Agent triggers a full analyst reasoning cycle." },
 ]
