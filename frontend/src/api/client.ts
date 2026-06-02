@@ -14,6 +14,7 @@ import type {
   LeveragedSnapshot,
   SchedulerTask,
   SchedulerTaskLog,
+  SchedulerToday,
   ChatRuntimeInfo,
   Thesis,
   TradeIntent,
@@ -674,6 +675,13 @@ export async function getSchedulerTaskLogs(taskId: string, limit = 40) {
 
 export async function seedSchedulerDefaults() {
   const { data } = await api.post<{ message: string }>('/scheduler/seed-defaults')
+  return data
+}
+
+export async function getSchedulerTimeline(tz?: string) {
+  const { data } = await api.get<SchedulerToday>('/scheduler/today', {
+    params: tz ? { tz } : undefined,
+  })
   return data
 }
 

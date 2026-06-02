@@ -64,3 +64,41 @@ class SchedulerTaskLogItem(BaseModel):
 class SchedulerDeleteResponse(BaseModel):
     id: str
     deleted: bool
+
+
+class TimelineRun(BaseModel):
+    log_id: int
+    ran_at: datetime
+    status: str
+    message: str
+    has_output: bool
+    output_path: str | None = None
+
+
+class TimelinePastGroup(BaseModel):
+    task_id: str
+    name: str
+    task_kind: str
+    run_count: int
+    first_ran_at: datetime
+    last_ran_at: datetime
+    status_summary: dict[str, int] = {}
+    runs: list[TimelineRun] = []
+
+
+class TimelineUpcoming(BaseModel):
+    task_id: str
+    name: str
+    task_kind: str
+    cron_expr: str
+    next_fire_at: datetime
+    remaining_today: int
+    fires: list[datetime] = []
+
+
+class SchedulerTodayResponse(BaseModel):
+    date: str
+    timezone: str
+    now: datetime
+    past: list[TimelinePastGroup] = []
+    upcoming: list[TimelineUpcoming] = []

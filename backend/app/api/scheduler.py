@@ -12,8 +12,10 @@ from app.schemas.scheduler import (
     SchedulerTaskLogItem,
     SchedulerTaskPatch,
     SchedulerTaskRunResponse,
+    SchedulerTodayResponse,
 )
 from app.services.task_scheduler_service import (
+    build_today_timeline,
     create_task,
     delete_task,
     list_task_logs,
@@ -73,6 +75,18 @@ def run_task(task_id: str, db: Session = Depends(get_db)) -> SchedulerTaskRunRes
         return SchedulerTaskRunResponse(**row)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/today", response_model=SchedulerTodayResponse)
+def today(
+    tz: str = Query(default="Europe/London", max_length=64),
+    db: Session = Depends(get_db),
+) -> SchedulerTodayResponse:
+    try:
+        timeline = build_today_timeline(db, tz)
+    except Exception as exc:  # noqa: BLE001 — unknown tz / bad cron → client error
+        raise HTTPException(status_code=400, detail=str(exc) or "invalid timezone") from exc
+    return SchedulerTodayResponse(**timeline)
 
 
 @router.post("/run-due", response_model=MessageResponse)

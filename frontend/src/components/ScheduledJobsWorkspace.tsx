@@ -25,6 +25,9 @@ import {
   updateSchedulerTask,
 } from '../api/client'
 import { RichMarkdown } from './RichMarkdown'
+import { TodayTimeline } from './scheduled-jobs/TodayTimeline'
+import { parseCronHuman } from './scheduled-jobs/cron'
+import { resolveArtifactRelativePath } from './scheduled-jobs/artifact'
 import { SectionCard } from '@/components/kit'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -68,50 +71,6 @@ const TASK_KIND_OPTIONS = [
 
 type TaskKind = (typeof TASK_KIND_OPTIONS)[number]
 
-function parseCronHuman(expr: string): string {
-  const parts = expr.trim().split(/\s+/)
-  if (parts.length !== 5) return expr
-  const [min, hour, , , dow] = parts
-
-  if (min.startsWith('*/') && hour === '*') {
-    const n = min.slice(2)
-    return `Every ${n} min`
-  }
-
-  if (min === '0' && hour.startsWith('*/')) {
-    const n = hour.slice(2)
-    return `Every ${n} hours`
-  }
-
-  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-  if (/^\d+$/.test(min) && /^\d+$/.test(hour)) {
-    const hh = hour.padStart(2, '0')
-    const mm = min.padStart(2, '0')
-    const time = `${hh}:${mm}`
-
-    if (dow === '1-5') return `Weekdays at ${time}`
-
-    if (/^\d$/.test(dow)) {
-      const dayIdx = parseInt(dow, 10)
-      const dayName = DAY_NAMES[dayIdx] ?? dow
-      return `Weekly on ${dayName} at ${time}`
-    }
-
-    return `Daily at ${time}`
-  }
-
-  if (min === '0' && hour.includes(',')) {
-    const times = hour
-      .split(',')
-      .map((h) => `${h.padStart(2, '0')}:00`)
-      .join(', ')
-    return `Daily at ${times}`
-  }
-
-  return expr
-}
-
 /** Shorten model ID for display: "claude-sonnet-4-20250514" → "sonnet-4" */
 function shortModel(model: string): string {
   const m = model.replace(/^claude-/, '')
@@ -145,6 +104,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
   const [busy, setBusy] = useState(false)
   const [deleting, setDeleting] = useState<Set<string>>(new Set())
   const [sortMode, setSortMode] = useState<SortMode>('status')
+  const [view, setView] = useState<'today' | 'alljobs'>('today')
 
   // Per-task log viewing
   const [taskLogs, setTaskLogs] = useState<SchedulerTaskLog[]>([])
@@ -200,20 +160,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     setSelectedLogId(log.id)
     setContentTab('output')
 
-    // Path resolution logic
-    let relativePath: string
-    const artIdx = log.output_path.indexOf('artifacts/')
-    if (artIdx >= 0) {
-      relativePath = log.output_path.slice(artIdx + 'artifacts/'.length)
-    } else {
-      const cronIdx = log.output_path.indexOf('cron_logs/')
-      if (cronIdx >= 0) {
-        relativePath = log.output_path.slice(cronIdx + 'cron_logs/'.length)
-      } else {
-        const runtimeIdx = log.output_path.indexOf('.claude/runtime/')
-        relativePath = runtimeIdx >= 0 ? log.output_path.slice(runtimeIdx + '.claude/runtime/'.length) : log.output_path
-      }
-    }
+    const relativePath = resolveArtifactRelativePath(log.output_path)
 
     setActiveArtifact({ loading: true, detail: null, error: null })
     try {
@@ -485,6 +432,20 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     setSelectedLogId(null)
   }
 
+  // ── Jump from the Today timeline into a task's detail in the All jobs view ──
+
+  function viewTaskFromTimeline(taskId: string) {
+    setView('alljobs')
+    if (selectedTaskId !== taskId) {
+      setSelectedTaskId(taskId)
+      setTaskLogs([])
+      setActiveArtifact(null)
+      setSelectedLogId(null)
+      setContentTab('prompt')
+      void fetchTaskLogs(taskId)
+    }
+  }
+
   // ── Auto-load latest output when logs arrive ──
 
   useEffect(() => {
@@ -552,7 +513,20 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
 
   return (
     <div className="space-y-6">
-      <div className={cn('grid gap-4', selectedTask && 'lg:grid-cols-2')}>
+      <Tabs value={view} onValueChange={(v) => setView(v as 'today' | 'alljobs')}>
+        <TabsList>
+          <TabsTrigger value="today">Today</TabsTrigger>
+          <TabsTrigger value="alljobs">All jobs</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="today">
+          <SectionCard title="Today">
+            <TodayTimeline onError={onError} onViewTask={viewTaskFromTimeline} />
+          </SectionCard>
+        </TabsContent>
+
+        <TabsContent value="alljobs">
+          <div className={cn('grid gap-4', selectedTask && 'lg:grid-cols-2')}>
         {/* Task list */}
         <SectionCard title="Scheduled Jobs" action={<div className="flex items-center gap-2">{headerActions}</div>} noPadding>
           <div className="flex items-center justify-between border-b border-border/60 px-5 py-2.5">
@@ -917,7 +891,9 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
             </div>
           </SectionCard>
         )}
-      </div>
+          </div>
+        </TabsContent>
+      </Tabs>
 
       {/* New Job dialog */}
       <Dialog
