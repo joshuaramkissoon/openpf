@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { Loader2, Menu, Plus, RefreshCw, X } from 'lucide-react'
 
@@ -262,12 +262,19 @@ export default function App() {
   const [chatRailOpen, setChatRailOpen] = useState(false)
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
 
+  // Guards for the background (fire-and-forget) snapshot re-pull in loadAll: don't
+  // setState after unmount, and don't let a stale refresh clobber a newer load.
+  const mountedRef = useRef(true)
+  const loadIdRef = useRef(0)
+  useEffect(() => () => { mountedRef.current = false }, [])
+
   const loadAll = useCallback(async (
     withRefresh = false,
     selectedAccount: 'all' | 'invest' | 'stocks_isa' = accountView,
     selectedCurrency: 'GBP' | 'USD' = displayCurrency,
     force = false
   ) => {
+    const myLoadId = ++loadIdRef.current
     setBusy(true)
     setError(null)
     try {
@@ -281,6 +288,9 @@ export default function App() {
         void refreshPortfolio(force)
           .then(async () => {
             const fresh = await getSnapshot(selectedAccount, selectedCurrency)
+            // Bail if we unmounted or a newer load started, so a stale background
+            // refresh never clobbers the current account/currency selection.
+            if (!mountedRef.current || loadIdRef.current !== myLoadId) return
             setSnapshot(fresh)
             setLastUpdate(new Date().toISOString())
           })
