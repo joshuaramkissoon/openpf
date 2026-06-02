@@ -412,6 +412,27 @@ export interface SubagentToolCallEntry {
 
 export type ToolCallEntry = RegularToolCallEntry | SubagentToolCallEntry
 
+/** AskUserQuestion (clarifying questions) payload streamed from the backend. */
+export interface ChatQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface ChatQuestionSpec {
+  question: string
+  header?: string
+  options: ChatQuestionOption[]
+  multiSelect?: boolean
+}
+
+export interface ChatQuestionPrompt {
+  questionId: string
+  questions: ChatQuestionSpec[]
+}
+
+/** Answers keyed by question text: a single label, a list of labels (multi-select), or free text. */
+export type ChatQuestionAnswers = Record<string, string | string[]>
+
 export interface ChatMessage {
   id: number
   session_id: string
