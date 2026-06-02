@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, attention, broker, charts, config, costs, health, leveraged, portfolio, research, scheduler, strategy, telegram, theses
+from app.api import agent, attention, broker, charts, config, costs, health, leveraged, portfolio, research, scheduler, strategy, telegram, theses, watchlist
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.services.claude_chat_runtime import claude_chat_runtime
@@ -38,6 +38,17 @@ def _scheduler_should_run() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # One-time migration off the legacy config symbol list onto the watchlist table.
+    try:
+        from app.core.database import SessionLocal
+        from app.services import watchlist_service
+
+        with SessionLocal() as db:
+            seeded = watchlist_service.seed_from_config_if_empty(db)
+            if seeded:
+                logging.getLogger(__name__).info("Seeded %d watchlist items from config", seeded)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("Watchlist seed skipped", exc_info=True)
     if _scheduler_should_run():
         start_scheduler()
     yield
@@ -77,3 +88,4 @@ app.include_router(charts.router, prefix=settings.api_prefix)
 app.include_router(costs.router, prefix=settings.api_prefix)
 app.include_router(research.router, prefix=settings.api_prefix)
 app.include_router(attention.router, prefix=settings.api_prefix)
+app.include_router(watchlist.router, prefix=settings.api_prefix)

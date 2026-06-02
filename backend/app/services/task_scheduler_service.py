@@ -22,7 +22,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS, _WATCHLIST_MCP_TOOLS,
 )
 from app.services import costs_service
 from app.services.config_store import ConfigStore
@@ -78,6 +78,35 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "Deterministic watch cycle: run portfolio-scoped watches (concentration breach, thesis "
             "invalidation, earnings within 3 days, big intraday moves on holdings) and raise ranked, "
             "deduped alerts to the Attention inbox. Materiality-gated; no LLM call."
+        ),
+    },
+    {
+        "name": "watchlist_review",
+        "cron_expr": "15 7 * * 1-5",
+        "timezone": "Europe/London",
+        "model": settings.claude_model,  # Sonnet — reads notes + triages fresh data, no execution
+        "enabled": True,
+        "meta": {
+            "task_kind": "claude",
+            "description": "Daily reasoned review of the watchlist → flags worth-noticing items into Attention",
+        },
+        "prompt": (
+            "Review Josh's WATCHLIST and resurface anything worth noticing — the watchlist must never "
+            "become a graveyard. Steps:\n\n"
+            "1. Call `list_watchlist` (status=watching). For EACH item, the `note` is the *reason* it's "
+            "being watched — that note is your watch condition.\n"
+            "2. For each item, gather fresh context: `get_company_news` (since_days=1) and `get_earnings` "
+            "for catalysts; marketdata `get_price_snapshot` / `get_technical_snapshot` for price + technicals; "
+            "and a Kronos `forecast_prices` read when the note is about timing/entry.\n"
+            "3. JUDGE, per item: is the stated reason now PLAYING OUT (entry setup triggered, catalyst hit, "
+            "target approached), BREAKING (thesis for watching invalidated), or UNCHANGED?\n"
+            "4. Only when something is MATERIAL relative to the note, call `flag_watchlist_item` with a tight "
+            "title, a detail grounded in the data you just pulled, an optional `consider:` action, and a "
+            "severity (info/warning/critical). If a name has clearly graduated to a real setup, you may also "
+            "`update_watchlist_item` (e.g. raise conviction, set a target_price/target_direction, or note the "
+            "change). Do NOT flag routine noise — if nothing is material, flag nothing.\n\n"
+            "Then write a short markdown artifact: one line per item (PLAYING OUT / BREAKING / UNCHANGED + a "
+            "few words), and list what you flagged. Keep it a genuine 1-minute read."
         ),
     },
     {
@@ -407,6 +436,15 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
             "env": _mcp_env,
         }
         allowed_tools.extend(_INTEL_MCP_TOOLS)
+    watchlist_script = _MCP_SERVER_DIR / "watchlist.py"
+    if watchlist_script.is_file():
+        mcp_servers["watchlist"] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [str(watchlist_script)],
+            "env": _mcp_env,
+        }
+        allowed_tools.extend(_WATCHLIST_MCP_TOOLS)
 
     options = ClaudeAgentOptions(
         system_prompt={

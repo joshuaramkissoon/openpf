@@ -464,10 +464,12 @@ def _format_summary(
 
 
 def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool = False) -> dict[str, Any]:
+    from app.services import watchlist_service
+
     config = ConfigStore(db)
     risk = config.get_risk()
     broker = config.get_broker()
-    watchlist = config.get_watchlist().get("symbols", [])
+    watchlist = watchlist_service.active_symbols(db)
 
     # Deterministic trims + the summary need real prices/weights; the LLM cycle
     # gets a price-stripped view (it must pull live prices via the marketdata MCP

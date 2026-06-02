@@ -220,6 +220,37 @@ class Alert(Base):
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
 
+class WatchlistItem(Base):
+    """A tracked idea on the watchlist — the layer between a passing mention and a
+    full Thesis. Holds *why* a symbol is being watched (``note``, which doubles as
+    the natural-language watch condition) plus the knobs that let the watch service
+    resurface it (``target_price``/``target_direction``, ``monitor``). CRUD'd by Josh
+    (UI) or Archie (watchlist MCP). ``active_symbols`` (status='watching') is what the
+    agent run + leveraged scan consume — this table replaced the old config symbol list.
+    """
+
+    __tablename__ = "watchlist_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(160), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(16), default="manual")  # manual | archie | agent_run
+    conviction: Mapped[str | None] = mapped_column(String(12), nullable=True)  # low | medium | high
+    status: Mapped[str] = mapped_column(String(16), default="watching", index=True)  # watching | acted | archived
+
+    # Optional alert level. target_direction is 'above' (sell/trim watch) or 'below' (entry watch).
+    target_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_direction: Mapped[str | None] = mapped_column(String(8), nullable=True)  # above | below
+    monitor: Mapped[bool] = mapped_column(Boolean, default=True)  # false = keep on board but don't ping
+
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 

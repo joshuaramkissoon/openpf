@@ -237,6 +237,14 @@ _INTEL_MCP_TOOLS = [
     "mcp__intel__get_earnings",
 ]
 
+_WATCHLIST_MCP_TOOLS = [
+    "mcp__watchlist__list_watchlist",
+    "mcp__watchlist__add_to_watchlist",
+    "mcp__watchlist__update_watchlist_item",
+    "mcp__watchlist__remove_from_watchlist",
+    "mcp__watchlist__flag_watchlist_item",
+]
+
 # Narrow T212 subset the execution subagent is allowed to use — no CSV
 # export, no dividend/transaction history.
 _EXECUTION_T212_TOOLS = [
