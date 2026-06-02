@@ -73,6 +73,11 @@ export async function updateWatchlistItem(id: string, patch: Partial<{
   return data
 }
 
+export async function dismissWatchlistFlag(alertId: string) {
+  const { data } = await api.post(`/attention/${alertId}/dismiss`)
+  return data
+}
+
 export async function deleteWatchlistItem(id: string) {
   const { data } = await api.delete(`/watchlist/${id}`)
   return data

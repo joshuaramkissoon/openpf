@@ -46,6 +46,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   createWatchlistItem,
   deleteWatchlistItem,
+  dismissWatchlistFlag,
   getWatchlist,
   updateWatchlistItem,
 } from '@/api/client'
@@ -154,6 +155,18 @@ export function WatchlistBoard({ onError }: Props) {
     }
   }
 
+  async function dismissFlag(alertId: string) {
+    setBusy(true)
+    try {
+      await dismissWatchlistFlag(alertId)
+      await load()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to dismiss flag')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <SectionCard
@@ -220,15 +233,23 @@ export function WatchlistBoard({ onError }: Props) {
                   key={item.id}
                   className="rounded-lg border border-border/60 bg-muted/20 transition-colors hover:border-border"
                 >
-                  {/* Header row */}
-                  <div className="flex items-start gap-3 p-3.5">
-                    <button
-                      onClick={() => setExpandedId(expanded ? null : item.id)}
-                      className="mt-0.5 text-muted-foreground hover:text-foreground"
-                      aria-label={expanded ? 'Collapse' : 'Expand chart'}
-                    >
+                  {/* Header row — click anywhere to expand */}
+                  <div
+                    className="flex cursor-pointer items-start gap-3 p-3.5"
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expanded}
+                    onClick={() => setExpandedId(expanded ? null : item.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setExpandedId(expanded ? null : item.id)
+                      }
+                    }}
+                  >
+                    <span className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden>
                       {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                    </button>
+                    </span>
 
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -258,11 +279,6 @@ export function WatchlistBoard({ onError }: Props) {
                             {item.target_direction} {item.target_price}
                           </span>
                         ) : null}
-                        {!item.monitor ? (
-                          <span className="flex items-center gap-1 text-[11px] text-muted-foreground" title="Monitoring muted">
-                            <EyeOff className="size-3" /> muted
-                          </span>
-                        ) : null}
                         {item.open_flags > 0 ? (
                           <span
                             className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${SEVERITY_CLASS[item.latest_severity ?? 'info']}`}
@@ -290,43 +306,91 @@ export function WatchlistBoard({ onError }: Props) {
                       </div>
                     </div>
 
-                    <DropdownMenu>
-                      <DropdownMenuTrigger className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-                        <MoreHorizontal className="size-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setEditing(item)}>Edit…</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => void patch(item.id, { monitor: !item.monitor })}>
-                          {item.monitor ? 'Mute monitoring' : 'Resume monitoring'}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        {item.status !== 'acted' ? (
-                          <DropdownMenuItem onClick={() => void patch(item.id, { status: 'acted' })}>
-                            Mark as acted
+                    {/* Row actions — stop propagation so they don't toggle expand */}
+                    <div className="flex shrink-0 items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => void patch(item.id, { monitor: !item.monitor })}
+                        title={item.monitor ? 'Monitoring on — click to mute' : 'Monitoring muted — click to resume'}
+                        aria-label={item.monitor ? 'Mute monitoring' : 'Resume monitoring'}
+                        className={`inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-accent ${item.monitor ? 'text-muted-foreground hover:text-foreground' : 'text-[#dcb45c]'}`}
+                      >
+                        {item.monitor ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                          <MoreHorizontal className="size-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => setEditing(item)}>Edit…</DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {item.status !== 'acted' ? (
+                            <DropdownMenuItem onClick={() => void patch(item.id, { status: 'acted' })}>
+                              Mark as acted
+                            </DropdownMenuItem>
+                          ) : null}
+                          {item.status !== 'archived' ? (
+                            <DropdownMenuItem onClick={() => void patch(item.id, { status: 'archived' })}>
+                              Archive
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem onClick={() => void patch(item.id, { status: 'watching' })}>
+                              Move back to watching
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem
+                            className="text-negative focus:text-negative"
+                            onClick={() => void remove(item.id)}
+                          >
+                            Remove
                           </DropdownMenuItem>
-                        ) : null}
-                        {item.status !== 'archived' ? (
-                          <DropdownMenuItem onClick={() => void patch(item.id, { status: 'archived' })}>
-                            Archive
-                          </DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem onClick={() => void patch(item.id, { status: 'watching' })}>
-                            Move back to watching
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          className="text-negative focus:text-negative"
-                          onClick={() => void remove(item.id)}
-                        >
-                          Remove
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
 
-                  {/* Expanded chart + Kronos */}
+                  {/* Expanded: flags (news/target/…) + chart + Kronos */}
                   {expanded ? (
                     <div className="border-t border-border/60 p-3.5">
+                      {item.flags.length > 0 ? (
+                        <div className="mb-3 flex flex-col gap-2">
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Flagged ({item.flags.length})
+                          </p>
+                          {item.flags.map((f) => (
+                            <div key={f.id} className="flex items-start gap-2 rounded-lg border border-border/60 bg-card/40 p-2.5">
+                              <AlertTriangle
+                                className={`mt-0.5 size-3.5 shrink-0 ${f.severity === 'critical' ? 'text-negative' : f.severity === 'warning' ? 'text-[#dcb45c]' : 'text-primary'}`}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-xs font-medium">{f.title}</p>
+                                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                                    {f.created_at ? dayjs(f.created_at).format('MMM D HH:mm') : ''}
+                                  </span>
+                                </div>
+                                {f.detail ? (
+                                  <p className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{f.detail}</p>
+                                ) : null}
+                                <div className="mt-1 flex items-center gap-3">
+                                  {f.url ? (
+                                    <a href={f.url} target="_blank" rel="noreferrer" className="text-[11px] text-primary hover:underline">
+                                      Open ↗
+                                    </a>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => void dismissFlag(f.id)}
+                                    className="text-[11px] text-muted-foreground hover:text-foreground"
+                                  >
+                                    Dismiss
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="mb-3 flex items-center justify-between rounded-lg border border-border/60 bg-card/40 px-3 py-2">
                         <div>
                           <Label htmlFor={`fc-${item.id}`} className="text-xs font-medium">Kronos forecast</Label>

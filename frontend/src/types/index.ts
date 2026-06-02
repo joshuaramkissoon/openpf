@@ -286,6 +286,16 @@ export interface Thesis {
   meta: Record<string, unknown>
 }
 
+export interface WatchlistFlag {
+  id: string
+  title: string
+  detail: string
+  severity: 'info' | 'warning' | 'critical' | string
+  source: string
+  created_at: string | null
+  url: string | null
+}
+
 export interface WatchlistItem {
   id: string
   created_at: string | null
@@ -308,6 +318,7 @@ export interface WatchlistItem {
   open_flags: number
   latest_flag: string | null
   latest_severity: 'info' | 'warning' | 'critical' | null
+  flags: WatchlistFlag[]
 }
 
 export interface ChatSession {

@@ -286,8 +286,22 @@ def raise_flag(
     return alert
 
 
-def open_flag_counts(db: Session, symbols: list[str]) -> dict[str, dict[str, Any]]:
-    """For the board: per-symbol open `watchlist`-category alert count + newest title."""
+def _serialize_flag(a: Alert) -> dict[str, Any]:
+    return {
+        "id": a.id,
+        "title": a.title,
+        "detail": a.detail,
+        "severity": a.severity,
+        "source": a.source,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "url": (a.meta or {}).get("url"),
+    }
+
+
+def flags_by_symbol(db: Session, symbols: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Open `watchlist`-category alerts grouped by symbol, newest first — so the
+    board can surface the actual flag (news headline, target hit, …) inline rather
+    than only in the Attention feed."""
     if not symbols:
         return {}
     syms = {_norm_symbol(s) for s in symbols}
@@ -298,12 +312,19 @@ def open_flag_counts(db: Session, symbols: list[str]) -> dict[str, dict[str, Any
             Alert.ticker.in_(list(syms)),
         ).order_by(desc(Alert.created_at))
     ).scalars().all()
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, list[dict[str, Any]]] = {}
     for a in rows:
-        tk = _norm_symbol(a.ticker or "")
-        slot = out.setdefault(tk, {"open_flags": 0, "latest_flag": None, "latest_severity": None})
-        slot["open_flags"] += 1
-        if slot["latest_flag"] is None:
-            slot["latest_flag"] = a.title
-            slot["latest_severity"] = a.severity
+        out.setdefault(_norm_symbol(a.ticker or ""), []).append(_serialize_flag(a))
+    return out
+
+
+def open_flag_counts(db: Session, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """For the board: per-symbol open `watchlist`-category alert count + newest title."""
+    out: dict[str, dict[str, Any]] = {}
+    for sym, flags in flags_by_symbol(db, symbols).items():
+        out[sym] = {
+            "open_flags": len(flags),
+            "latest_flag": flags[0]["title"] if flags else None,
+            "latest_severity": flags[0]["severity"] if flags else None,
+        }
     return out
