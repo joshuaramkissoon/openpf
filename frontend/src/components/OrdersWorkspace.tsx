@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { toast } from 'sonner'
-import { AlertTriangle, Ban, CheckCircle2, Copy, Inbox, Loader2, RefreshCw, ShieldAlert, Wifi } from 'lucide-react'
+import { AlertTriangle, Ban, CheckCircle2, Copy, Inbox, Loader2, RefreshCw, Search, ShieldAlert, Wifi } from 'lucide-react'
 
 import {
   cancelOrder,
@@ -21,7 +21,7 @@ import { copyToClipboard } from '@/lib/clipboard'
 import { SectionCard } from '@/components/kit'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
@@ -274,15 +274,17 @@ export function OrdersWorkspace({ onError }: Props) {
         description="Recent fills and cancellations, newest first"
         noPadding
         action={
-          <div className="flex items-center gap-2">
-            {loadingHistory ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" /> : null}
-            <Input
+          <InputGroup className="w-[190px]">
+            <InputGroupAddon align="inline-start">
+              {loadingHistory ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+            </InputGroupAddon>
+            <InputGroupInput
               value={tickerFilter}
               onChange={(e) => setTickerFilter(e.target.value)}
               placeholder="Filter ticker…"
-              className="h-8 w-[160px] text-xs"
+              className="text-xs"
             />
-          </div>
+          </InputGroup>
         }
       >
         {loadingHistory && history.length === 0 ? (
