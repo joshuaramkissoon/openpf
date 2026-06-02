@@ -10,6 +10,8 @@ import type {
   PortfolioSnapshot,
   ChatMessage,
   ChatSession,
+  ChatQuestionAnswers,
+  ChatQuestionSpec,
   LeveragedConfig,
   LeveragedSnapshot,
   SchedulerTask,
@@ -268,6 +270,7 @@ export type ChatStreamHandlers = {
   onAck?: (payload: { session: ChatSession; user_message: ChatMessage }) => void
   onStatus?: (payload: { phase: string; message: string; toolInput?: Record<string, unknown> }) => void
   onDelta?: (payload: { delta: string }) => void
+  onQuestion?: (payload: { questionId: string; questions: ChatQuestionSpec[] }) => void
   onDone?: (payload: {
     session: ChatSession
     assistant_message: ChatMessage
@@ -287,6 +290,10 @@ function websocketBaseUrl() {
 export type StreamHandle = {
   done: Promise<void>
   abort: () => void
+  /** Reply to an AskUserQuestion prompt with the user's selections. */
+  sendAnswer: (questionId: string, answers: ChatQuestionAnswers) => void
+  /** Dismiss an AskUserQuestion prompt without answering. */
+  cancelQuestion: (questionId: string) => void
 }
 
 export function streamChatMessage(
@@ -396,6 +403,13 @@ export function streamChatMessage(
             handlers.onDelta?.({ delta: String(data.delta || '') })
             return
           }
+          if (type === 'question') {
+            handlers.onQuestion?.({
+              questionId: String(data.question_id || ''),
+              questions: (data.questions as ChatQuestionSpec[]) || [],
+            })
+            return
+          }
           if (type === 'done') {
             handlers.onDone?.({
               session: data.session as ChatSession,
@@ -449,7 +463,17 @@ export function streamChatMessage(
     }
   }
 
-  return { done, abort }
+  const sendAnswer = (questionId: string, answers: ChatQuestionAnswers) => {
+    if (settled || !ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'answer', question_id: questionId, answers }))
+  }
+
+  const cancelQuestion = (questionId: string) => {
+    if (settled || !ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'cancel_question', question_id: questionId }))
+  }
+
+  return { done, abort, sendAnswer, cancelQuestion }
 }
 
 export async function runBacktest(payload: {

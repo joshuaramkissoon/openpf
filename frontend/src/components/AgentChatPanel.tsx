@@ -3,8 +3,9 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Sparkles, Square, Wrench } from 'lucide-react'
 
 import { getChatMessages, stopChat, streamChatMessage, type StreamHandle } from '../api/client'
-import type { ChatMessage, ChatSession, ToolCallEntry } from '../types'
+import type { ChatMessage, ChatQuestionAnswers, ChatQuestionPrompt, ChatSession, ToolCallEntry } from '../types'
 import { cn } from '../lib/utils'
+import { ChatQuestionCard } from './ChatQuestionCard'
 import {
   InputGroup,
   InputGroupAddon,
@@ -164,6 +165,7 @@ interface SessionState {
   streamSegments: StreamSegment[]
   streamAssistantId: number | null
   toolCallsExpanded: boolean
+  pendingQuestion: ChatQuestionPrompt | null
   pendingMessages: { content: string; optimisticId: number }[]
   stopNotice: string | null
 }
@@ -179,6 +181,7 @@ function freshSession(): SessionState {
     streamSegments: [],
     streamAssistantId: null,
     toolCallsExpanded: false,
+    pendingQuestion: null,
     pendingMessages: [],
     stopNotice: null,
   }
@@ -257,6 +260,16 @@ export function AgentChatPanel({
 
   const current = getSession(activeSessionId)
 
+  function answerQuestion(questionId: string, answers: ChatQuestionAnswers) {
+    activeStreamsRef.current.get(activeSessionId)?.sendAnswer(questionId, answers)
+    patchSession(activeSessionId, (s) => { s.pendingQuestion = null })
+  }
+
+  function cancelQuestion(questionId: string) {
+    activeStreamsRef.current.get(activeSessionId)?.cancelQuestion(questionId)
+    patchSession(activeSessionId, (s) => { s.pendingQuestion = null })
+  }
+
   const autoResize = useCallback(() => {
     const ta = textareaRef.current
     if (!ta) return
@@ -307,6 +320,7 @@ export function AgentChatPanel({
           s.streamStatus = null
           s.streamSegments = []
           s.streamAssistantId = null
+          s.pendingQuestion = null
         })
       } catch (err) {
         if (cancelled) return
@@ -438,6 +452,11 @@ export function AgentChatPanel({
             }
           })
         },
+        onQuestion: ({ questionId, questions }) => {
+          patchSession(sessionId, (s) => {
+            s.pendingQuestion = { questionId, questions }
+          })
+        },
         onDone: ({ session: touched, assistant_message, stop_reason, result_subtype }) => {
           activeStreamsRef.current.delete(sessionId)
           const notice = stopReasonNotice(stop_reason, result_subtype)
@@ -450,6 +469,7 @@ export function AgentChatPanel({
             s.streamAssistantId = null
             s.sending = false
             s.hasStreamedText = false
+            s.pendingQuestion = null
             s.stopNotice = notice
             nextQueued = s.pendingMessages.shift()
           })
@@ -470,6 +490,7 @@ export function AgentChatPanel({
             s.streamAssistantId = null
             s.sending = false
             s.hasStreamedText = false
+            s.pendingQuestion = null
             s.pendingMessages = []
           })
         },
@@ -637,6 +658,7 @@ export function AgentChatPanel({
       s.streamStatus = null
       s.streamSegments = []
       s.streamAssistantId = null
+      s.pendingQuestion = null
       s.pendingMessages = []
       s.stopNotice = 'Response stopped.'
     })
@@ -766,6 +788,15 @@ export function AgentChatPanel({
                           </div>
                         )
                       })}
+                      {current.pendingQuestion && (
+                        <ChatQuestionCard
+                          key={current.pendingQuestion.questionId}
+                          questionId={current.pendingQuestion.questionId}
+                          questions={current.pendingQuestion.questions}
+                          onSubmit={answerQuestion}
+                          onCancel={cancelQuestion}
+                        />
+                      )}
                     </article>
                   )
                 }

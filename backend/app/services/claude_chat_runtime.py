@@ -5,13 +5,13 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
-from claude_agent_sdk import ResultMessage
+from claude_agent_sdk import CanUseTool, PermissionResultAllow, PermissionResultDeny, ResultMessage
 
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
@@ -264,12 +264,29 @@ class ReplyResult:
     num_turns: int | None = None
 
 
+# Asks the user a clarifying question (the AskUserQuestion tool's `questions`
+# payload) and resolves to the `answers` dict ({question_text: label | [labels]}).
+# Set per-turn by stream_reply; the per-session can_use_tool callback reads it.
+QuestionAsker = Callable[[dict], Awaitable[dict | None]]
+
+# Returned to Claude when AskUserQuestion can't be served interactively (no live
+# UI channel) so it falls back to asking the question in plain text instead of
+# the tool hard-erroring.
+_ASK_FALLBACK_MSG = (
+    "Interactive questions aren't available right now. Ask your clarifying "
+    "question directly in your text reply — state the options clearly — and the "
+    "user will answer in their next message."
+)
+
+
 @dataclass
 class _RuntimeSession:
     client: Any
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     connected: bool = False
     last_used: float = field(default_factory=monotonic)
+    # Active clarifying-question channel for the in-flight turn (None when idle).
+    question_asker: QuestionAsker | None = None
 
 
 class ClaudeChatRuntime:
@@ -447,6 +464,47 @@ class ClaudeChatRuntime:
             agents=build_subagents(),
         )
 
+    def _build_can_use_tool(self, chat_session_id: str) -> CanUseTool:
+        """Permission callback for one session's SDK client.
+
+        Only fires for tools that aren't auto-approved by `allowed_tools` /
+        settings — in practice just AskUserQuestion (and any tool the model tries
+        that we don't allow). We serve AskUserQuestion by routing its questions to
+        the live turn's UI channel and feeding the user's selections back as the
+        tool's `updated_input`; everything else is denied (the prior, no-callback
+        behaviour for non-allowed tools)."""
+
+        async def can_use_tool(tool_name: str, input_data: dict, context: Any):
+            if tool_name != "AskUserQuestion":
+                return PermissionResultDeny(
+                    message="This tool isn't available in chat."
+                )
+
+            state = self._sessions.get(chat_session_id)
+            asker = state.question_asker if state else None
+            if asker is None:
+                return PermissionResultDeny(message=_ASK_FALLBACK_MSG)
+
+            try:
+                answers = await asker(input_data)
+            except Exception:
+                return PermissionResultDeny(message=_ASK_FALLBACK_MSG)
+
+            if not answers:
+                # User dismissed the question without answering.
+                return PermissionResultDeny(
+                    message="The user dismissed the question. Continue with your best judgement or ask again in plain text."
+                )
+
+            return PermissionResultAllow(
+                updated_input={
+                    "questions": input_data.get("questions", []),
+                    "answers": answers,
+                }
+            )
+
+        return can_use_tool
+
     async def _get_session(self, chat_session_id: str) -> _RuntimeSession:
         existing = self._sessions.get(chat_session_id)
         if existing:
@@ -458,7 +516,10 @@ class ClaudeChatRuntime:
             current = self._sessions.get(chat_session_id)
             if current:
                 return current
-            created = _RuntimeSession(client=ClaudeSDKClient(options=self._options))
+            # Per-session options so each client's permission callback can route
+            # AskUserQuestion to that session's live UI channel.
+            options = replace(self._options, can_use_tool=self._build_can_use_tool(chat_session_id))
+            created = _RuntimeSession(client=ClaudeSDKClient(options=options))
             self._sessions[chat_session_id] = created
             return created
 
@@ -468,11 +529,15 @@ class ClaudeChatRuntime:
         prompt: str,
         on_delta: Callable[[str], Awaitable[None]],
         on_status: Callable[[str, str, dict | None], Awaitable[None]] | None = None,
+        on_question: QuestionAsker | None = None,
     ) -> ReplyResult:
         state = await self._get_session(chat_session_id)
 
         async with state.lock:
             state.last_used = monotonic()
+            # Expose this turn's clarifying-question channel to the session's
+            # can_use_tool callback; clear it when the turn ends.
+            state.question_asker = on_question
             last_status: tuple[str, str] | None = None
 
             async def emit_status(phase: str, message: str, tool_input: dict | None = None) -> None:
@@ -503,6 +568,13 @@ class ClaudeChatRuntime:
 
             chunks: list[str] = []
             streamed = False
+            # Snapshot of tool activity (start + result count) at the moment text
+            # was last appended. When text resumes after intervening tool calls we
+            # insert a paragraph break so the persisted reply keeps the visual
+            # separation the streaming view gets for free (text runs split on tool
+            # boundaries). Without this, "...the order." + "I'll get the FX rate..."
+            # join with no separator and render as one mashed-together block.
+            tool_marker_at_last_text = 0
             seen_tool_ids: set[str] = set()
             seen_tool_result_ids: set[str] = set()
             tool_name_by_id: dict[str, str] = {}
@@ -546,6 +618,16 @@ class ClaudeChatRuntime:
                         f"Delegating to {subagent_type}",
                         {"subagent_id": tool_id, "subagent_type": subagent_type},
                     )
+
+            def _append_reply_text(text: str) -> None:
+                """Append assistant text to `chunks`, inserting a paragraph break
+                when the text resumes after intervening tool activity."""
+                nonlocal tool_marker_at_last_text
+                marker = len(seen_tool_ids) + len(seen_tool_result_ids)
+                if chunks and marker > tool_marker_at_last_text:
+                    chunks.append("\n\n")
+                tool_marker_at_last_text = marker
+                chunks.append(text)
 
             try:
                 async for message in state.client.receive_response():
@@ -646,8 +728,11 @@ class ClaudeChatRuntime:
                             if tool_id:
                                 tool_name_by_id[tool_id] = tool_name
                                 tool_input_by_id[tool_id] = tool_input
-                            friendly = _friendly_tool_name(tool_name)
-                            await emit_status("tool_start", friendly, tool_input)
+                            # AskUserQuestion is surfaced as its own interactive
+                            # card (via can_use_tool), not the tool-activity trail.
+                            if tool_name != "AskUserQuestion":
+                                friendly = _friendly_tool_name(tool_name)
+                                await emit_status("tool_start", friendly, tool_input)
 
                     for tool_id, is_error in _extract_tool_results(message):
                         if tool_id in seen_tool_result_ids:
@@ -673,6 +758,8 @@ class ClaudeChatRuntime:
                             )
                         else:
                             tool_name = tool_name_by_id.get(tool_id, "tool step")
+                            if tool_name == "AskUserQuestion":
+                                continue  # represented by the question card
                             friendly = _friendly_tool_name(tool_name)
                             if is_error:
                                 await emit_status("tool_result", f"{friendly} — hit a snag")
@@ -682,7 +769,7 @@ class ClaudeChatRuntime:
                     delta = _extract_stream_delta(message)
                     if delta:
                         streamed = True
-                        chunks.append(delta)
+                        _append_reply_text(delta)
                         await on_delta(delta)
                         continue
 
@@ -691,13 +778,17 @@ class ClaudeChatRuntime:
 
                     text = _extract_text_from_sdk_message(message)
                     if text:
-                        chunks.append(text)
+                        _append_reply_text(text)
                         await on_delta(text)
             except Exception:
                 # If we already collected some text, return what we have
                 # rather than losing the partial response.
                 if not chunks:
                     raise
+            finally:
+                # The question channel is turn-scoped; never let it leak to the
+                # next turn (or fire when no turn is active).
+                state.question_asker = None
 
             out = "".join(chunks).strip()
             return ReplyResult(

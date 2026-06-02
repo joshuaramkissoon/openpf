@@ -308,10 +308,46 @@ async def chat_stream(session_id: str, websocket: WebSocket):
         streamed_chunks: list[str] = []
         collected_tool_calls: list[dict] = []
         active_subagent_buffers: dict[str, dict] = {}
+        question_seq = 0
+        # Serialise question prompts: this coroutine is the sole socket reader, and
+        # the client only tracks one pending question at a time. If the model ever
+        # fires two AskUserQuestion calls at once, the second waits for the first.
+        question_lock = asyncio.Lock()
 
         async def _on_delta(chunk: str) -> None:
             streamed_chunks.append(chunk)
             await websocket.send_json({"type": "delta", "delta": chunk})
+
+        async def _on_question(input_data: dict) -> dict | None:
+            """Surface Archie's AskUserQuestion to the client and block until the
+            user answers. Returns the {question_text: label|[labels]} answers, or
+            None if the user dismissed it (or disconnected). Safe to read the socket
+            directly here: this is the only reader and calls are serialised."""
+            nonlocal question_seq
+            async with question_lock:
+                question_seq += 1
+                qid = f"q{question_seq}"
+                await websocket.send_json(
+                    {
+                        "type": "question",
+                        "question_id": qid,
+                        "questions": input_data.get("questions", []),
+                    }
+                )
+                while True:
+                    try:
+                        msg = await websocket.receive_json()
+                    except WebSocketDisconnect:
+                        # Tab closed / stopped mid-question — resolve as dismissed
+                        # so the turn unwinds promptly instead of blocking.
+                        return None
+                    mtype = msg.get("type")
+                    if mtype == "answer" and msg.get("question_id") == qid:
+                        answers = msg.get("answers")
+                        return answers if isinstance(answers, dict) and answers else None
+                    if mtype == "cancel_question" and msg.get("question_id") == qid:
+                        return None
+                    # Ignore any other late/stray frames and keep waiting.
 
         async def _on_status(phase: str, message: str, tool_input: dict | None = None) -> None:
             msg: dict = {"type": "status", "phase": phase, "message": message}
@@ -384,6 +420,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                         prompt=prompt,
                         on_delta=_on_delta,
                         on_status=_on_status,
+                        on_question=_on_question,
                     ),
                     timeout=timeout,
                 )
