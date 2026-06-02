@@ -27,6 +27,16 @@ class T212Client:
     api_key: str
     api_secret: str
     base_env: str = "demo"
+    # "read" (IP-unrestricted key) or "execute" (IP-restricted write key). Order
+    # placement/cancellation requires an "execute" client — guarded below so the
+    # read key can never place a trade even if a caller passes it by mistake.
+    purpose: str = "read"
+
+    def _require_execute(self) -> None:
+        if self.purpose != "execute":
+            raise T212Error(
+                "execution requires the execution (write) key; this client was built for reads"
+            )
 
     @property
     def base_url(self) -> str:
@@ -67,7 +77,9 @@ class T212Client:
                 f"Check key/secret, env (demo/live), account type (Invest/Stocks ISA), and IP restriction. "
                 f"key_len={len(key)}"
             )
-            raise T212AuthError(hint)
+            err = T212AuthError(hint)
+            err.status_code = response.status_code  # type: ignore[attr-defined]
+            raise err
 
         if response.status_code >= 400:
             detail = response.text
@@ -81,7 +93,10 @@ class T212Client:
                 except (TypeError, ValueError):
                     err.reset_epoch = None  # type: ignore[attr-defined]
                 raise err
-            raise T212Error(f"Trading 212 API error {response.status_code}: {detail[:500]}")
+            err = T212Error(f"Trading 212 API error {response.status_code}: {detail[:500]}")
+            err.status_code = response.status_code  # type: ignore[attr-defined]
+            err.body = detail[:500]  # type: ignore[attr-defined]
+            raise err
 
         data = response.json() if response.content else {}
         limits = {
@@ -217,7 +232,24 @@ class T212Client:
             return data["items"]
         return []
 
+    def get_orders_history_page(self, *, limit: int = 50, ticker: str | None = None) -> list[dict[str, Any]]:
+        """A single (newest-first) page of order history for snappy UI loads.
+
+        Unlike ``get_order_history`` (which walks every page with multi-second
+        sleeps for a one-time backfill), this fetches just the first page so the
+        Orders tab loads immediately. Each item is ``{"order": {...}, "fill": {...}}``."""
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
+        if ticker:
+            params["instrumentCode"] = ticker
+        data, _ = self._request("GET", "/equity/history/orders", params=params)
+        if isinstance(data, dict):
+            return data.get("items", []) or []
+        if isinstance(data, list):
+            return data
+        return []
+
     def place_market_order(self, instrument_code: str, quantity: float, *, extended_hours: bool = False) -> dict[str, Any]:
+        self._require_execute()
         payload = {
             "ticker": instrument_code,
             "quantity": quantity,
@@ -227,6 +259,7 @@ class T212Client:
         return data
 
     def place_limit_order(self, instrument_code: str, quantity: float, limit_price: float) -> dict[str, Any]:
+        self._require_execute()
         payload = {
             "ticker": instrument_code,
             "quantity": quantity,
@@ -236,6 +269,7 @@ class T212Client:
         return data
 
     def place_stop_order(self, instrument_code: str, quantity: float, stop_price: float) -> dict[str, Any]:
+        self._require_execute()
         payload = {
             "ticker": instrument_code,
             "quantity": quantity,
@@ -245,6 +279,7 @@ class T212Client:
         return data
 
     def place_stop_limit_order(self, instrument_code: str, quantity: float, stop_price: float, limit_price: float) -> dict[str, Any]:
+        self._require_execute()
         payload = {
             "ticker": instrument_code,
             "quantity": quantity,
@@ -255,17 +290,34 @@ class T212Client:
         return data
 
     def cancel_order(self, order_id: str) -> None:
+        self._require_execute()
         self._request("DELETE", f"/equity/orders/{order_id}")
 
 
-def build_t212_client(config_store: ConfigStore, account_kind: AccountKind = "invest") -> T212Client:
+def build_t212_client(
+    config_store: ConfigStore,
+    account_kind: AccountKind = "invest",
+    *,
+    purpose: str = "read",
+) -> T212Client:
+    """Build a T212 client for an account.
+
+    ``purpose="read"`` (default) uses the IP-unrestricted read key for every
+    read-only call. ``purpose="execute"`` uses the dedicated IP-restricted
+    execution (write) key — required for placing/cancelling orders. Reads always
+    keep working even when the execution key's IP allowlist is stale.
+    """
     broker = config_store.get_broker()
-    creds = config_store.get_account_credentials(account_kind)
+    if purpose == "execute":
+        creds = config_store.get_account_exec_credentials(account_kind)
+    else:
+        creds = config_store.get_account_credentials(account_kind)
 
     return T212Client(
         api_key=creds.get("t212_api_key", ""),
         api_secret=creds.get("t212_api_secret", ""),
         base_env=broker.get("t212_base_env", "demo"),
+        purpose=purpose,
     )
 
 

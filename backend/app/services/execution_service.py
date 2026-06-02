@@ -167,13 +167,26 @@ def _paper_fill_price(symbol: str) -> float:
         return 0.0
 
 
-def execute_intent(db: Session, intent_id: str, *, force_live: bool = False) -> TradeIntent:
+def execute_intent(
+    db: Session,
+    intent_id: str,
+    *,
+    force_live: bool = False,
+    account_kind: str | None = None,
+) -> TradeIntent:
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
 
     if intent.status not in {"approved", "proposed"}:
         raise ExecutionError(f"Intent {intent_id} cannot be executed from status {intent.status}")
+
+    # Resolve the destination account explicitly: the caller's choice wins, else
+    # the account the intent was proposed for, else invest. No silent invest
+    # default once a choice has been made upstream.
+    resolved_account = str(account_kind or (intent.meta or {}).get("account_kind") or "invest").strip().lower()
+    if resolved_account not in {"invest", "stocks_isa"}:
+        raise ExecutionError(f"invalid account '{account_kind}': must be 'invest' or 'stocks_isa'")
 
     config = ConfigStore(db)
     risk = config.get_risk()
@@ -200,6 +213,10 @@ def execute_intent(db: Session, intent_id: str, *, force_live: bool = False) -> 
 
     intent.broker_mode = mode
     intent.status = "executing"
+    # Record the resolved destination account on the intent for the audit trail.
+    meta = dict(intent.meta or {})
+    meta["account_kind"] = resolved_account
+    intent.meta = meta
     db.add(intent)
     db.commit()
     db.refresh(intent)
@@ -227,10 +244,15 @@ def execute_intent(db: Session, intent_id: str, *, force_live: bool = False) -> 
             )
             return intent
 
-        account_kind = str((intent.meta or {}).get("account_kind", "invest")).strip().lower()
-        if account_kind not in {"invest", "stocks_isa"}:
-            account_kind = "invest"
-        client = build_t212_client(config, account_kind=account_kind)  # type: ignore[arg-type]
+        # Live writes use the dedicated IP-restricted execution key (purpose="execute").
+        exec_creds = config.get_account_exec_credentials(resolved_account)  # type: ignore[arg-type]
+        if not exec_creds.get("exec_enabled", True):
+            raise ExecutionError(f"live execution is disabled for {resolved_account} (enable it in Settings)")
+        if not exec_creds.get("t212_api_key") or not exec_creds.get("t212_api_secret"):
+            raise ExecutionError(
+                f"no execution key configured for {resolved_account} (add it in Settings → Credentials)"
+            )
+        client = build_t212_client(config, account_kind=resolved_account, purpose="execute")  # type: ignore[arg-type]
         signed_qty = intent.quantity if intent.side == "buy" else -abs(intent.quantity)
 
         if intent.order_type == "limit" and intent.limit_price is not None:

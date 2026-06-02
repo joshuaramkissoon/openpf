@@ -20,15 +20,23 @@ class BrokerConfig(BaseModel):
 
 
 class CredentialConfig(BaseModel):
-    t212_api_key: str
-    t212_api_secret: str
+    # All optional: a partial update (e.g. only the execution key) leaves the
+    # other fields untouched — ConfigStore treats blank/None as "keep existing".
+    t212_api_key: str = ""
+    t212_api_secret: str = ""
     enabled: bool = True
+    # Dedicated IP-restricted execution (write) key.
+    exec_api_key: str = ""
+    exec_api_secret: str = ""
+    exec_enabled: bool | None = None
 
 
 class AccountCredentialView(BaseModel):
     account_kind: Literal["invest", "stocks_isa"]
     enabled: bool
     configured: bool
+    exec_enabled: bool = True
+    exec_configured: bool = False
 
 
 class CredentialsConfig(BaseModel):

@@ -56,6 +56,9 @@ class IntentDecisionRequest(BaseModel):
 
 class IntentExecuteRequest(BaseModel):
     force_live: bool = False
+    # Explicit destination account ('invest' | 'stocks_isa'). When omitted, the
+    # account the intent was proposed for is used (then 'invest' as a last resort).
+    account_kind: str | None = None
 
 
 class IntentActionResponse(BaseModel):

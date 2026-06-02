@@ -33,14 +33,22 @@ BROKER_DEFAULT = {
 
 CREDENTIALS_DEFAULT = {
     "invest": {
+        # READ key (IP-unrestricted): used for every read-only call.
         "t212_api_key": str(settings.t212_invest_api_key or settings.t212_api_key_invest or settings.t212_api_key or "").strip(),
         "t212_api_secret": str(settings.t212_invest_api_secret or settings.t212_api_secret_invest or settings.t212_api_secret or "").strip(),
         "enabled": True,
+        # EXECUTION key (IP-restricted): used only for placing/cancelling orders.
+        "exec_api_key": str(settings.t212_exec_invest_api_key or "").strip(),
+        "exec_api_secret": str(settings.t212_exec_invest_api_secret or "").strip(),
+        "exec_enabled": True,
     },
     "stocks_isa": {
         "t212_api_key": str(settings.t212_stocks_isa_api_key or settings.t212_api_key_stocks_isa or "").strip(),
         "t212_api_secret": str(settings.t212_stocks_isa_api_secret or settings.t212_api_secret_stocks_isa or "").strip(),
         "enabled": True,
+        "exec_api_key": str(settings.t212_exec_stocks_isa_api_key or "").strip(),
+        "exec_api_secret": str(settings.t212_exec_stocks_isa_api_secret or "").strip(),
+        "exec_enabled": True,
     },
 }
 
@@ -118,7 +126,9 @@ class ConfigStore:
         return self.set("broker_config", merged)
 
     @staticmethod
-    def _normalize_credentials_fields(api_key: str, api_secret: str) -> dict[str, str]:
+    def _clean_key_secret(api_key: str, api_secret: str) -> tuple[str, str]:
+        """Normalise a (key, secret) pair, accepting common paste formats: a bare
+        key+secret, a ``KEY:SECRET`` string, or a ``Basic <base64(key:secret)>`` header."""
         key = (api_key or "").strip()
         secret = (api_secret or "").strip()
 
@@ -142,6 +152,11 @@ class ConfigStore:
 
         key = key.replace("\n", "").replace("\r", "").strip()
         secret = secret.replace("\n", "").replace("\r", "").strip()
+        return key, secret
+
+    @staticmethod
+    def _normalize_credentials_fields(api_key: str, api_secret: str) -> dict[str, str]:
+        key, secret = ConfigStore._clean_key_secret(api_key, api_secret)
         return {"t212_api_key": key, "t212_api_secret": secret}
 
     def _normalize_credentials_map(self, value: dict[str, Any]) -> dict[str, Any]:
@@ -166,10 +181,18 @@ class ConfigStore:
                 str(entry.get("t212_api_key", merged[kind]["t212_api_key"])),
                 str(entry.get("t212_api_secret", merged[kind]["t212_api_secret"])),
             )
+            exec_key, exec_secret = self._clean_key_secret(
+                str(entry.get("exec_api_key", merged[kind].get("exec_api_key", ""))),
+                str(entry.get("exec_api_secret", merged[kind].get("exec_api_secret", ""))),
+            )
+            raw_exec_enabled = entry.get("exec_enabled", merged[kind].get("exec_enabled", True))
             merged[kind] = {
                 **merged[kind],
                 **normalized,
                 "enabled": bool(entry.get("enabled", merged[kind].get("enabled", True))),
+                "exec_api_key": exec_key,
+                "exec_api_secret": exec_secret,
+                "exec_enabled": True if raw_exec_enabled is None else bool(raw_exec_enabled),
             }
 
         return merged
@@ -197,6 +220,17 @@ class ConfigStore:
                     normalized[kind]["enabled"] = bool(env_entry.get("enabled", True))
                     changed = True
 
+            # Same source-of-truth rule for the dedicated execution (write) key.
+            env_exec_key = str(env_entry.get("exec_api_key", "")).strip()
+            env_exec_secret = str(env_entry.get("exec_api_secret", "")).strip()
+            if env_exec_key and env_exec_secret:
+                if str(normalized[kind].get("exec_api_key", "")).strip() != env_exec_key:
+                    normalized[kind]["exec_api_key"] = env_exec_key
+                    changed = True
+                if str(normalized[kind].get("exec_api_secret", "")).strip() != env_exec_secret:
+                    normalized[kind]["exec_api_secret"] = env_exec_secret
+                    changed = True
+
         if changed:
             self.set("credentials", normalized)
         return normalized
@@ -216,16 +250,43 @@ class ConfigStore:
             str(key_value),
             str(secret_value),
         )
+
+        # Execution (write) key — same "blank means keep existing" semantics so a
+        # partial update (e.g. toggling exec_enabled) never wipes the stored key.
+        incoming_exec_key = value.get("exec_api_key")
+        incoming_exec_secret = value.get("exec_api_secret")
+        exec_key_value = entry.get("exec_api_key", "") if incoming_exec_key in (None, "") else incoming_exec_key
+        exec_secret_value = entry.get("exec_api_secret", "") if incoming_exec_secret in (None, "") else incoming_exec_secret
+        exec_key, exec_secret = self._clean_key_secret(str(exec_key_value), str(exec_secret_value))
+
+        # ``exec_enabled`` is None-tolerant: a partial update that omits it (e.g.
+        # changing only the read key) must not silently flip the live-exec toggle.
+        exec_enabled_in = value.get("exec_enabled")
+        exec_enabled = entry.get("exec_enabled", True) if exec_enabled_in is None else bool(exec_enabled_in)
+
         all_creds[account_kind] = {
             **entry,
             **normalized,
             "enabled": bool(value.get("enabled", entry.get("enabled", True))),
+            "exec_api_key": exec_key,
+            "exec_api_secret": exec_secret,
+            "exec_enabled": exec_enabled,
         }
         return self.set_credentials(all_creds)
 
     def get_account_credentials(self, account_kind: AccountKind) -> dict[str, Any]:
         creds = self.get_credentials()
         return creds.get(account_kind, {"t212_api_key": "", "t212_api_secret": "", "enabled": False})
+
+    def get_account_exec_credentials(self, account_kind: AccountKind) -> dict[str, Any]:
+        """The execution (write) key for an account, normalised to the same
+        ``t212_api_key``/``t212_api_secret`` field names a ``T212Client`` expects."""
+        entry = self.get_account_credentials(account_kind)
+        return {
+            "t212_api_key": str(entry.get("exec_api_key", "")).strip(),
+            "t212_api_secret": str(entry.get("exec_api_secret", "")).strip(),
+            "exec_enabled": bool(entry.get("exec_enabled", True)),
+        }
 
     def credentials_public(self) -> dict[str, Any]:
         creds = self.get_credentials()
@@ -236,8 +297,19 @@ class ConfigStore:
                 "account_kind": kind,
                 "enabled": bool(entry.get("enabled", True)),
                 "configured": bool(str(entry.get("t212_api_key", "")).strip() and str(entry.get("t212_api_secret", "")).strip()),
+                "exec_enabled": bool(entry.get("exec_enabled", True)),
+                "exec_configured": bool(str(entry.get("exec_api_key", "")).strip() and str(entry.get("exec_api_secret", "")).strip()),
             }
         return out
+
+    def get_execution_status(self) -> dict[str, Any]:
+        """Last execution-key test result per account (transient health, not secrets)."""
+        return self.get("execution_status", {})
+
+    def set_execution_status(self, account_kind: AccountKind, status: dict[str, Any]) -> dict[str, Any]:
+        current = dict(self.get_execution_status() or {})
+        current[account_kind] = status
+        return self.set("execution_status", current)
 
     def enabled_account_kinds(self) -> list[AccountKind]:
         creds = self.get_credentials()
