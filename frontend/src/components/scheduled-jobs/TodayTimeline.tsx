@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import dayjs from 'dayjs'
 import {
+  AlertTriangle,
   CalendarClock,
   CheckCircle2,
   ChevronDown,
@@ -18,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { parseCronHuman } from './cron'
+import { humanizeTaskName } from './labels'
 import { RunOutputDrawer, type DrawerRun } from './RunOutputDrawer'
 
 const POLL_INTERVAL_MS = 30_000
@@ -107,7 +109,7 @@ function PastGroupRow({
         onClick={run.has_output ? () => onOpenRun(run) : undefined}
       >
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-sm font-medium">{group.name}</span>
+          <span className="text-sm font-medium">{humanizeTaskName(group.name)}</span>
           {run.has_output && <span className="size-1.5 rounded-full bg-primary" title="Has output" />}
         </div>
         {run.message && <p className="truncate text-xs text-muted-foreground">{run.message}</p>}
@@ -129,7 +131,7 @@ function PastGroupRow({
           ) : (
             <ChevronRight className="size-3.5 text-muted-foreground" />
           )}
-          <span className="text-sm font-medium">{group.name}</span>
+          <span className="text-sm font-medium">{humanizeTaskName(group.name)}</span>
           <Badge variant="outline" className="text-muted-foreground">{group.run_count} runs</Badge>
           {errors > 0 && (
             <Badge variant="destructive">{errors} failed</Badge>
@@ -193,7 +195,7 @@ function UpcomingRow({
             ) : (
               <ChevronRight className="size-3.5 text-muted-foreground" />
             ))}
-          <span className="text-sm text-foreground/90">{item.name}</span>
+          <span className="text-sm text-foreground/90">{humanizeTaskName(item.name)}</span>
           {more > 0 && (
             <span className="text-xs text-muted-foreground">+{more} more today</span>
           )}
@@ -222,17 +224,23 @@ function UpcomingRow({
 export function TodayTimeline({ onError, onViewTask }: Props) {
   const [data, setData] = useState<SchedulerToday | null>(null)
   const [loading, setLoading] = useState(true)
+  const [errored, setErrored] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [drawerRun, setDrawerRun] = useState<DrawerRun | null>(null)
 
+  // Timeline failures are handled inline (error + Retry) rather than via the
+  // global error banner — a slow first load (e.g. cold backend) shouldn't look
+  // like "nothing scheduled" or fire a disruptive toast. A later poll that
+  // succeeds clears the error and renders the data.
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
     try {
       const rows = await getSchedulerTimeline()
       setData(rows)
-      if (!silent) onError(null)
-    } catch (err) {
-      if (!silent) onError(err instanceof Error ? err.message : 'Failed to load timeline')
+      setErrored(false)
+      onError(null)
+    } catch {
+      if (!silent) setErrored(true)
     } finally {
       if (!silent) setLoading(false)
     }
@@ -261,7 +269,7 @@ export function TodayTimeline({ onError, onViewTask }: Props) {
   function openRun(group: TimelinePastGroup, run: TimelineRun) {
     setDrawerRun({
       taskId: group.task_id,
-      name: group.name,
+      name: humanizeTaskName(group.name),
       taskKind: group.task_kind,
       status: run.status,
       ranAt: run.ran_at,
@@ -280,6 +288,22 @@ export function TodayTimeline({ onError, onViewTask }: Props) {
             <Skeleton className="h-4 w-48" />
           </div>
         ))}
+      </div>
+    )
+  }
+
+  if (errored && !data) {
+    return (
+      <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+        <AlertTriangle className="size-7 text-muted-foreground" />
+        <p className="text-sm font-medium">Couldn't load today's timeline</p>
+        <p className="max-w-md text-xs text-muted-foreground">
+          The request timed out or failed — the backend may still be warming up. Try again in a moment.
+        </p>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+          Retry
+        </Button>
       </div>
     )
   }
@@ -329,7 +353,7 @@ export function TodayTimeline({ onError, onViewTask }: Props) {
           )}
 
           {/* NOW divider */}
-          <div className="flex items-center gap-3 py-2">
+          <div className="flex items-center gap-3 px-2 py-2">
             <span className="w-11 shrink-0 text-right font-mono text-xs font-medium tabular-nums text-primary">
               {data ? fmtTime(data.now) : ''}
             </span>
@@ -356,7 +380,7 @@ export function TodayTimeline({ onError, onViewTask }: Props) {
                 />
               ))}
               {/* end-of-day cap */}
-              <div className="flex items-center gap-3 pt-1">
+              <div className="flex items-center gap-3 px-2 pt-1">
                 <span className="w-11 shrink-0" />
                 <span className="flex w-4 shrink-0 justify-center">
                   <span className="size-1.5 rounded-full bg-border" />
