@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from threading import Lock
+
 from fastapi import APIRouter, HTTPException, Query
 
 import app.quant as quant
@@ -23,6 +26,51 @@ _OVERLAY_KEYS = {"sma20", "sma50", "sma200", "bollinger"}
 _PANEL_KEYS = {"rsi", "macd", "atr"}
 
 
+# ── Candle response cache ─────────────────────────────────────────────────
+# `_download_history_frame` hits live yfinance on every call, so without a
+# cache every chart mount — and every client viewing the same ticker —
+# re-fetches from scratch (~1-3s each). Cache the fully-built response keyed by
+# the exact request params. TTL is short and interval-aware: intraday data
+# moves continuously; daily/weekly candles only settle once a session.
+_CANDLE_CACHE_TTL_INTRADAY = 60       # seconds
+_CANDLE_CACHE_TTL_DEFAULT = 300       # seconds (5 min) — matches the market-data layer
+_CANDLE_CACHE_MAX_ITEMS = 256
+_candle_cache: dict[tuple, tuple[float, ChartResponse]] = {}
+_candle_cache_lock = Lock()
+
+
+def _candle_ttl(interval: str) -> int:
+    return _CANDLE_CACHE_TTL_INTRADAY if interval in _INTRADAY_INTERVALS else _CANDLE_CACHE_TTL_DEFAULT
+
+
+def _candle_cache_get(key: tuple, ttl: int) -> ChartResponse | None:
+    with _candle_cache_lock:
+        hit = _candle_cache.get(key)
+        if not hit:
+            return None
+        ts, value = hit
+        if time.time() - ts > ttl:
+            _candle_cache.pop(key, None)
+            return None
+        return value
+
+
+def _candle_cache_set(key: tuple, value: ChartResponse) -> ChartResponse:
+    with _candle_cache_lock:
+        if len(_candle_cache) >= _CANDLE_CACHE_MAX_ITEMS:
+            # Evict the oldest entry (smallest timestamp).
+            oldest = min(_candle_cache.items(), key=lambda kv: kv[1][0])[0]
+            _candle_cache.pop(oldest, None)
+        _candle_cache[key] = (time.time(), value)
+    return value
+
+
+def _clear_candle_cache() -> None:
+    """Reset the candle cache (tests + explicit invalidation)."""
+    with _candle_cache_lock:
+        _candle_cache.clear()
+
+
 @router.get("/candles", response_model=ChartResponse)
 def get_candles(
     ticker: str = Query(..., description="Ticker symbol (T212 code or raw symbol)"),
@@ -30,6 +78,16 @@ def get_candles(
     interval: str = Query("1d", description="Candle interval, e.g. 1d, 1h, 5m"),
     indicators: str = Query("", description="Comma-separated indicator keys: sma20,sma50,sma200,bollinger,rsi,macd,atr"),
 ) -> ChartResponse:
+    # ------------------------------------------------------------------
+    # 0. Parse indicators + serve from cache when fresh
+    # ------------------------------------------------------------------
+    requested = {k.strip().lower() for k in indicators.split(",") if k.strip()}
+
+    cache_key = (ticker.upper().strip(), period, interval, tuple(sorted(requested)))
+    cached = _candle_cache_get(cache_key, _candle_ttl(interval))
+    if cached is not None:
+        return cached
+
     # ------------------------------------------------------------------
     # 1. Download OHLCV frame
     # ------------------------------------------------------------------
@@ -64,10 +122,8 @@ def get_candles(
         })
 
     # ------------------------------------------------------------------
-    # 3. Parse requested indicators
+    # 3. Indicator inputs (parsed above for the cache key)
     # ------------------------------------------------------------------
-    requested = {k.strip().lower() for k in indicators.split(",") if k.strip()}
-
     close = df["close"].astype(float)
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -113,7 +169,7 @@ def get_candles(
     # ------------------------------------------------------------------
     yf_ticker = to_yfinance_ticker(ticker)
 
-    return ChartResponse(
+    response = ChartResponse(
         ok=True,
         ticker=ticker.upper().strip(),
         yfinance_ticker=yf_ticker,
@@ -124,6 +180,7 @@ def get_candles(
         panels=panels,
         markers=[],
     )
+    return _candle_cache_set(cache_key, response)
 
 
 @router.get("/forecast", response_model=ForecastResponse)
