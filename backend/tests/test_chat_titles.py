@@ -58,6 +58,15 @@ def test_is_due_cadence():
     assert cts._is_due(cts.REEVAL_EVERY_ASSISTANT_TURNS + 1) is False
 
 
+def test_is_placeholder_title():
+    # generic defaults + the UI's "New Chat" timestamp titles count as unnamed
+    for t in ["", "Portfolio Chat", "portfolio chat", "New Chat", "Chat Jun 1 10:19", "Chat Feb 16 18:29"]:
+        assert cts.is_placeholder_title(t) is True, t
+    # real titles must not be treated as placeholders
+    for t in ["NVDA Earnings Outlook", "Rebalancing the ISA", "Chat about NVDA", "Chatting Strategy"]:
+        assert cts.is_placeholder_title(t) is False, t
+
+
 def test_build_transcript_caps_messages_and_chars(db):
     session = _seed(db, turns=10)  # 20 messages
     db.add(ChatMessage(session_id=session.id, role="user", content="x" * 5000))
