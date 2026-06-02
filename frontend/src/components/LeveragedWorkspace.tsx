@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { ArrowRight, Inbox, RefreshCw, RotateCcw, Scan, TrendingUp } from 'lucide-react'
+import { ArrowRight, Inbox, Layers, RefreshCw, RotateCcw, Scan, TrendingUp } from 'lucide-react'
 
 import {
+  adoptLeveragedPosition,
+  closeLeveragedPosition,
   closeLeveragedTrade,
   executeLeveragedSignal,
+  getLeveragedPositions,
   getLeveragedSnapshot,
   getLeveragedUniverse,
   patchLeveragedPolicy,
@@ -17,6 +20,14 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Money, MoneyDelta, Pct, SectionCard, StatCard } from '@/components/kit'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -28,7 +39,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { LeveragedConfig, LeveragedSnapshot } from '../types'
+import type { HeldLeveragedPosition, LeveragedConfig, LeveragedSnapshot } from '../types'
 
 interface Props {
   onError: (message: string | null) => void
@@ -39,6 +50,8 @@ export function LeveragedWorkspace({ onError }: Props) {
   const [busy, setBusy] = useState(false)
   const [policyDraft, setPolicyDraft] = useState<LeveragedConfig | null>(null)
   const [universe, setUniverse] = useState<UniverseResponse | null>(null)
+  const [positions, setPositions] = useState<HeldLeveragedPosition[] | null>(null)
+  const [positionsBusy, setPositionsBusy] = useState(false)
 
   async function loadAll() {
     setBusy(true)
@@ -54,11 +67,25 @@ export function LeveragedWorkspace({ onError }: Props) {
     }
   }
 
+  async function loadPositions() {
+    // Live T212 positions are a slower, rate-limited call — load independently so
+    // it never blocks the desk, and surface failures softly (T212 may be down).
+    setPositionsBusy(true)
+    try {
+      setPositions(await getLeveragedPositions())
+    } catch {
+      setPositions([])
+    } finally {
+      setPositionsBusy(false)
+    }
+  }
+
   useEffect(() => {
     void loadAll()
-    // Regime + universe load independently (slower, market-data backed) so they
-    // never block the core desk from rendering.
+    // Regime + universe + held positions load independently (slower, market-data
+    // backed) so they never block the core desk from rendering.
     void getLeveragedUniverse(8).then(setUniverse).catch(() => setUniverse(null))
+    void loadPositions()
   }, [])
 
   const summary = snapshot?.summary
@@ -80,6 +107,7 @@ export function LeveragedWorkspace({ onError }: Props) {
         stop_loss_pct: Number(policy.stop_loss_pct),
         close_time_uk: policy.close_time_uk,
         allow_overnight: policy.allow_overnight,
+        max_hold_days: Number(policy.max_hold_days),
         scan_symbols: policy.scan_symbols,
         instrument_priority: policy.instrument_priority,
       })
@@ -323,17 +351,54 @@ export function LeveragedWorkspace({ onError }: Props) {
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5 sm:w-1/2">
-              <Label htmlFor="lev-overnight" className="text-sm">Allow overnight holds</Label>
-              <Switch
-                id="lev-overnight"
-                checked={policy.allow_overnight}
-                onCheckedChange={(checked) => setPolicyDraft({ ...policy, allow_overnight: checked })}
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+                <Label htmlFor="lev-overnight" className="text-sm">Allow overnight holds</Label>
+                <Switch
+                  id="lev-overnight"
+                  checked={policy.allow_overnight}
+                  onCheckedChange={(checked) => setPolicyDraft({ ...policy, allow_overnight: checked })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="lev-max-hold" className="text-xs text-muted-foreground">
+                  Max hold (days) {policy.allow_overnight ? '' : '— inactive while overnight off'}
+                </Label>
+                <Input
+                  id="lev-max-hold"
+                  className="font-mono tabular-nums"
+                  value={policy.max_hold_days}
+                  disabled={!policy.allow_overnight}
+                  onChange={(e) => setPolicyDraft({ ...policy, max_hold_days: Number(e.target.value) })}
+                />
+              </div>
             </div>
           </div>
         )}
       </SectionCard>
+
+      <HeldPositionsCard
+        positions={positions}
+        busy={positionsBusy}
+        policy={policy}
+        onRefresh={loadPositions}
+        onClose={async (code, qty, reason) => {
+          try {
+            await closeLeveragedPosition(code, qty, reason)
+            await Promise.all([loadPositions(), loadAll()])
+          } catch (e) {
+            onError(e instanceof Error ? e.message : 'close failed')
+          }
+        }}
+        onAdopt={async (code, sl, tp) => {
+          try {
+            await adoptLeveragedPosition(code, sl, tp)
+            await Promise.all([loadPositions(), loadAll()])
+          } catch (e) {
+            onError(e instanceof Error ? e.message : 'adopt failed')
+          }
+        }}
+      />
 
       <SectionCard
         title="Open Trades"
@@ -454,5 +519,275 @@ export function LeveragedWorkspace({ onError }: Props) {
         )}
       </SectionCard>
     </div>
+  )
+}
+
+function HeldPositionsCard({
+  positions,
+  busy,
+  policy,
+  onRefresh,
+  onClose,
+  onAdopt,
+}: {
+  positions: HeldLeveragedPosition[] | null
+  busy: boolean
+  policy: LeveragedConfig | null
+  onRefresh: () => void
+  onClose: (code: string, qty: number | undefined, reason: string) => void | Promise<void>
+  onAdopt: (code: string, sl: number | undefined, tp: number | undefined) => void | Promise<void>
+}) {
+  const rows = positions ?? []
+  return (
+    <SectionCard
+      title="Positions"
+      description="Live leveraged ETPs held in Trading 212 — close or bring under engine management"
+      noPadding
+      action={
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onRefresh()}
+          disabled={busy}
+          title="Refresh positions"
+          className="px-2 sm:px-3"
+        >
+          <RefreshCw />
+          <span className="hidden sm:inline">Refresh</span>
+        </Button>
+      }
+    >
+      {positions === null ? (
+        <div className="px-6 py-12 text-center text-sm text-muted-foreground">Loading positions…</div>
+      ) : rows.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+          <Layers className="size-5 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No leveraged positions held (or T212 unavailable).</p>
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-xs">Position</TableHead>
+              <TableHead className="text-xs">Dir</TableHead>
+              <TableHead className="text-right text-xs">Qty</TableHead>
+              <TableHead className="text-right text-xs">Avg</TableHead>
+              <TableHead className="text-right text-xs">Current</TableHead>
+              <TableHead className="text-right text-xs">Notional</TableHead>
+              <TableHead className="text-right text-xs">Unrealised</TableHead>
+              <TableHead className="text-right text-xs">Held</TableHead>
+              <TableHead className="text-xs">Status</TableHead>
+              <TableHead className="text-right text-xs"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={`${row.account_kind}-${row.instrument_code}`}>
+                <TableCell className="font-medium">
+                  <div className="flex flex-col">
+                    <span>{row.underlying || row.symbol}</span>
+                    <span className="text-[11px] text-muted-foreground">{row.name}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={row.direction === 'inverse' ? 'text-rose-500' : 'text-emerald-500'}
+                  >
+                    {row.direction === 'inverse' ? 'Inverse' : 'Long'}
+                    {row.factor ? ` ${row.factor}x` : ''}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
+                  {row.quantity.toFixed(4)}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Money value={row.avg_price} />
+                </TableCell>
+                <TableCell className="text-right">
+                  {row.current_price != null ? <Money value={row.current_price} /> : '—'}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Money value={row.notional} />
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums">
+                  <MoneyDelta value={row.unrealized_pnl_value} />
+                  <span className={row.unrealized_pnl_value >= 0 ? 'text-positive' : 'text-negative'}>
+                    {' '}({(row.unrealized_pnl_pct * 100).toFixed(2)}%)
+                  </span>
+                </TableCell>
+                <TableCell className="text-right text-xs text-muted-foreground">
+                  {row.days_held != null ? `${row.days_held}d` : '—'}
+                </TableCell>
+                <TableCell>
+                  {row.tracked ? (
+                    <Badge variant="outline" className="text-[10px] text-sky-500">
+                      tracked
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                      untracked
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex items-center justify-end gap-1">
+                    {!row.tracked ? (
+                      <AdoptPositionDialog position={row} policy={policy} onAdopt={onAdopt} disabled={busy} />
+                    ) : null}
+                    <ClosePositionDialog position={row} onClose={onClose} disabled={busy} />
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </SectionCard>
+  )
+}
+
+function ClosePositionDialog({
+  position,
+  onClose,
+  disabled,
+}: {
+  position: HeldLeveragedPosition
+  onClose: (code: string, qty: number | undefined, reason: string) => void | Promise<void>
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const full = Math.abs(position.quantity)
+  const [qty, setQty] = useState(String(full))
+
+  useEffect(() => {
+    if (open) setQty(String(full))
+  }, [open, full])
+
+  const parsed = Number(qty)
+  const valid = Number.isFinite(parsed) && parsed > 0 && parsed <= full + 1e-9
+  const isPartial = valid && parsed < full - 1e-9
+
+  return (
+    <>
+      <Button variant="ghost" size="sm" disabled={disabled} onClick={() => setOpen(true)}>
+        Close
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Close {position.underlying || position.symbol}</DialogTitle>
+          <DialogDescription>
+            {position.name} — holding {full} share{full === 1 ? '' : 's'}. Sells at market on Trading 212.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="close-qty" className="text-xs text-muted-foreground">
+            Quantity to sell
+          </Label>
+          <Input
+            id="close-qty"
+            className="font-mono tabular-nums"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            {isPartial ? `Partial close — ${(full - parsed).toFixed(4)} will remain open.` : 'Full close.'}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={!valid || submitting}
+            onClick={async () => {
+              setSubmitting(true)
+              await onClose(position.instrument_code, isPartial ? parsed : undefined, 'manual')
+              setSubmitting(false)
+              setOpen(false)
+            }}
+          >
+            {isPartial ? 'Close part' : 'Close all'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function AdoptPositionDialog({
+  position,
+  policy,
+  onAdopt,
+  disabled,
+}: {
+  position: HeldLeveragedPosition
+  policy: LeveragedConfig | null
+  onAdopt: (code: string, sl: number | undefined, tp: number | undefined) => void | Promise<void>
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [tp, setTp] = useState('')
+  const [sl, setSl] = useState('')
+
+  useEffect(() => {
+    if (open) {
+      setTp(((policy?.take_profit_pct ?? 0.4) * 100).toFixed(1))
+      setSl(((policy?.stop_loss_pct ?? 0.05) * 100).toFixed(1))
+    }
+  }, [open, policy])
+
+  return (
+    <>
+      <Button variant="ghost" size="sm" disabled={disabled} onClick={() => setOpen(true)}>
+        Adopt
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Adopt {position.underlying || position.symbol}</DialogTitle>
+          <DialogDescription>
+            Bring this position under engine management (stop / take-profit + age governance). No order is placed.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="adopt-sl" className="text-xs text-muted-foreground">
+              Stop loss (%)
+            </Label>
+            <Input id="adopt-sl" className="font-mono tabular-nums" value={sl} onChange={(e) => setSl(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="adopt-tp" className="text-xs text-muted-foreground">
+              Take profit (%)
+            </Label>
+            <Input id="adopt-tp" className="font-mono tabular-nums" value={tp} onChange={(e) => setTp(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={submitting}
+            onClick={async () => {
+              setSubmitting(true)
+              await onAdopt(position.instrument_code, Number(sl) / 100, Number(tp) / 100)
+              setSubmitting(false)
+              setOpen(false)
+            }}
+          >
+            Adopt
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
   )
 }

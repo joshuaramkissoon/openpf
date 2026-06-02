@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
@@ -26,11 +27,91 @@ from app.services.claude_sdk_config import (
 )
 from app.services import costs_service
 from app.services.config_store import ConfigStore
-from app.services.leveraged_service import monitor_open_trades, run_leveraged_cycle, scan_signals, update_policy
+from app.services.leveraged_service import (
+    _daily_entry_count,
+    _daily_realized_pnl,
+    append_daily_goal_line,
+    list_held_leveraged_positions,
+    monitor_open_trades,
+    read_recent_daily_goal_lines,
+    run_leveraged_cycle,
+    scan_signals,
+    update_policy,
+)
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 _MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
+
+# A4 — blocked-run handling: a scheduled run can "succeed" (agent returns text)
+# yet be unable to act because a dependency (T212/MCP) was offline. Detect that,
+# mark the run errored (not ok), and auto-retry once shortly after — so a
+# transient outage self-heals instead of waiting for the next cron fire.
+_RETRY_DELAY_SECONDS = 8 * 60
+_MAX_BLOCKED_RETRIES = 1
+
+_BLOCK_MARKERS = (
+    "mcp server is offline",
+    "mcp is offline",
+    "trading 212 mcp server is offline",
+    "trading212 mcp offline",
+    "t212 mcp offline",
+    "cannot verify",
+    "blocked_pending_state_verification",
+)
+_TRANSIENT_ERROR_MARKERS = (
+    "t212",
+    "trading 212",
+    "trading212",
+    "mcp",
+    "offline",
+    "timeout",
+    "timed out",
+    "connection",
+    "rate limit",
+    " 429",
+    " 503",
+    " 502",
+    "unavailable",
+)
+
+
+def _detect_block(output: str, parsed: dict[str, Any] | None) -> str | None:
+    """Return a reason if a finished run was actually blocked, else None."""
+    if isinstance(parsed, dict):
+        status = str(parsed.get("status") or "").strip().lower()
+        if status.startswith("blocked"):
+            return str(parsed.get("blocker") or parsed.get("reason") or "agent reported a blocked status")
+    low = (output or "").lower()
+    for marker in _BLOCK_MARKERS:
+        if marker in low:
+            return f"detected '{marker}' in run output"
+    return None
+
+
+def _is_transient_error(message: str) -> bool:
+    low = (message or "").lower()
+    return any(marker in low for marker in _TRANSIENT_ERROR_MARKERS)
+
+
+def _run_message(status: str, payload: dict[str, Any]) -> str:
+    if status == "ok":
+        return "task completed"
+    if payload.get("blocked"):
+        return f"blocked: {payload.get('block_reason')}"
+    return "task finished with errors"
+
+
+def _goal_action_summary(parsed: dict[str, Any] | None, output: str) -> str:
+    if isinstance(parsed, dict):
+        props = parsed.get("proposals")
+        if isinstance(props, list):
+            return f"proposed {len(props)} entr{'y' if len(props) == 1 else 'ies'}"
+        status = parsed.get("status")
+        if status:
+            return str(status)
+    return "status-only"
 
 _DEFAULT_TASKS: list[dict[str, Any]] = [
     {
@@ -605,6 +686,12 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         cwd=str(cwd),
         setting_sources=setting_sources,
         allowed_tools=allowed_tools,
+        # Scheduled runs are headless trusted automation: without an interactive
+        # approver, Write/Edit would silently defer ("pending approval") and the
+        # agent's memory/continuity writes never land. acceptEdits auto-approves
+        # file edits; the PreToolUse security hooks still block secrets and
+        # dangerous bash regardless of this mode.
+        permission_mode="acceptEdits",
         mcp_servers=mcp_servers,
         max_turns=settings.agent_max_turns,
         hooks=build_security_hooks(),
@@ -784,14 +871,56 @@ def _build_goal_context(db: Session, task: ScheduledTask) -> str:
         f"- EXPOSURE RAILS: <= £{max_exp:,.0f} total, <= £{per_pos:,.0f} per position, <= {max_open} open at "
         f"once. Entries use +{tp * 100:.0f}% take-profit / -{sl * 100:.0f}% stop-loss."
     )
+
+    # A1 — inject the LEVERAGED-ONLY realized P&L as the authoritative figure for
+    # the daily target/loss gate. The agent must NOT recompute it account-wide
+    # (T212 realized P&L includes core-equity sells, which previously tripped the
+    # leveraged target erroneously).
+    try:
+        lev_realized = _daily_realized_pnl(db)
+        lev_trades = _daily_entry_count(db)
+        lines.append(
+            f"- SESSION STATE (authoritative): LEVERAGED realized P&L today = £{lev_realized:,.2f}; "
+            f"leveraged entries today = {lev_trades}. This realized figure is what the profit target and "
+            "loss limit measure — core-equity P&L does NOT count. Do NOT re-derive it account-wide from T212; "
+            "use this number. If the target/loss/trade limit is already reached on these figures, do NOT open "
+            "new positions — report status only."
+        )
+    except Exception:  # noqa: BLE001 — never block the session on accounting
+        lines.append(
+            "- SESSION STATE: leveraged realized P&L unavailable this run; be conservative and verify before "
+            "opening. The daily target measures LEVERAGED-only realized P&L, not account-wide/core-equity P&L."
+        )
+
+    # A2 — inject the live held leveraged book so the agent knows what is open
+    # without a blind T212 round-trip (and is not stranded if T212 drops).
+    try:
+        held = list_held_leveraged_positions(db)
+        if held:
+            summary = "; ".join(
+                f"{h.get('symbol') or h.get('instrument_code')} {h.get('direction') or ''} "
+                f"qty {float(h.get('quantity') or 0):.2f}, P&L £{float(h.get('unrealized_pnl_value') or 0):,.0f}"
+                f"{' [engine-tracked]' if h.get('tracked') else ''}"
+                for h in held[:12]
+            )
+            lines.append(f"- HELD LEVERAGED POSITIONS ({len(held)}): {summary}")
+        else:
+            lines.append("- HELD LEVERAGED POSITIONS: none detected (or T212 unavailable this run).")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # A2 — recent continuity so the loop reasons across days, not statelessly.
+    try:
+        recent = read_recent_daily_goal_lines(5)
+        if recent:
+            lines.append("- RECENT CONTINUITY (last passes):")
+            lines.extend(f"  {ln}" for ln in recent)
+    except Exception:  # noqa: BLE001
+        pass
+
     lines.append(
-        "Before deciding: use your tools to determine TODAY's realized P&L, current open positions, and how "
-        "many trades you have already placed today. Reason about TRAJECTORY toward the target, not statelessly. "
-        "If any limit is already hit, do NOT open new positions — just report status."
-    )
-    lines.append(
-        "At the end, append ONE status line (date | realized P&L | trades today | open exposure | action taken) "
-        "to memory/leveraged/daily-goal.md (create it if absent) so future runs have continuity."
+        "Reason about TRAJECTORY toward the target using the SESSION STATE and RECENT CONTINUITY above, not "
+        "statelessly. A continuity line is appended automatically after this run — you do not need to write it."
     )
     if notes:
         lines.append(f"Operator notes: {notes}")
@@ -1044,18 +1173,48 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
     if policy_updates is not None:
         payload["policy_updates_applied"] = policy_updates
 
+    block_reason = _detect_block(output, parsed)
+
+    # A2 — deterministic continuity line for every goal pass (success OR blocked),
+    # so the next pass opens with state regardless of what the agent wrote.
+    if kind == "claude_with_goal":
+        try:
+            action = f"BLOCKED: {block_reason}" if block_reason else _goal_action_summary(parsed, output)
+            payload["continuity_log"] = append_daily_goal_line(db, task_name=task.name, action=action)
+        except Exception as exc:  # noqa: BLE001 — never fail the run on bookkeeping
+            logger.warning("alpha-loop continuity write failed: %s", exc)
+
+    # A4 — a finished-but-blocked run is an error, not a silent success.
+    if block_reason:
+        payload["blocked"] = True
+        payload["block_reason"] = block_reason
+        return "error", payload, path, cost_info
+
     return "ok", payload, path, cost_info
 
 
-def _touch_task_after_run(db: Session, task: ScheduledTask, *, status: str) -> None:
+def _touch_task_after_run(db: Session, task: ScheduledTask, *, status: str, blocked: bool = False) -> None:
     now = _utcnow()
     task.last_run_at = now
     task.last_status = status
-    task.next_run_at = _next_run_utc(task.cron_expr, task.timezone, now)
+    meta = dict(task.meta or {})
+    retry_count = int(meta.get("retry_count") or 0)
+
     if status == "ok":
+        meta["retry_count"] = 0
         task.run_count = int(task.run_count or 0) + 1
+        task.next_run_at = _next_run_utc(task.cron_expr, task.timezone, now)
     else:
         task.failure_count = int(task.failure_count or 0) + 1
+        if blocked and retry_count < _MAX_BLOCKED_RETRIES:
+            # Auto-retry once shortly after a transient/blocked failure.
+            meta["retry_count"] = retry_count + 1
+            task.next_run_at = now + timedelta(seconds=_RETRY_DELAY_SECONDS)
+        else:
+            meta["retry_count"] = 0
+            task.next_run_at = _next_run_utc(task.cron_expr, task.timezone, now)
+
+    task.meta = meta
     db.add(task)
     db.commit()
 
@@ -1067,11 +1226,12 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
 
     try:
         status, payload, output_path, cost_info = _run_task_impl(db, task)
+        blocked = bool(payload.get("blocked"))
         _record_log(
             db,
             task,
             status=status,
-            message="task completed" if status == "ok" else "task finished with errors",
+            message=_run_message(status, payload),
             payload=payload,
             output_path=output_path,
         )
@@ -1085,13 +1245,13 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
                 duration_ms=cost_info.get("duration_ms"),
                 num_turns=cost_info.get("num_turns"),
             )
-        _touch_task_after_run(db, task, status=status)
+        _touch_task_after_run(db, task, status=status, blocked=blocked)
         db.refresh(task)
         return {"task": _serialize_task(task), "status": status, "payload": payload, "output_path": output_path}
     except Exception as exc:  # noqa: BLE001
         message = str(exc)
         _record_log(db, task, status="error", message=message, payload={"error": message}, output_path=None)
-        _touch_task_after_run(db, task, status="error")
+        _touch_task_after_run(db, task, status="error", blocked=_is_transient_error(message))
         raise
 
 
@@ -1125,11 +1285,12 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                 return
             try:
                 status, payload, output_path, cost_info = _run_task_impl(bg_db, bg_task)
+                blocked = bool(payload.get("blocked"))
                 _record_log(
                     bg_db,
                     bg_task,
                     status=status,
-                    message="task completed" if status == "ok" else "task finished with errors",
+                    message=_run_message(status, payload),
                     payload=payload,
                     output_path=output_path,
                 )
@@ -1143,11 +1304,11 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                         duration_ms=cost_info.get("duration_ms"),
                         num_turns=cost_info.get("num_turns"),
                     )
-                _touch_task_after_run(bg_db, bg_task, status=status)
+                _touch_task_after_run(bg_db, bg_task, status=status, blocked=blocked)
             except Exception as exc:  # noqa: BLE001
                 message = str(exc)
                 _record_log(bg_db, bg_task, status="error", message=message, payload={"error": message}, output_path=None)
-                _touch_task_after_run(bg_db, bg_task, status="error")
+                _touch_task_after_run(bg_db, bg_task, status="error", blocked=_is_transient_error(message))
         finally:
             bg_db.close()
 

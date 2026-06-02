@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.schemas.leveraged import (
+    AdoptPositionRequest,
     CloseTradeRequest,
+    ClosePositionRequest,
+    HeldPositionsResponse,
     LeveragedActionResponse,
     LeveragedPolicy,
     LeveragedPolicyPatch,
@@ -13,10 +16,13 @@ from app.schemas.leveraged import (
 )
 from app.services.leveraged_service import (
     LeveragedError,
+    adopt_position,
+    close_position,
     close_trade,
     execute_signal,
     get_policy,
     leveraged_snapshot,
+    list_held_leveraged_positions,
     refresh_instrument_cache_now,
     run_leveraged_cycle,
     scan_signals,
@@ -80,6 +86,35 @@ def close(trade_id: str, payload: CloseTradeRequest, db: Session = Depends(get_d
     try:
         trade = close_trade(db, trade_id, reason=payload.reason)
         return LeveragedActionResponse(ok=True, message="trade closed", data={"trade": serialize_trade(trade)})
+    except LeveragedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/positions", response_model=HeldPositionsResponse)
+def held_positions(db: Session = Depends(get_db)) -> HeldPositionsResponse:
+    """Live leveraged ETPs held in T212 (engine-tracked and not), with P&L."""
+    return HeldPositionsResponse(positions=list_held_leveraged_positions(db))
+
+
+@router.post("/positions/close", response_model=LeveragedActionResponse)
+def close_held_position(payload: ClosePositionRequest, db: Session = Depends(get_db)) -> LeveragedActionResponse:
+    try:
+        trade = close_position(db, payload.instrument_code, quantity=payload.quantity, reason=payload.reason)
+        return LeveragedActionResponse(ok=True, message="position closed", data={"trade": serialize_trade(trade)})
+    except LeveragedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/positions/adopt", response_model=LeveragedActionResponse)
+def adopt_held_position(payload: AdoptPositionRequest, db: Session = Depends(get_db)) -> LeveragedActionResponse:
+    try:
+        trade = adopt_position(
+            db,
+            payload.instrument_code,
+            stop_loss_pct=payload.stop_loss_pct,
+            take_profit_pct=payload.take_profit_pct,
+        )
+        return LeveragedActionResponse(ok=True, message="position adopted", data={"trade": serialize_trade(trade)})
     except LeveragedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

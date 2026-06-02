@@ -76,7 +76,10 @@ LEVERAGED_DEFAULT = {
     "daily_loss_limit_gbp": 0.0,
     "max_daily_trades": 0,
     "close_time_uk": "15:30",
-    "allow_overnight": False,
+    # Multi-day holds: allow positions to be carried overnight, force-closed once
+    # they reach the soft age cap (UK calendar days). 0 = no age cap.
+    "allow_overnight": True,
+    "max_hold_days": 3,
     "scan_symbols": ["SPY", "QQQ", "NVDA", "PLTR", "TSLA", "SOXL", "TQQQ", "SQQQ"],
     "instrument_priority": ["3USL", "3ULS", "LQQ3", "3NVD", "3PLT"],
 }

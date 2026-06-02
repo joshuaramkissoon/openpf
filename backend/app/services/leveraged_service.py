@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 from app.models.entities import LeveragedSignal, LeveragedTrade, ScheduledTaskLog, TradeIntent
 from app.services.claude_sdk_config import project_root
 from app.services.config_store import ConfigStore
-from app.services.instrument_cache_service import refresh_instrument_cache
+from app.services.instrument_cache_service import instrument_cache_paths, refresh_instrument_cache
 from app.services.leveraged_market import LeveragedMarketError, get_price, get_technicals
+from app.services.leveraged_registry import classify_leveraged
 from app.services.regime_service import RegimeState, compute_regime
 from app.services.signal_attribution import compute_attribution, data_driven_edge
 from app.services.telegram_service import send_telegram_notification
@@ -294,6 +295,10 @@ def _normalize_policy(value: dict[str, Any]) -> dict[str, Any]:
     policy["daily_loss_limit_gbp"] = max(0.0, float(policy.get("daily_loss_limit_gbp", 0.0)))
     policy["max_daily_trades"] = max(0, int(float(policy.get("max_daily_trades", 0))))
     policy["allow_overnight"] = bool(policy.get("allow_overnight", False))
+    # Soft cap on how long an engine-opened position is held when overnight is
+    # allowed. The EOD monitor force-closes positions held >= this many UK
+    # calendar days. 0 = no age cap (hold until TP/SL or manual close).
+    policy["max_hold_days"] = max(0, int(float(policy.get("max_hold_days", 3))))
     policy["close_time_uk"] = _sanitize_close_time(str(policy.get("close_time_uk", "15:30")))
     policy["scan_symbols"] = _dedupe_symbols(list(policy.get("scan_symbols", [])))
     policy["instrument_priority"] = _dedupe_symbols(list(policy.get("instrument_priority", [])))
@@ -1015,6 +1020,28 @@ def _should_force_close_for_time(policy: dict[str, Any], now_uk: datetime) -> bo
     return now_uk.time() >= close_t
 
 
+def _days_held(entered_at: datetime | None, now_uk: datetime | None = None) -> int:
+    """UK calendar days a position has been held (entered today → 0)."""
+    if entered_at is None:
+        return 0
+    now_uk = now_uk or datetime.now(tz=UK_TZ)
+    # entered_at is stored as naive UTC; localise then compare UK dates.
+    entered_uk = entered_at.replace(tzinfo=timezone.utc).astimezone(UK_TZ)
+    return max(0, (now_uk.date() - entered_uk.date()).days)
+
+
+def _should_force_close_for_age(trade: LeveragedTrade, policy: dict[str, Any], now_uk: datetime) -> bool:
+    """When overnight holds are allowed, force-close once a position reaches the
+    soft age cap (``max_hold_days``). No effect when overnight is disabled (the
+    same-day time-stop governs then) or when ``max_hold_days`` is 0 (no cap)."""
+    if not bool(policy.get("allow_overnight", False)):
+        return False
+    max_days = int(policy.get("max_hold_days", 0) or 0)
+    if max_days <= 0:
+        return False
+    return _days_held(trade.entered_at, now_uk) >= max_days
+
+
 def monitor_open_trades(db: Session) -> dict[str, Any]:
     policy = get_policy(db)
     open_trades = _open_trades(db)
@@ -1037,6 +1064,8 @@ def monitor_open_trades(db: Session) -> dict[str, Any]:
             reason = "stop-loss"
         elif close_for_time:
             reason = "time-stop"
+        elif _should_force_close_for_age(trade, policy, now_uk):
+            reason = "max-hold-days"
 
         if reason:
             close_trade(db, trade.id, reason=reason)
@@ -1217,3 +1246,430 @@ def leveraged_snapshot(db: Session) -> dict[str, Any]:
 
 def refresh_instrument_cache_now(db: Session) -> dict[str, Any]:
     return refresh_instrument_cache(db)
+
+
+# ── Held-position management ────────────────────────────────────────────────
+#
+# The engine only tracks trades it opened (``leveraged_trades``). The user also
+# holds leveraged ETPs opened manually/historically. These helpers surface the
+# LIVE held leveraged book from T212 (classified by instrument name), let the
+# operator close any of them (full or partial), and optionally "adopt" one into
+# engine management so its stop/TP/age is governed by the rails.
+
+
+def _instrument_name_map(db: Session) -> dict[str, str]:
+    """``{TICKER_UPPER: instrument name}`` from the cached T212 metadata.
+
+    Names are stable, so the cache is the cheap source; falls back to a live
+    metadata fetch only if the cache is missing/empty.
+    """
+    try:
+        path = instrument_cache_paths()["all"]
+        if path.is_file():
+            rows = json.loads(path.read_text(encoding="utf-8"))
+            out = {
+                str(r.get("ticker") or "").strip().upper(): str(r.get("name") or "").strip()
+                for r in rows
+                if str(r.get("ticker") or "").strip() and str(r.get("name") or "").strip()
+            }
+            if out:
+                return out
+    except Exception:  # noqa: BLE001
+        logger.warning("held-positions: instrument cache unreadable", exc_info=True)
+
+    try:
+        store = ConfigStore(db)
+        for kind in store.enabled_account_kinds():
+            try:
+                items = build_t212_client(store, account_kind=kind).get_instruments_metadata()
+            except T212Error:
+                continue
+            out = {
+                str(r.get("ticker") or r.get("symbol") or "").strip().upper(): str(
+                    r.get("name") or r.get("description") or ""
+                ).strip()
+                for r in items
+            }
+            out = {k: v for k, v in out.items() if k and v}
+            if out:
+                return out
+    except Exception:  # noqa: BLE001
+        logger.warning("held-positions: live instrument fallback failed", exc_info=True)
+    return {}
+
+
+def list_held_leveraged_positions(db: Session) -> list[dict[str, Any]]:
+    """Live leveraged ETPs held in T212, classified by instrument name.
+
+    Merges with engine-open trades (``tracked`` flag + ``trade_id``). Best-effort:
+    an account whose positions cannot be fetched is skipped, never fabricated.
+    """
+    store = ConfigStore(db)
+    accounts = store.enabled_account_kinds() or ["stocks_isa"]
+    name_map = _instrument_name_map(db)
+    open_engine = {str(t.instrument_code).upper(): t for t in _open_trades(db)}
+    now_uk = datetime.now(tz=UK_TZ)
+
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for kind in accounts:
+        try:
+            positions = build_t212_client(store, account_kind=kind).get_positions()
+        except Exception as exc:  # noqa: BLE001 — T212Error / missing creds
+            logger.warning("held-positions: %s fetch failed: %s", kind, exc)
+            continue
+        for pos in positions:
+            code = str(pos.get("ticker") or "").strip()
+            if not code:
+                continue
+            code_up = code.upper()
+            if code_up in seen:
+                continue
+            cls = classify_leveraged(name_map.get(code_up, ""))
+            if not cls:
+                continue  # not a leveraged ETP
+            qty = float(pos.get("quantity") or 0.0)
+            if abs(qty) <= 0:
+                continue
+            seen.add(code_up)
+            avg = float(pos.get("averagePrice") or 0.0)
+            current = float(pos.get("currentPrice") or 0.0)
+            cost = qty * avg
+            notional = qty * (current or avg)
+            ppl = pos.get("ppl")
+            unrealized = float(ppl) if ppl is not None else (notional - cost)
+            tracked = open_engine.get(code_up)
+            rows.append(
+                {
+                    "instrument_code": code,
+                    "symbol": cls.get("underlying_ticker") or (name_map.get(code_up) or code),
+                    "name": name_map.get(code_up) or code,
+                    "account_kind": kind,
+                    "underlying": cls.get("underlying_ticker") or cls.get("underlying_name"),
+                    "direction": cls.get("direction"),
+                    "factor": cls.get("factor"),
+                    "quantity": qty,
+                    "avg_price": avg,
+                    "current_price": current or None,
+                    "notional": notional,
+                    "unrealized_pnl_value": unrealized,
+                    "unrealized_pnl_pct": (unrealized / cost) if cost > 0 else 0.0,
+                    "tracked": tracked is not None,
+                    "trade_id": tracked.id if tracked else None,
+                    "days_held": _days_held(tracked.entered_at, now_uk) if tracked else None,
+                    "stop_loss_pct": float(tracked.stop_loss_pct) if tracked else None,
+                    "take_profit_pct": float(tracked.take_profit_pct) if tracked else None,
+                }
+            )
+    return rows
+
+
+def _held_position_for(db: Session, instrument_code: str) -> dict[str, Any] | None:
+    code_up = str(instrument_code).strip().upper()
+    for row in list_held_leveraged_positions(db):
+        if str(row["instrument_code"]).upper() == code_up:
+            return row
+    return None
+
+
+def close_external_position(
+    db: Session, pos: dict[str, Any], sell_qty: float, reason: str = "manual"
+) -> LeveragedTrade:
+    """Close (sell) a leveraged position not tracked by the engine, recording a
+    closed ``LeveragedTrade`` so its realized P&L is counted by the daily rails."""
+    code = str(pos["instrument_code"])
+    symbol = str(pos.get("symbol") or code)
+    account_kind = str(pos.get("account_kind") or "stocks_isa")
+    entry_price = float(pos.get("avg_price") or 0.0)
+    exit_price = float(pos.get("current_price") or entry_price or 0.0)
+    sell_qty = abs(float(sell_qty))
+    broker_mode = _latest_broker_mode(db)
+
+    intent = _create_trade_intent(
+        db,
+        symbol=symbol,
+        instrument_code=code,
+        side="sell",
+        quantity=sell_qty,
+        notional=sell_qty * max(entry_price, 0.0),
+        confidence=0.5,
+        rationale=f"leveraged exit (external, {reason})",
+        signal_id=None,
+    )
+    broker_order_id = f"paper-{intent.id[:8]}"
+    if broker_mode == "live":
+        client = build_t212_client(ConfigStore(db), account_kind=account_kind)
+        try:
+            resp = client.place_market_order(code, -abs(sell_qty))
+        except T212Error as exc:
+            intent.status = "failed"
+            intent.failure_reason = str(exc)
+            db.add(intent)
+            db.commit()
+            raise LeveragedError(f"exit execution failed: {exc}") from exc
+        broker_order_id = str(resp.get("id") or resp.get("orderId") or broker_order_id)
+        exit_price = float(resp.get("price") or exit_price)
+
+    entry_notional = sell_qty * max(entry_price, 0.0)
+    exit_notional = sell_qty * max(exit_price, 0.0)
+    pnl_value = exit_notional - entry_notional
+    pnl_pct = (pnl_value / entry_notional) if entry_notional > 0 else 0.0
+
+    intent.status = "executed"
+    intent.executed_at = _utcnow()
+    intent.execution_price = exit_price
+    intent.broker_order_id = broker_order_id
+
+    now = _utcnow()
+    trade = LeveragedTrade(
+        status="closed",
+        symbol=symbol,
+        instrument_code=code,
+        account_kind=account_kind,
+        direction=str(pos.get("direction") or "long"),
+        quantity=sell_qty,
+        entry_price=entry_price,
+        entry_notional=entry_notional,
+        entered_at=now,
+        exit_intent_id=intent.id,
+        exit_price=exit_price,
+        exit_notional=exit_notional,
+        exited_at=now,
+        close_reason=reason,
+        pnl_value=pnl_value,
+        pnl_pct=pnl_pct,
+        meta={"source": "external"},
+    )
+    db.add_all([intent, trade])
+    db.commit()
+    db.refresh(trade)
+    _audit_log(
+        {
+            "action": "exit",
+            "symbol": symbol,
+            "direction": trade.direction,
+            "quantity": sell_qty,
+            "price": exit_price,
+            "notional": exit_notional,
+            "pnl_value": pnl_value,
+            "pnl_pct": pnl_pct,
+            "reason": f"external {reason}",
+            "meta": {"instrument_code": code, "mode": broker_mode, "source": "external"},
+        }
+    )
+    return trade
+
+
+def _partial_close_engine_trade(
+    db: Session, trade: LeveragedTrade, sell_qty: float, reason: str
+) -> LeveragedTrade:
+    """Sell part of an engine-tracked position: book the sold slice as a closed
+    trade (so realized P&L counts) and shrink the remaining open position."""
+    held = float(trade.quantity)
+    sell_qty = min(abs(float(sell_qty)), held)
+    entry_price = float(trade.entry_price or 0.0)
+    exit_price = float(get_price(trade.symbol).get("price") or entry_price or 0.0)
+    broker_mode = _latest_broker_mode(db)
+
+    intent = _create_trade_intent(
+        db,
+        symbol=trade.symbol,
+        instrument_code=trade.instrument_code,
+        side="sell",
+        quantity=sell_qty,
+        notional=sell_qty * max(entry_price, 0.0),
+        confidence=0.5,
+        rationale=f"leveraged partial exit ({reason})",
+        signal_id=trade.signal_id,
+    )
+    broker_order_id = f"paper-{intent.id[:8]}"
+    if broker_mode == "live":
+        client = build_t212_client(ConfigStore(db), account_kind="stocks_isa")
+        try:
+            resp = client.place_market_order(trade.instrument_code, -abs(sell_qty))
+        except T212Error as exc:
+            intent.status = "failed"
+            intent.failure_reason = str(exc)
+            db.add(intent)
+            db.commit()
+            raise LeveragedError(f"exit execution failed: {exc}") from exc
+        broker_order_id = str(resp.get("id") or resp.get("orderId") or broker_order_id)
+        exit_price = float(resp.get("price") or exit_price)
+
+    entry_notional = sell_qty * max(entry_price, 0.0)
+    exit_notional = sell_qty * max(exit_price, 0.0)
+    pnl_value = exit_notional - entry_notional
+    pnl_pct = (pnl_value / entry_notional) if entry_notional > 0 else 0.0
+
+    intent.status = "executed"
+    intent.executed_at = _utcnow()
+    intent.execution_price = exit_price
+    intent.broker_order_id = broker_order_id
+
+    slice_trade = LeveragedTrade(
+        signal_id=trade.signal_id,
+        status="closed",
+        symbol=trade.symbol,
+        instrument_code=trade.instrument_code,
+        account_kind=trade.account_kind,
+        direction=trade.direction,
+        quantity=sell_qty,
+        entry_price=entry_price,
+        entry_notional=entry_notional,
+        entered_at=trade.entered_at,
+        stop_loss_pct=trade.stop_loss_pct,
+        take_profit_pct=trade.take_profit_pct,
+        exit_intent_id=intent.id,
+        exit_price=exit_price,
+        exit_notional=exit_notional,
+        exited_at=_utcnow(),
+        close_reason=f"partial-{reason}",
+        pnl_value=pnl_value,
+        pnl_pct=pnl_pct,
+        meta={"source": "partial", "parent_trade_id": trade.id},
+    )
+
+    remaining = held - sell_qty
+    trade.quantity = remaining
+    trade.entry_notional = remaining * entry_price
+
+    db.add_all([intent, slice_trade, trade])
+    db.commit()
+    db.refresh(slice_trade)
+    return slice_trade
+
+
+def close_position(
+    db: Session,
+    instrument_code: str,
+    quantity: float | None = None,
+    reason: str = "manual",
+) -> LeveragedTrade:
+    """Close a held leveraged position by instrument code (full or partial).
+
+    Routes engine-tracked positions through ``close_trade`` (full) or a partial
+    close; untracked T212 holdings through ``close_external_position``.
+    """
+    code_up = str(instrument_code).strip().upper()
+    engine = next((t for t in _open_trades(db) if str(t.instrument_code).upper() == code_up), None)
+    if engine is not None:
+        held = float(engine.quantity)
+        sell_qty = held if quantity is None else min(abs(float(quantity)), held)
+        if sell_qty <= 0:
+            raise LeveragedError("close quantity resolved to zero")
+        if sell_qty >= held - 1e-9:
+            return close_trade(db, engine.id, reason=reason)
+        return _partial_close_engine_trade(db, engine, sell_qty, reason)
+
+    pos = _held_position_for(db, instrument_code)
+    if pos is None:
+        raise LeveragedError(f"no held leveraged position for {instrument_code}")
+    held = abs(float(pos["quantity"]))
+    sell_qty = held if quantity is None else min(abs(float(quantity)), held)
+    if sell_qty <= 0:
+        raise LeveragedError("close quantity resolved to zero")
+    return close_external_position(db, pos, sell_qty, reason)
+
+
+def adopt_position(
+    db: Session,
+    instrument_code: str,
+    stop_loss_pct: float | None = None,
+    take_profit_pct: float | None = None,
+) -> LeveragedTrade:
+    """Bring a held (untracked) leveraged position under engine management with
+    stop/TP/age governance. Opt-in only — places no order (the position is held)."""
+    code_up = str(instrument_code).strip().upper()
+    if any(str(t.instrument_code).upper() == code_up for t in _open_trades(db)):
+        raise LeveragedError(f"{instrument_code} is already tracked by the engine")
+    pos = _held_position_for(db, instrument_code)
+    if pos is None:
+        raise LeveragedError(f"no held leveraged position for {instrument_code}")
+
+    policy = get_policy(db)
+    sl = float(stop_loss_pct) if stop_loss_pct is not None else float(policy["stop_loss_pct"])
+    tp = float(take_profit_pct) if take_profit_pct is not None else float(policy["take_profit_pct"])
+    qty = abs(float(pos["quantity"]))
+    entry = float(pos.get("avg_price") or 0.0)
+
+    trade = LeveragedTrade(
+        status="open",
+        symbol=str(pos.get("symbol") or instrument_code),
+        instrument_code=str(pos["instrument_code"]),
+        account_kind=str(pos.get("account_kind") or "stocks_isa"),
+        direction=str(pos.get("direction") or "long"),
+        quantity=qty,
+        entry_price=entry,
+        entry_notional=qty * entry,
+        entered_at=_utcnow(),
+        stop_loss_pct=sl,
+        take_profit_pct=tp,
+        meta={"source": "adopted"},
+    )
+    db.add(trade)
+    db.commit()
+    db.refresh(trade)
+    _audit_log(
+        {
+            "action": "adopt",
+            "symbol": trade.symbol,
+            "direction": trade.direction,
+            "quantity": qty,
+            "price": entry,
+            "notional": qty * entry,
+            "reason": "adopted into engine management",
+            "meta": {"instrument_code": trade.instrument_code, "stop_loss_pct": sl, "take_profit_pct": tp},
+        }
+    )
+    return trade
+
+
+# ── Daily-goal continuity log ───────────────────────────────────────────────
+#
+# A deterministic, service-written continuity trail for the agentic alpha loop,
+# so each pass opens knowing what the prior passes did — independent of whether
+# the agent remembered to write memory.
+
+
+def _leveraged_memory_dir() -> Path:
+    out = project_root() / ".claude" / "runtime" / "memory" / "leveraged"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def daily_goal_path() -> Path:
+    return _leveraged_memory_dir() / "daily-goal.md"
+
+
+def read_recent_daily_goal_lines(limit: int = 5) -> list[str]:
+    path = daily_goal_path()
+    if not path.is_file():
+        return []
+    lines = [ln.rstrip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("- ")]
+    return lines[-max(0, limit):]
+
+
+def append_daily_goal_line(db: Session, *, task_name: str, action: str, now_uk: datetime | None = None) -> str:
+    """Append one structured continuity line for an alpha-loop pass."""
+    now_uk = now_uk or datetime.now(tz=UK_TZ)
+    realized = _daily_realized_pnl(db)
+    trades = _daily_entry_count(db)
+    try:
+        held = list_held_leveraged_positions(db)
+    except Exception:  # noqa: BLE001
+        held = []
+    open_exposure = sum(float(h.get("notional") or 0.0) for h in held)
+    held_codes = ",".join(str(h.get("symbol") or h.get("instrument_code")) for h in held) or "none"
+    action_clean = " ".join(str(action or "").split())[:160] or "status"
+    line = (
+        f"- {now_uk.strftime('%Y-%m-%d %H:%M')} | {task_name} | "
+        f"lev_realized=£{realized:.2f} | trades_today={trades} | "
+        f"open_exposure=£{open_exposure:.0f} | held=[{held_codes}] | {action_clean}"
+    )
+    path = daily_goal_path()
+    new_file = not path.is_file()
+    with path.open("a", encoding="utf-8") as fh:
+        if new_file:
+            fh.write("# Leveraged Daily-Goal Continuity\n\nOne line per alpha-loop pass (oldest first).\n\n")
+        fh.write(line + "\n")
+    return str(path)

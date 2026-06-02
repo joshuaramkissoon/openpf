@@ -102,8 +102,30 @@ export interface LeveragedConfig {
   stop_loss_pct: number
   close_time_uk: string
   allow_overnight: boolean
+  max_hold_days: number
   scan_symbols: string[]
   instrument_priority: string[]
+}
+
+export interface HeldLeveragedPosition {
+  instrument_code: string
+  symbol: string
+  name: string
+  account_kind: string
+  underlying?: string | null
+  direction?: string | null
+  factor?: number | null
+  quantity: number
+  avg_price: number
+  current_price?: number | null
+  notional: number
+  unrealized_pnl_value: number
+  unrealized_pnl_pct: number
+  tracked: boolean
+  trade_id?: string | null
+  days_held?: number | null
+  stop_loss_pct?: number | null
+  take_profit_pct?: number | null
 }
 
 export interface LeveragedSignal {
