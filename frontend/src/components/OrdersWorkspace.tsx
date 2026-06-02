@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { toast } from 'sonner'
 import { AlertTriangle, Ban, CheckCircle2, Copy, Inbox, Loader2, RefreshCw, ShieldAlert, Wifi } from 'lucide-react'
@@ -9,6 +9,7 @@ import {
   getOrderHistory,
   getPendingOrders,
   testExecutionKey,
+  type AccountError,
   type AccountExecutionHealth,
   type ExecutionHealthResponse,
   type OrderAccount,
@@ -16,6 +17,7 @@ import {
   type OrderScope,
 } from '@/api/orders'
 import { toastApiError } from '@/lib/api-error'
+import { copyToClipboard } from '@/lib/clipboard'
 import { SectionCard } from '@/components/kit'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,7 +36,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { accountLabel, formatMoney, formatNumber } from '@/utils/format'
 import { cn } from '@/lib/utils'
 
+// Pending orders + health are cheap to poll. Order HISTORY is NOT polled — the
+// T212 history endpoint is aggressively rate-limited, so it loads on demand only
+// (mount, account change, debounced filter, manual refresh).
 const POLL_MS = 20_000
+const FILTER_DEBOUNCE_MS = 400
 const ACCOUNTS: OrderAccount[] = ['invest', 'stocks_isa']
 
 interface Props {
@@ -70,68 +76,82 @@ const TEST_BADGE: Record<string, { label: string; cls: string; Icon: typeof Chec
 export function OrdersWorkspace({ onError }: Props) {
   const [scope, setScope] = useState<OrderScope>('all')
   const [pending, setPending] = useState<OrderItem[]>([])
+  const [pendingErrors, setPendingErrors] = useState<AccountError[]>([])
   const [history, setHistory] = useState<OrderItem[]>([])
+  const [historyErrors, setHistoryErrors] = useState<AccountError[]>([])
   const [health, setHealth] = useState<ExecutionHealthResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loadingLive, setLoadingLive] = useState(true)
+  const [loadingHistory, setLoadingHistory] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [tickerFilter, setTickerFilter] = useState('')
   const [testing, setTesting] = useState<OrderAccount | null>(null)
   const [cancelTarget, setCancelTarget] = useState<OrderItem | null>(null)
   const [cancelling, setCancelling] = useState(false)
-  const loadId = useRef(0)
+  const liveLoadId = useRef(0)
+  const histLoadId = useRef(0)
 
-  const load = useCallback(
+  // Pending orders + execution health (safe to poll).
+  const loadLive = useCallback(
     async (opts: { silent?: boolean } = {}) => {
-      const id = ++loadId.current
-      if (!opts.silent) setLoading(true)
-      else setRefreshing(true)
+      const id = ++liveLoadId.current
+      if (!opts.silent) setLoadingLive(true)
       try {
-        const [p, h, hist] = await Promise.all([
-          getPendingOrders(scope),
-          getExecutionHealth(),
-          getOrderHistory(scope, tickerFilter.trim() || undefined, 50),
-        ])
-        if (id !== loadId.current) return
+        const [p, h] = await Promise.all([getPendingOrders(scope), getExecutionHealth()])
+        if (id !== liveLoadId.current) return
         setPending(p.orders)
-        setHistory(hist.orders)
+        setPendingErrors(p.errors)
         setHealth(h)
         onError(null)
-        // Per-account read failures (e.g. an IP-blocked or bad read key) surface inline.
-        const errs = [...p.errors, ...hist.errors]
-        if (errs.length) {
-          const seen = new Set<string>()
-          for (const e of errs) {
-            const key = `${e.account_kind}:${e.code}`
-            if (seen.has(key)) continue
-            seen.add(key)
-            toast.error(`${accountLabel(e.account_kind)}: ${e.code}`, { description: e.message })
-          }
-        }
       } catch (err) {
-        if (id !== loadId.current) return
+        if (id !== liveLoadId.current) return
         onError(err instanceof Error ? err.message : 'Failed to load orders')
       } finally {
-        if (id === loadId.current) {
-          setLoading(false)
-          setRefreshing(false)
-        }
+        if (id === liveLoadId.current) setLoadingLive(false)
       }
     },
-    [scope, tickerFilter, onError],
+    [scope, onError],
   )
 
-  useEffect(() => {
-    void load()
-  }, [load])
+  // Order history — on-demand only (never polled). Errors surface inline, not as toasts.
+  const loadHistory = useCallback(async () => {
+    const id = ++histLoadId.current
+    setLoadingHistory(true)
+    try {
+      const res = await getOrderHistory(scope, tickerFilter.trim() || undefined, 50)
+      if (id !== histLoadId.current) return
+      setHistory(res.orders)
+      setHistoryErrors(res.errors)
+    } catch (err) {
+      if (id !== histLoadId.current) return
+      setHistoryErrors([
+        { account_kind: scope, code: 'unknown', message: err instanceof Error ? err.message : 'Failed to load history' },
+      ])
+    } finally {
+      if (id === histLoadId.current) setLoadingHistory(false)
+    }
+  }, [scope, tickerFilter])
 
-  // Poll pending orders + health while the tab is visible.
+  // Live data: load on scope change + poll while visible.
   useEffect(() => {
+    void loadLive()
     function tick() {
-      if (document.visibilityState === 'visible') void load({ silent: true })
+      if (document.visibilityState === 'visible') void loadLive({ silent: true })
     }
     const interval = window.setInterval(tick, POLL_MS)
     return () => window.clearInterval(interval)
-  }, [load])
+  }, [loadLive])
+
+  // History: debounced on scope/filter change (covers mount too).
+  useEffect(() => {
+    const t = window.setTimeout(() => void loadHistory(), FILTER_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [loadHistory])
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    await Promise.all([loadLive({ silent: true }), loadHistory()])
+    setRefreshing(false)
+  }
 
   async function handleTest(account: OrderAccount) {
     setTesting(account)
@@ -167,9 +187,11 @@ export function OrdersWorkspace({ onError }: Props) {
     setCancelling(true)
     try {
       await cancelOrder(cancelTarget.order_id, account)
-      toast.success('Order cancelled', { description: `${cancelTarget.ticker ?? cancelTarget.order_id} on ${accountLabel(account)}` })
+      toast.success('Order cancelled', {
+        description: `${cancelTarget.name ?? cancelTarget.ticker ?? cancelTarget.order_id} on ${accountLabel(account)}`,
+      })
       setCancelTarget(null)
-      await load({ silent: true })
+      await Promise.all([loadLive({ silent: true }), loadHistory()])
     } catch (err) {
       toastApiError(err, 'Cancel failed')
     } finally {
@@ -179,12 +201,9 @@ export function OrdersWorkspace({ onError }: Props) {
 
   async function copyIp() {
     if (!health?.egress_ip) return
-    try {
-      await navigator.clipboard.writeText(health.egress_ip)
-      toast.success('IP copied', { description: health.egress_ip })
-    } catch {
-      toast.error('Could not copy IP')
-    }
+    const ok = await copyToClipboard(health.egress_ip)
+    if (ok) toast.success('IP copied', { description: health.egress_ip })
+    else toast.message('Copy unavailable here', { description: `Select it manually: ${health.egress_ip}` })
   }
 
   const showAccountCol = scope === 'all'
@@ -204,12 +223,24 @@ export function OrdersWorkspace({ onError }: Props) {
             </SelectContent>
           </Select>
           {health ? (
-            <Badge variant={health.broker_mode === 'live' ? 'default' : 'outline'} className="uppercase">
-              {health.broker_mode} · {health.base_env}
-            </Badge>
+            <>
+              <Badge
+                variant={health.broker_mode === 'live' ? 'default' : 'outline'}
+                title={
+                  health.broker_mode === 'live'
+                    ? 'Orders are placed for real via the execution key.'
+                    : 'Orders are simulated locally — nothing is sent to Trading 212.'
+                }
+              >
+                {health.broker_mode === 'live' ? 'Live orders' : 'Paper (simulated)'}
+              </Badge>
+              <Badge variant="outline" title="Which Trading 212 API the app reads from.">
+                {health.base_env} account
+              </Badge>
+            </>
           ) : null}
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load({ silent: true })} disabled={refreshing}>
+        <Button variant="outline" size="sm" onClick={() => void handleRefresh()} disabled={refreshing}>
           <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
           Refresh
         </Button>
@@ -217,14 +248,14 @@ export function OrdersWorkspace({ onError }: Props) {
 
       <ExecutionHealthCard
         health={health}
-        loading={loading}
+        loading={loadingLive && !health}
         testing={testing}
         onTest={handleTest}
         onCopyIp={copyIp}
       />
 
       <SectionCard title="Open orders" description="Pending / working orders live at the broker" noPadding>
-        {loading ? (
+        {loadingLive && pending.length === 0 ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-10 rounded-lg" />
@@ -235,25 +266,26 @@ export function OrdersWorkspace({ onError }: Props) {
         ) : (
           <OrdersTable orders={pending} showAccount={showAccountCol} showCancel onCancel={setCancelTarget} />
         )}
+        <AccountErrorNote errors={pendingErrors} />
       </SectionCard>
 
       <SectionCard
         title="Order history"
-        description="Recent fills and cancellations"
+        description="Recent fills and cancellations, newest first"
         noPadding
         action={
-          <Input
-            value={tickerFilter}
-            onChange={(e) => setTickerFilter(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void load()
-            }}
-            placeholder="Filter ticker…"
-            className="h-8 w-[160px] text-xs"
-          />
+          <div className="flex items-center gap-2">
+            {loadingHistory ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" /> : null}
+            <Input
+              value={tickerFilter}
+              onChange={(e) => setTickerFilter(e.target.value)}
+              placeholder="Filter ticker…"
+              className="h-8 w-[160px] text-xs"
+            />
+          </div>
         }
       >
-        {loading ? (
+        {loadingHistory && history.length === 0 ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-10 rounded-lg" />
@@ -264,6 +296,7 @@ export function OrdersWorkspace({ onError }: Props) {
         ) : (
           <OrdersTable orders={history} showAccount={showAccountCol} history />
         )}
+        <AccountErrorNote errors={historyErrors} />
       </SectionCard>
 
       <Dialog open={!!cancelTarget} onOpenChange={(o) => !o && setCancelTarget(null)}>
@@ -274,7 +307,7 @@ export function OrdersWorkspace({ onError }: Props) {
               {cancelTarget ? (
                 <>
                   Cancel the {cancelTarget.side ?? ''} order for{' '}
-                  <span className="font-medium text-foreground">{cancelTarget.ticker ?? cancelTarget.order_id}</span> on{' '}
+                  <span className="font-medium text-foreground">{cancelTarget.name ?? cancelTarget.ticker ?? cancelTarget.order_id}</span> on{' '}
                   <span className="font-medium text-foreground">{accountLabel(cancelTarget.account_kind)}</span>? This sends a
                   cancellation to Trading 212 using the execution key.
                 </>
@@ -301,6 +334,21 @@ function EmptyRow({ icon: Icon, text }: { icon: typeof Inbox; text: string }) {
     <div className="flex flex-col items-center gap-2 py-10 text-center">
       <Icon className="size-5 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{text}</p>
+    </div>
+  )
+}
+
+function AccountErrorNote({ errors }: { errors: AccountError[] }) {
+  if (!errors.length) return null
+  return (
+    <div className="space-y-1 border-t border-border/60 px-4 py-2.5">
+      {errors.map((e, i) => (
+        <p key={`${e.account_kind}-${i}`} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <AlertTriangle className="size-3 shrink-0 text-warning" />
+          <span className="font-medium text-foreground/80">{accountLabel(e.account_kind)}</span>
+          <span className="truncate">· {e.message}</span>
+        </p>
+      ))}
     </div>
   )
 }
@@ -345,10 +393,12 @@ function OrdersTable({
                   </Badge>
                 </TableCell>
               ) : null}
-              <TableCell className="min-w-0">
+              <TableCell className="min-w-0 max-w-[220px]">
                 <div className="flex flex-col">
-                  <span className="font-medium">{o.ticker ?? '—'}</span>
-                  {o.name ? <span className="truncate text-xs text-muted-foreground">{o.name}</span> : null}
+                  <span className="truncate font-medium">{o.name ?? o.ticker ?? '—'}</span>
+                  {o.name && o.ticker ? (
+                    <span className="truncate font-mono text-xs text-muted-foreground">{o.ticker}</span>
+                  ) : null}
                 </div>
               </TableCell>
               <TableCell>{sideBadge(o.side)}</TableCell>
@@ -413,7 +463,7 @@ function ExecutionHealthCard({
   onTest: (account: OrderAccount) => void
   onCopyIp: () => void
 }) {
-  const liveButPaper = useMemo(() => health?.broker_mode === 'paper', [health])
+  const isPaper = health?.broker_mode === 'paper'
   return (
     <SectionCard
       title="Execution health"
@@ -421,7 +471,7 @@ function ExecutionHealthCard({
       action={
         <div className="flex items-center gap-2 text-xs">
           <Wifi className="size-3.5 text-muted-foreground" />
-          {loading && !health ? (
+          {loading ? (
             <Skeleton className="h-4 w-24" />
           ) : (
             <>
@@ -437,7 +487,7 @@ function ExecutionHealthCard({
         </div>
       }
     >
-      {liveButPaper ? (
+      {isPaper ? (
         <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle className="size-3.5 shrink-0" />
           Broker mode is <span className="font-semibold">PAPER</span> — orders are simulated, not sent to Trading 212.

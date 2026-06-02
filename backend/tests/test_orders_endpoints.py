@@ -46,8 +46,9 @@ def client(session_factory, monkeypatch):
 
     app.dependency_overrides[get_db] = _override_get_db
     monkeypatch.setattr(orders_api, "get_egress_ip", lambda **kw: "203.0.113.7")
-    # Avoid the 300s in-process name-map cache leaking between tests.
-    monkeypatch.setattr(orders_api, "_name_map", lambda: {"AAPL_US_EQ": "Apple Inc."})
+    # Stub the name resolver (now takes a db) so tests stay hermetic — no T212
+    # bulk-metadata network call via _instrument_meta_map.
+    monkeypatch.setattr(orders_api, "_name_map", lambda db=None: {"AAPL_US_EQ": "Apple Inc."})
     test_client = TestClient(app)
     try:
         yield test_client

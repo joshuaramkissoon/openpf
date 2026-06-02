@@ -8,8 +8,6 @@ write/error funnels through ``classify_t212_error`` for a typed UI envelope.
 
 from __future__ import annotations
 
-import json
-import time
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -29,8 +27,8 @@ from app.schemas.orders import (
     OrdersResponse,
 )
 from app.services.config_store import ACCOUNT_KINDS, AccountKind, ConfigStore
-from app.services.instrument_cache_service import instrument_cache_paths
 from app.services.network_info import get_egress_ip
+from app.services.portfolio_service import _instrument_meta_map
 from app.services.t212_client import T212Error, build_t212_client
 from app.services.t212_errors import (
     CODE_AUTH_FAILED,
@@ -49,30 +47,18 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-# ── instrument name map (best-effort, cached) ──────────────────────────────
-
-_names_cache: tuple[float, dict[str, str]] = (0.0, {})
+# ── instrument name map (best-effort) ──────────────────────────────────────
 
 
-def _name_map() -> dict[str, str]:
-    """{TICKER: human name} from the cached instruments file, if present."""
-    global _names_cache
-    ts, cached = _names_cache
-    if cached and (time.time() - ts) < 300:
-        return cached
-    out: dict[str, str] = {}
+def _name_map(db: Session) -> dict[str, str]:
+    """{UPPER instrument code: human name}, reusing the portfolio service's
+    memoized T212 bulk-metadata resolver (one call, ~6h cache). Best-effort —
+    returns {} if metadata is unavailable so order views never block on names."""
     try:
-        path = instrument_cache_paths()["all"]
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            for row in data if isinstance(data, list) else []:
-                ticker = str(row.get("ticker", "")).strip().upper()
-                if ticker:
-                    out[ticker] = row.get("name") or row.get("shortName") or ticker
+        meta = _instrument_meta_map(db)
+        return {code: info.get("name", "") for code, info in meta.items() if info.get("name")}
     except Exception:  # noqa: BLE001 — name enrichment is optional
-        pass
-    _names_cache = (time.time(), out)
-    return out
+        return {}
 
 
 # ── normalisation ──────────────────────────────────────────────────────────
@@ -165,7 +151,7 @@ def _resolve_accounts(account: str, store: ConfigStore) -> list[AccountKind]:
 @router.get("/pending", response_model=OrdersResponse)
 def pending_orders(account: str = Query("all"), db: Session = Depends(get_db)) -> OrdersResponse:
     store = ConfigStore(db)
-    names = _name_map()
+    names = _name_map(db)
     orders: list[OrderItem] = []
     errors: list[AccountError] = []
     for kind in _resolve_accounts(account, store):
@@ -176,6 +162,8 @@ def pending_orders(account: str = Query("all"), db: Session = Depends(get_db)) -
         except Exception as exc:  # noqa: BLE001 — surface per-account, keep the rest
             c = classify_t212_error(exc, account_kind=kind)
             errors.append(AccountError(account_kind=kind, code=c.code, message=c.message))
+    # Newest first across accounts (ISO-8601 strings sort chronologically; None last).
+    orders.sort(key=lambda o: o.created_at or "", reverse=True)
     return OrdersResponse(orders=orders, errors=errors)
 
 
@@ -187,7 +175,7 @@ def order_history(
     db: Session = Depends(get_db),
 ) -> OrdersResponse:
     store = ConfigStore(db)
-    names = _name_map()
+    names = _name_map(db)
     orders: list[OrderItem] = []
     errors: list[AccountError] = []
     for kind in _resolve_accounts(account, store):
@@ -198,6 +186,8 @@ def order_history(
         except Exception as exc:  # noqa: BLE001
             c = classify_t212_error(exc, account_kind=kind)
             errors.append(AccountError(account_kind=kind, code=c.code, message=c.message))
+    # Newest first across accounts (was grouped by account before this sort).
+    orders.sort(key=lambda o: o.created_at or "", reverse=True)
     return OrdersResponse(orders=orders, errors=errors)
 
 
