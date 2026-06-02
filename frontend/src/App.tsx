@@ -293,6 +293,20 @@ export default function App() {
   }, [])
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
 
+  // Deep-link seeds: an Attention action can jump into Archie chat (composer
+  // pre-filled) or the Research Desk (subject pre-filled). The target panel
+  // consumes the seed once, then clears it via the callbacks below.
+  const [pendingChatPrompt, setPendingChatPrompt] = useState<string | null>(null)
+  const [researchSeed, setResearchSeed] = useState<string | null>(null)
+  const seedChat = useCallback((prompt: string) => {
+    setPendingChatPrompt(prompt)
+    setActiveSection('chat')
+  }, [])
+  const seedResearch = useCallback((ticker: string) => {
+    setResearchSeed(ticker)
+    setActiveSection('analysis')
+  }, [])
+
   // Guards for the background (fire-and-forget) snapshot re-pull in loadAll: don't
   // setState after unmount, and don't let a stale refresh clobber a newer load.
   const mountedRef = useRef(true)
@@ -759,9 +773,9 @@ export default function App() {
     }
 
     if (activeSection === 'orders') return <OrdersWorkspace onError={setError} />
-    if (activeSection === 'attention') return <AttentionFeed onError={setError} />
+    if (activeSection === 'attention') return <AttentionFeed onError={setError} onSeedChat={seedChat} onViewTicker={seedResearch} />
     if (activeSection === 'watchlist') return <WatchlistBoard onError={setError} />
-    if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} />
+    if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} seedSubject={researchSeed} onSeedConsumed={() => setResearchSeed(null)} />
     if (activeSection === 'leveraged') return <LeveragedWorkspace onError={setError} />
     if (activeSection === 'jobs') return <ScheduledJobsWorkspace onError={setError} />
     if (activeSection === 'artifacts') return <ArtifactsWorkspace onError={setError} />
@@ -900,6 +914,8 @@ export default function App() {
                 onError={setError}
                 deletingSessionId={deletingChatSessionId}
                 onOpenSessions={() => setChatRailOpen(true)}
+                pendingPrompt={pendingChatPrompt}
+                onPendingPromptConsumed={() => setPendingChatPrompt(null)}
               />
             </div>
           </div>

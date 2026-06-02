@@ -4,10 +4,14 @@ import {
   Bell,
   CalendarClock,
   Check,
+  ExternalLink,
+  LineChart,
   Newspaper,
   RefreshCw,
   Scale,
+  Sparkles,
   TrendingUp,
+  Wand2,
   X,
   type LucideIcon,
 } from "lucide-react"
@@ -15,7 +19,7 @@ import {
 import { getAttention, markAllAlertsSeen, runWatches, setAlertStatus, type Alert, type AttentionResponse } from "@/api/client"
 import { SectionCard } from "@/components/kit"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const CATEGORY_ICON: Record<string, LucideIcon> = {
@@ -42,8 +46,18 @@ function timeAgo(iso: string | null): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss: (id: string) => void }) {
-  const Icon = CATEGORY_ICON[alert.category] ?? Bell
+interface AlertCardActions {
+  onAskArchie: (alert: Alert) => void
+  onActOnConsider: (alert: Alert) => void
+  onViewTicker: (ticker: string) => void
+  onDismiss: (id: string) => void
+}
+
+function AlertCard({ alert, onAskArchie, onActOnConsider, onViewTicker, onDismiss }: { alert: Alert } & AlertCardActions) {
+  // News watches carry a source URL + attribution in meta; other watches don't.
+  const url = typeof alert.meta?.url === "string" ? alert.meta.url : null
+  const source = typeof alert.meta?.source === "string" ? alert.meta.source : null
+  const Icon = CATEGORY_ICON[alert.category] ?? (url ? Newspaper : Bell)
   const sev = SEVERITY_STYLE[alert.severity]
   return (
     <div className={cn("flex gap-3 rounded-lg border p-3.5", sev.ring)}>
@@ -64,11 +78,40 @@ function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss: (id: string)
             <span className="text-muted-foreground">{alert.consider}</span>
           </p>
         ) : null}
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          {url ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}
+            >
+              <ExternalLink className="size-3.5" />
+              Read{source ? ` · ${source}` : ""}
+            </a>
+          ) : null}
+          {alert.ticker ? (
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => onViewTicker(alert.ticker!)}>
+              <LineChart className="size-3.5" />
+              View {alert.ticker}
+            </Button>
+          ) : null}
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => onAskArchie(alert)}>
+            <Sparkles className="size-3.5" />
+            Ask Archie
+          </Button>
+          {alert.consider ? (
+            <Button variant="secondary" size="sm" className="gap-1" onClick={() => onActOnConsider(alert)}>
+              <Wand2 className="size-3.5" />
+              Act on this
+            </Button>
+          ) : null}
+        </div>
       </div>
       <Button
         variant="ghost"
-        size="icon"
-        className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
+        size="icon-sm"
+        className="shrink-0 text-muted-foreground hover:text-foreground"
         title="Dismiss"
         onClick={() => onDismiss(alert.id)}
       >
@@ -108,7 +151,17 @@ export function AttentionChip({ onOpen }: { onOpen: () => void }) {
   )
 }
 
-export function AttentionFeed({ onError }: { onError: (m: string | null) => void }) {
+export function AttentionFeed({
+  onError,
+  onSeedChat,
+  onViewTicker,
+}: {
+  onError: (m: string | null) => void
+  /** Jump to Archie chat with the composer pre-filled (not auto-sent). */
+  onSeedChat: (prompt: string) => void
+  /** Jump to the Research Desk pre-seeded with a ticker. */
+  onViewTicker: (ticker: string) => void
+}) {
   const [data, setData] = useState<AttentionResponse | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -149,6 +202,27 @@ export function AttentionFeed({ onError }: { onError: (m: string | null) => void
     }
   }
 
+  // "Ask Archie" — discuss framing: explain it and what it means for the book.
+  function askArchie(alert: Alert) {
+    const lines = [`This came up in my Attention feed:`, ``, `**${alert.title}**`, alert.detail]
+    if (alert.ticker) lines.push(``, `Ticker: ${alert.ticker}`)
+    lines.push(``, `What does this mean for my portfolio, and should I do anything?`)
+    onSeedChat(lines.join("\n"))
+  }
+
+  // "Act on this" — action framing: turn the Consider suggestion into a concrete next step.
+  function actOnConsider(alert: Alert) {
+    const lines = [
+      `Attention alert — **${alert.title}**${alert.ticker ? ` (${alert.ticker})` : ""}`,
+      alert.detail,
+      ``,
+      `Suggested action: ${alert.consider}`,
+      ``,
+      `Help me action this: propose the specific trade(s) or next step, and draft a trade intent if it makes sense.`,
+    ]
+    onSeedChat(lines.join("\n"))
+  }
+
   const alerts = data?.alerts ?? []
   const counts = data?.counts
 
@@ -187,7 +261,14 @@ export function AttentionFeed({ onError }: { onError: (m: string | null) => void
         ) : (
           <div className="flex flex-col gap-2.5">
             {alerts.map((a) => (
-              <AlertCard key={a.id} alert={a} onDismiss={dismiss} />
+              <AlertCard
+                key={a.id}
+                alert={a}
+                onAskArchie={askArchie}
+                onActOnConsider={actOnConsider}
+                onViewTicker={onViewTicker}
+                onDismiss={dismiss}
+              />
             ))}
           </div>
         )}

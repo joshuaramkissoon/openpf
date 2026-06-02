@@ -219,6 +219,10 @@ interface Props {
   onError: (message: string | null) => void
   deletingSessionId?: string | null
   onOpenSessions?: () => void
+  /** When set, pre-fills + focuses the composer (does NOT auto-send). One-shot. */
+  pendingPrompt?: string | null
+  /** Called once the pendingPrompt has been applied, so the parent can clear it. */
+  onPendingPromptConsumed?: () => void
 }
 
 export function AgentChatPanel({
@@ -231,6 +235,8 @@ export function AgentChatPanel({
   onError,
   deletingSessionId = null,
   onOpenSessions,
+  pendingPrompt = null,
+  onPendingPromptConsumed,
 }: Props) {
   const sessionsRef = useRef(new Map<string, SessionState>())
   const activeStreamsRef = useRef(new Map<string, StreamHandle>())
@@ -300,6 +306,23 @@ export function AgentChatPanel({
     observer.observe(ta)
     return () => observer.disconnect()
   }, [autoResize])
+
+  // Seed the composer from an external deep-link (e.g. an Attention action).
+  // Pre-fills + focuses but never auto-sends, so the prompt can be edited first.
+  useEffect(() => {
+    if (!pendingPrompt) return
+    setInput(pendingPrompt)
+    onPendingPromptConsumed?.()
+    // Focus after the panel has painted (the parent switches to the chat tab in
+    // the same update, so the textarea is visible by the next frame).
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+      autoResize()
+    })
+  }, [pendingPrompt, onPendingPromptConsumed, autoResize])
 
   useEffect(() => {
     if (!activeSessionId) return
