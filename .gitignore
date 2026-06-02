@@ -48,3 +48,6 @@ backend/kronos_forecast_*.png
 
 # Long-running server logs/pids (scripts/serve.sh)
 .run/
+
+# Also ignore a node_modules symlink (the trailing-slash pattern above only matches directories)
+node_modules
