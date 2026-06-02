@@ -25,9 +25,14 @@ function parseApiError(error: unknown): string {
 export function ResearchDesk({
   accountView,
   onError,
+  seedSubject = null,
+  onSeedConsumed,
 }: {
   accountView: "all" | "invest" | "stocks_isa"
   onError: (msg: string | null) => void
+  /** When set, pre-fills the analysis subject (e.g. from an Attention action). One-shot. */
+  seedSubject?: string | null
+  onSeedConsumed?: () => void
 }) {
   const [subject, setSubject] = useState("")
   const [objective, setObjective] = useState("")
@@ -51,6 +56,15 @@ export function ResearchDesk({
       if (timerRef.current) window.clearInterval(timerRef.current)
     }
   }, [running])
+
+  // Pre-fill the form when an Attention action deep-links a ticker here. Sets a
+  // ready-to-run objective if one isn't already typed, then clears the seed.
+  useEffect(() => {
+    if (!seedSubject) return
+    setSubject(seedSubject)
+    setObjective((prev) => prev || `Quick read on ${seedSubject}: current setup, key risks, and whether I should act.`)
+    onSeedConsumed?.()
+  }, [seedSubject, onSeedConsumed])
 
   async function handleRun() {
     if (!objective.trim() || running) return
