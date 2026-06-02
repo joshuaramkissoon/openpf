@@ -95,30 +95,7 @@ def instrument_detail(
     yf_ticker = ident.get("yfinance_ticker") if ident else None
     native_currency = ident.get("currency") if ident else None
 
-    # US equities: T212 freezes the code (e.g. SNDK1_US_EQ); the tradable symbol is
-    # the shortName-derived display_ticker (SNDK). Prefer it for the chart + price so
-    # they don't 404 on the frozen symbol. (LSE ETPs keep structural resolution.)
-    if not yf_ticker and instrument_code and instrument_code.upper().endswith("_US_EQ"):
-        legacy = instrument_code.upper().split("_", 1)[0]
-        if display_ticker and display_ticker.upper() != legacy and "." not in display_ticker:
-            yf_ticker = display_ticker.upper()
-
-    # ── 2. Live price in the instrument's native quote (for the verdict math) ─
-    price_ticker = yf_ticker or instrument_code or sym
-    native_price: float | None = None
-    change_pct: float | None = None
-    is_minor = False
-    try:
-        live = leveraged_market.get_price(price_ticker, native_currency)
-        native_price = float(live["price"])
-        change_pct = float(live["change_pct"])
-        native_currency = live.get("currency") or native_currency
-        is_minor = bool(live.get("is_minor_unit"))
-        yf_ticker = yf_ticker or live.get("yfinance_ticker")
-    except Exception:  # noqa: BLE001 — price is best-effort
-        pass
-
-    # ── 3. My position, aggregated across accounts ───────────────────────────
+    # ── 2. My position, aggregated across accounts ───────────────────────────
     matched: list[dict[str, Any]] = []
     try:
         snap = portfolio_service.get_portfolio_snapshot(db, "all", display_currency)
@@ -134,13 +111,43 @@ def instrument_detail(
     held = bool(matched)
     position = _aggregate_position(matched, display_currency) if held else None
     if held:
+        # The held position is the ground truth of what the user actually owns, so
+        # its identity wins over an ambiguous symbol match — e.g. real Nasdaq
+        # GOOGL_US_EQ ("Alphabet") vs a GOOGL-symbol leverage ETP. Done BEFORE the
+        # price fetch so the chart/price use the corrected instrument.
         first = matched[0]
-        name = name or first.get("name")
-        yf_ticker = yf_ticker or first.get("yfinance_ticker")
-        instrument_code = instrument_code or first.get("instrument_code")
-        if display_symbol == sym and first.get("ticker"):
+        name = first.get("name") or name
+        instrument_code = first.get("instrument_code") or instrument_code
+        # display_ticker, else the held position's own canonical symbol — never the
+        # ambiguous ident's (which may be a different same-symbol instrument).
+        display_ticker = first.get("display_ticker") or first.get("ticker") or display_ticker
+        yf_ticker = first.get("yfinance_ticker") or yf_ticker
+        native_currency = first.get("instrument_currency") or native_currency
+        if first.get("ticker"):
             display_symbol = first["ticker"]
-        display_ticker = display_ticker or first.get("display_ticker")
+
+    # US equities: T212 freezes the code (e.g. SNDK1_US_EQ); the tradable symbol is
+    # the shortName-derived display_ticker (SNDK). Prefer it for the chart + price so
+    # they don't 404 on the frozen symbol. (LSE ETPs keep structural resolution.)
+    if not yf_ticker and instrument_code and instrument_code.upper().endswith("_US_EQ"):
+        legacy = instrument_code.upper().split("_", 1)[0]
+        if display_ticker and display_ticker.upper() != legacy and "." not in display_ticker:
+            yf_ticker = display_ticker.upper()
+
+    # ── 3. Live price in the instrument's native quote (for the verdict math) ─
+    price_ticker = yf_ticker or instrument_code or sym
+    native_price: float | None = None
+    change_pct: float | None = None
+    is_minor = False
+    try:
+        live = leveraged_market.get_price(price_ticker, native_currency)
+        native_price = float(live["price"])
+        change_pct = float(live["change_pct"])
+        native_currency = live.get("currency") or native_currency
+        is_minor = bool(live.get("is_minor_unit"))
+        yf_ticker = yf_ticker or live.get("yfinance_ticker")
+    except Exception:  # noqa: BLE001 — price is best-effort
+        pass
 
     # ── 4. Signals: prefer the held row; fall back to technicals for RSI/trend ─
     sig_row = next((p for p in matched if p.get("rsi_14") is not None), matched[0] if matched else None)

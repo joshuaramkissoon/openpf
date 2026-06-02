@@ -41,6 +41,10 @@ def _hold_acquired_lock():
         _refresh_lock.release()
 
 _SYMBOL_RE = re.compile(r"[^A-Z0-9_.-]+")
+# Names of leverage/ETP wrappers that piggyback a real company's symbol, e.g.
+# "Leverage Shares 1x Alphabet", "WisdomTree 3x Daily Short". Used only to rank
+# such wrappers below the primary listing in instrument search.
+_LEVERAGE_NAME_RE = re.compile(r"\b(leverage|leveraged|[2-9]x|short|inverse|daily)\b", re.IGNORECASE)
 _TICKER_FROM_DICT_STR_RE = re.compile(r"[\"']?TICKER[\"']?\s*:\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 
 
@@ -663,11 +667,16 @@ def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[s
         elif q in symbol or q in short or q in name.upper():
             partial.append(row)
 
-    ranked = (
-        sorted(exact, key=lambda r: len(r["ticker"]))
-        + sorted(prefix, key=lambda r: len(r["ticker"]))
-        + sorted(partial, key=lambda r: len(r["ticker"]))
-    )
+    # Within each tier, surface the primary listing first: a real US equity beats a
+    # same-symbol leverage/ETP wrapper (so 'GOOGL' resolves to Alphabet stock, not
+    # the 'Leverage Shares 1x Alphabet' ETP that also carries the GOOGL symbol).
+    def _rank(r: dict[str, Any]) -> tuple[int, int, int]:
+        code = (r.get("instrument_code") or "").upper()
+        is_us_equity = code.endswith("_US_EQ")
+        is_wrapper = bool(_LEVERAGE_NAME_RE.search(r.get("name") or ""))
+        return (0 if is_us_equity else 1, 1 if is_wrapper else 0, len(r["ticker"]))
+
+    ranked = sorted(exact, key=_rank) + sorted(prefix, key=_rank) + sorted(partial, key=_rank)
     return ranked[: max(1, min(limit, 25))]
 
 
