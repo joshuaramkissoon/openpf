@@ -54,6 +54,16 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
@@ -262,6 +272,7 @@ export default function App() {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
   const [activeChatSessionId, setActiveChatSessionId] = useState<string>('')
   const [deletingChatSessionId, setDeletingChatSessionId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null)
   const [chatSessionBusy, setChatSessionBusy] = useState(false)
 
   const [busy, setBusy] = useState(false)
@@ -509,8 +520,6 @@ export default function App() {
     if (chatSessionBusy || deletingChatSessionId) return
     const session = chatSessions.find((row) => row.id === sessionId)
     if (!session) return
-    const confirmed = window.confirm(`Delete chat "${session.title}"? This cannot be undone.`)
-    if (!confirmed) return
 
     setDeletingChatSessionId(sessionId)
     try {
@@ -526,6 +535,7 @@ export default function App() {
           setActiveChatSessionId(created.id)
         }
       }
+      setDeleteTarget(null)
     } catch (err) {
       setError(parseApiError(err))
     } finally {
@@ -673,7 +683,7 @@ export default function App() {
                 </button>
                 <button
                   className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-negative group-hover:opacity-100 disabled:opacity-50"
-                  onClick={() => void handleDeleteChatSession(session.id)}
+                  onClick={() => setDeleteTarget(session)}
                   disabled={chatSessionBusy || deletingChatSessionId === session.id}
                   title="Delete chat"
                 >
@@ -924,6 +934,45 @@ export default function App() {
           />
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deletingChatSessionId) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete chat?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget ? (
+                <>“{deleteTarget.title}” will be permanently deleted. This cannot be undone.</>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(deletingChatSessionId)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={Boolean(deletingChatSessionId)}
+              onClick={() => {
+                if (deleteTarget) void handleDeleteChatSession(deleteTarget.id)
+              }}
+            >
+              {deletingChatSessionId ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
     </PrivacyProvider>
   )
