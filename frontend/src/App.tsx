@@ -260,6 +260,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [chatRailOpen, setChatRailOpen] = useState(false)
+  const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('mypf:nav-collapsed') === '1' } catch { return false }
+  })
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
 
   // Guards for the background (fire-and-forget) snapshot re-pull in loadAll: don't
@@ -457,7 +460,6 @@ export default function App() {
     () => chatSessions.find((row) => row.id === activeChatSessionId) || null,
     [chatSessions, activeChatSessionId]
   )
-  const activeThesesCount = useMemo(() => theses.filter((row) => row.status === 'active').length, [theses])
 
   async function handleCreateChatSession() {
     if (chatSessionBusy || deletingChatSessionId) return
@@ -630,7 +632,7 @@ export default function App() {
                   }}
                   disabled={chatSessionBusy || Boolean(deletingChatSessionId)}
                 >
-                  <span className="w-full truncate font-medium text-foreground">{session.title}</span>
+                  <span className="line-clamp-2 w-full font-medium leading-snug text-foreground" title={session.title}>{session.title}</span>
                   <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
                     {dayjs(session.updated_at).format('MMM D HH:mm')}
                   </span>
@@ -732,9 +734,16 @@ export default function App() {
         onSelect={setActiveSection}
         onOpenSettings={() => setSettingsOpen(true)}
         pendingIntents={pendingIntents.length}
-        activeTheses={activeThesesCount}
         privacyMode={privacyMode}
         onCyclePrivacyMode={() => setPrivacyMode((prev) => nextPrivacyMode(prev))}
+        collapsed={navCollapsed}
+        onToggleCollapsed={() =>
+          setNavCollapsed((prev) => {
+            const next = !prev
+            try { localStorage.setItem('mypf:nav-collapsed', next ? '1' : '0') } catch { /* ignore */ }
+            return next
+          })
+        }
       />
 
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
@@ -750,7 +759,6 @@ export default function App() {
             onOpenSettings={() => setSettingsOpen(true)}
             onNavigate={() => setSidebarOpen(false)}
             pendingIntents={pendingIntents.length}
-            activeTheses={activeThesesCount}
             privacyMode={privacyMode}
             onCyclePrivacyMode={() => setPrivacyMode((prev) => nextPrivacyMode(prev))}
           />
@@ -758,7 +766,7 @@ export default function App() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-3 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-sm sm:px-6">
+        <header className={cn('flex items-center justify-between gap-3 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-sm sm:px-6', activeSection === 'chat' && 'md:hidden')}>
           <div className="flex min-w-0 items-center gap-2.5">
             <Button
               variant="ghost"
@@ -829,7 +837,7 @@ export default function App() {
           {/* Chat stays MOUNTED across navigation (just hidden) so an in-flight
               Archie stream keeps rendering and isn't lost when you switch tabs. */}
           <div className={cn('h-full min-h-0', activeSection === 'chat' ? 'flex' : 'hidden')}>
-            <div className="hidden w-56 shrink-0 flex-col border-r border-border bg-card/30 md:flex">
+            <div className="hidden w-64 shrink-0 flex-col border-r border-border bg-card/30 md:flex">
               {chatRail}
             </div>
             <Sheet open={chatRailOpen} onOpenChange={setChatRailOpen}>

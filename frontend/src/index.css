@@ -67,35 +67,36 @@
 
 /*
  * Operator theme — a deliberate dark finance control surface.
- * Deep blue-black canvas, teal-emerald brand, explicit gain/loss/risk
+ * Soft slate canvas, sage-green brand, explicit gain/loss/risk
  * semantics, and a distinct 8-colour chart ramp. The app forces dark mode
  * (`<html class="dark">`); :root mirrors it so first paint is never light.
  */
 :root,
 .dark {
-    /* Warm-neutral charcoal canvas (hue 75, near-zero chroma — no blue cast). */
-    --background: oklch(0.171 0.004 75);
-    --foreground: oklch(0.957 0.004 75);
-    --card: oklch(0.211 0.004 75);
-    --card-foreground: oklch(0.957 0.004 75);
-    --popover: oklch(0.211 0.004 75);
-    --popover-foreground: oklch(0.957 0.004 75);
+    /* Soft slate canvas — cool grey (hue 256, low chroma), lifted off pure
+       black so it reads as slate, not harsh black. Cards sit clearly above it. */
+    --background: oklch(0.208 0.008 256);
+    --foreground: oklch(0.957 0.005 256);
+    --card: oklch(0.258 0.009 256);
+    --card-foreground: oklch(0.957 0.005 256);
+    --popover: oklch(0.258 0.009 256);
+    --popover-foreground: oklch(0.957 0.005 256);
 
     /* Soft sage-green brand — muted, not neon teal. */
     --primary: oklch(0.685 0.072 162);
     --primary-foreground: oklch(0.155 0.02 162);
 
-    --secondary: oklch(0.258 0.004 75);
-    --secondary-foreground: oklch(0.957 0.004 75);
-    --muted: oklch(0.252 0.004 75);
-    --muted-foreground: oklch(0.706 0.007 75);
-    --accent: oklch(0.288 0.005 75);
-    --accent-foreground: oklch(0.957 0.004 75);
+    --secondary: oklch(0.305 0.009 256);
+    --secondary-foreground: oklch(0.957 0.005 256);
+    --muted: oklch(0.298 0.008 256);
+    --muted-foreground: oklch(0.718 0.013 256);
+    --accent: oklch(0.328 0.010 256);
+    --accent-foreground: oklch(0.957 0.005 256);
 
     --destructive: oklch(0.62 0.165 24);
     --destructive-foreground: oklch(0.98 0.01 24);
 
-    --border: oklch(1 0 0 / 8%);
+    --border: oklch(1 0 0 / 9%);
     --input: oklch(1 0 0 / 12%);
     --ring: oklch(0.685 0.072 162 / 50%);
 
@@ -119,13 +120,13 @@
 
     --radius: 0.7rem;
 
-    --sidebar: oklch(0.156 0.004 75);
-    --sidebar-foreground: oklch(0.92 0.005 75);
+    --sidebar: oklch(0.188 0.008 256);
+    --sidebar-foreground: oklch(0.92 0.006 256);
     --sidebar-primary: oklch(0.685 0.072 162);
     --sidebar-primary-foreground: oklch(0.155 0.02 162);
-    --sidebar-accent: oklch(0.255 0.004 75);
-    --sidebar-accent-foreground: oklch(0.957 0.004 75);
-    --sidebar-border: oklch(1 0 0 / 7%);
+    --sidebar-accent: oklch(0.300 0.010 256);
+    --sidebar-accent-foreground: oklch(0.957 0.005 256);
+    --sidebar-border: oklch(1 0 0 / 8%);
     --sidebar-ring: oklch(0.685 0.072 162 / 50%);
 }
 
