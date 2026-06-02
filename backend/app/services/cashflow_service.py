@@ -129,6 +129,100 @@ def sync_all(db: Session) -> dict[str, Any]:
     return {"accounts": results, "added": sum(r.get("added", 0) for r in results)}
 
 
+def backfill_cashflows(
+    db: Session,
+    account_kind: AccountKind,
+    *,
+    max_pages: int = 400,
+    page_sleep: float = 1.0,
+    rate_limit_sleep: float = 65.0,
+    max_retries_per_page: int = 6,
+) -> dict[str, Any]:
+    """Deep one-time backfill: walk the FULL transaction history to the start.
+
+    Unlike ``sync_cashflows`` (which stops at the first fully-known page for cheap
+    steady-state syncs), this never stops early — it pages to ``nextPagePath is
+    None`` so it fills historical gaps. Crucially it BACKS OFF and retries on a
+    429 instead of bailing: a rate-limit mid-backfill is exactly how the ISA feed
+    got truncated at ~page 6 (newest-first means the *oldest* deposits are last,
+    so an early abort silently drops years of history). Idempotent (dedup by
+    reference); safe to re-run."""
+    config = ConfigStore(db)
+    try:
+        client = build_t212_client(config, account_kind=account_kind)
+    except T212Error as exc:
+        return {"account_kind": account_kind, "ok": False, "error": str(exc), "added": 0}
+
+    known = set(db.execute(
+        select(CashflowEvent.reference).where(CashflowEvent.account_kind == account_kind)
+    ).scalars().all())
+
+    added = 0
+    pages = 0
+    params: dict[str, Any] = {"limit": 50}
+    while pages < max_pages:
+        for attempt in range(max_retries_per_page):
+            try:
+                data, _meta = client._request("GET", _TX_PATH, params=params)
+                break
+            except T212RateLimitError as exc:
+                if attempt == max_retries_per_page - 1:
+                    logger.warning("cashflow backfill[%s]: giving up on page %d after %d retries: %s",
+                                   account_kind, pages + 1, max_retries_per_page, exc)
+                    if added:
+                        db.commit()
+                    return {"account_kind": account_kind, "ok": False, "error": "rate_limited",
+                            "added": added, "pages": pages, "incomplete": True}
+                logger.info("cashflow backfill[%s]: 429 on page %d, backing off %.0fs",
+                            account_kind, pages + 1, rate_limit_sleep)
+                time.sleep(rate_limit_sleep)
+            except T212Error as exc:
+                if added:
+                    db.commit()
+                return {"account_kind": account_kind, "ok": False, "error": str(exc), "added": added}
+        else:  # pragma: no cover — loop exhausted without break
+            break
+
+        items = data.get("items", []) or []
+        pages += 1
+        page_added = 0
+        for it in items:
+            ref = str(it.get("reference") or "").strip()
+            if not ref or ref in known:
+                continue
+            occurred = _parse_dt(it.get("dateTime", ""))
+            if occurred is None:
+                continue
+            db.add(CashflowEvent(
+                account_kind=account_kind,
+                reference=ref,
+                type=str(it.get("type") or "").upper().strip(),
+                amount=float(it.get("amount") or 0.0),
+                currency=str(it.get("currency") or "").upper().strip() or "USD",
+                occurred_at=occurred,
+            ))
+            known.add(ref)
+            added += 1
+            page_added += 1
+        if page_added:
+            db.commit()  # persist progress page-by-page so a later failure can't lose it
+        nxt = data.get("nextPagePath")
+        if not nxt or not items:
+            break  # reached the true start of history
+        params = _next_params(nxt)
+        time.sleep(page_sleep)
+
+    return {"account_kind": account_kind, "ok": True, "added": added, "pages": pages,
+            "total_stored": len(known)}
+
+
+def backfill_all_cashflows(db: Session) -> dict[str, Any]:
+    """Deep backfill every enabled account (one-time / gap recovery)."""
+    config = ConfigStore(db)
+    results = [backfill_cashflows(db, kind) for kind in config.enabled_account_kinds()]
+    return {"accounts": results, "added": sum(r.get("added", 0) for r in results)}
+
+
 _last_sync_monotonic: float | None = None
 
 

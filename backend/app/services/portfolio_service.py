@@ -794,15 +794,20 @@ def portfolio_history(
     Groups snapshots by timestamp (accounts are fetched together), sums the
     selected account(s) into the display currency at the FX rate that held on
     each point's own date (backfilled, not spot), then downsamples to the last
-    point per day. Each point also carries ``gain`` — cumulative value change
-    net of external contributions since the window start — so the UI can toggle
-    between absolute value and true return. ``return_pct`` is a modified-Dietz
-    money-weighted return over the window (accounts for deposit/withdrawal
-    timing). Depth depends on how long the app has been recording snapshots.
+    point per day. Each point also carries ``gain`` — value net of external
+    contributions — so the UI can toggle between absolute value and true return.
+    For the full-history ("All") window the gain is anchored to net contributions
+    (so the endpoint is exactly recorded equity − known lifetime contributions,
+    independent of the reconstruction's estimated deep-past level); for a shorter
+    window it is the return earned over that window. ``return_pct`` is a
+    modified-Dietz money-weighted return (accounts for deposit/withdrawal timing).
+    Pre-recording history is reconstructed from T212 trades (shape real, deep-past
+    level estimated); recorded snapshots take over once they exist.
     """
+    import bisect
     from datetime import timedelta
 
-    from app.services.cashflow_service import CONTRIBUTION_TYPES, get_cashflows
+    from app.services.cashflow_service import get_cashflows
     from app.services.historical_fx import ensure_history, load_fx_history
 
     requested = (display_currency or "").upper().strip()
@@ -849,10 +854,13 @@ def portfolio_history(
     # account(s) and converted to the display currency at each date's own FX.
     # Lets the curve span the full account lifetime, not just the recorded window.
     recon_by_day: dict[Any, dict[str, float]] = {}
+    earliest_recon_day: Any = None
     try:
         from app.services.equity_backfill import get_reconstructed_history
 
         for r in get_reconstructed_history(db, account_kind):
+            if earliest_recon_day is None or r.date < earliest_recon_day:
+                earliest_recon_day = r.date
             if r.date < cutoff.date():
                 continue
             rate = fx.rate((r.currency or target), target, r.date)
@@ -862,6 +870,21 @@ def portfolio_history(
             agg["free_cash"] += float(r.cash or 0.0) * rate
     except Exception:  # noqa: BLE001 — reconstructed history is additive; never block the curve
         recon_by_day = {}
+
+    # The earliest data we hold at all (ignoring the window cutoff): when the
+    # window reaches back to it the curve spans the full account lifetime, and the
+    # return is anchored to contributions (lifetime profit) rather than windowed.
+    from sqlalchemy import func as _sql_func
+
+    earliest_recorded_q = db.query(_sql_func.min(AccountSnapshot.fetched_at))
+    if account_kind != "all":
+        earliest_recorded_q = earliest_recorded_q.filter(AccountSnapshot.account_kind == account_kind)
+    earliest_recorded_dt = earliest_recorded_q.scalar()
+    _earliest_days = [d for d in (
+        earliest_recon_day,
+        earliest_recorded_dt.date() if earliest_recorded_dt else None,
+    ) if d is not None]
+    absolute_earliest = min(_earliest_days) if _earliest_days else None
 
     first_recorded_day = recorded[0][0] if recorded else None
 
@@ -904,36 +927,67 @@ def portfolio_history(
                 "start_value": points[0]["total"] if points else 0.0,
                 "end_value": points[-1]["total"] if points else 0.0, "window_days": 0}
 
-    # External cashflows within the window (target currency, at each flow's own
-    # date's FX). Bound to (t0, last_day] — a flow after the last point isn't
-    # reflected in any value yet, so counting it would distort the return.
-    # Summing across accounts makes internal Invest↔ISA transfers self-cancel
-    # (both legs are recorded), so no internal/external tagging is needed.
     t0 = series[0][0]
     last_day = series[-1][0]
-    flow_events = [
-        (f.occurred_at.date(), conv(f.amount, f.currency, f.occurred_at.date()))
-        for f in get_cashflows(db, account_kind)
-        if f.type in CONTRIBUTION_TYPES and t0 < f.occurred_at.date() <= last_day
-    ]
-
     start_total = series[0][2]["total"]
     end_total = series[-1][2]["total"]
-    points = []
-    for day, ts, v, source in series:
-        cum_flow = sum(amt for fd, amt in flow_events if fd <= day)
-        gain = (v["total"] - start_total) - cum_flow
-        points.append(_point(day, ts, v, source, gain))
 
-    # Modified-Dietz: gain over average capital, weighting each flow by the
-    # fraction of the window it was invested for. If average capital isn't
-    # positive (e.g. a large early withdrawal), the ratio is meaningless — fall
-    # back to a simple return on the starting value.
+    # External contributions (target currency, each at its own date's FX). For the
+    # COMBINED view, internal Invest↔ISA transfers are NOT external capital — and
+    # because the two legs are booked in each account's native currency they do
+    # NOT cancel when summed at market FX (the transfer itself crossed USD↔GBP at a
+    # spread), so we drop them rather than let the residual distort the gain. For a
+    # single-account view a transfer IS that account's external in/out, so keep it.
+    contribution_types = (
+        {"DEPOSIT", "WITHDRAW"} if account_kind == "all"
+        else {"DEPOSIT", "WITHDRAW", "TRANSFER"}
+    )
+    flows = sorted(
+        (f.occurred_at.date(), conv(f.amount, f.currency, f.occurred_at.date()))
+        for f in get_cashflows(db, account_kind)
+        if f.type in contribution_types
+    )
+    flow_days = [fd for fd, _ in flows]
+    flow_prefix: list[float] = []
+    _running = 0.0
+    for _, amt in flows:
+        _running += amt
+        flow_prefix.append(_running)
+
+    def contrib_through(day: Any) -> float:
+        """Net external contributions from inception through ``day`` (inclusive)."""
+        i = bisect.bisect_right(flow_days, day)
+        return flow_prefix[i - 1] if i > 0 else 0.0
+
+    # Gain = equity − net contributions to date. Anchored at inception for the
+    # full-history view, so the endpoint is exactly (recorded equity − known
+    # lifetime contributions) — independent of the reconstruction's estimated
+    # deep-past *level*. For a sub-window we re-base to the window start so the
+    # figure is the return earned *over the window* (curve starts at 0).
+    is_full = absolute_earliest is not None and cutoff.date() <= absolute_earliest
+    baseline = 0.0 if is_full else (start_total - contrib_through(t0))
+    points = [
+        _point(day, ts, v, source, (v["total"] - contrib_through(day)) - baseline)
+        for day, ts, v, source in series
+    ]
+
+    # Modified-Dietz money-weighted return: gain over average capital, weighting
+    # each flow by the fraction of the window it was invested for. Lifetime view
+    # treats contributions as the capital base (starting equity ≈ first deposit);
+    # a sub-window uses the equity at window start as the base.
     span_days = max((last_day - t0).days, 1)
-    net_flow = sum(amt for _, amt in flow_events)
-    weighted_flow = sum(amt * ((last_day - fd).days / span_days) for fd, amt in flow_events)
-    gain_total = (end_total - start_total) - net_flow
-    denom = start_total + weighted_flow
+    if is_full:
+        base_capital = 0.0
+        dietz_flows = [(fd, amt) for fd, amt in flows if fd <= last_day]
+        gain_total = end_total - contrib_through(last_day)
+    else:
+        base_capital = start_total
+        dietz_flows = [(fd, amt) for fd, amt in flows if t0 < fd <= last_day]
+        gain_total = (end_total - start_total) - sum(amt for _, amt in dietz_flows)
+    weighted_flow = sum(
+        amt * ((last_day - max(fd, t0)).days / span_days) for fd, amt in dietz_flows
+    )
+    denom = base_capital + weighted_flow
     if denom > 0:
         return_pct = gain_total / denom
     elif start_total > 0:
@@ -941,9 +995,14 @@ def portfolio_history(
     else:
         return_pct = 0.0
 
+    # Lifetime view reports total contributions put in; a sub-window reports the
+    # net contributed during it. For the full view: end_value − net_contributed
+    # equals the gain endpoint.
+    net_contributed = contrib_through(last_day) if is_full else sum(amt for _, amt in dietz_flows)
+
     return {
         "account_kind": account_kind, "currency": target, "points": points,
-        "return_pct": round(return_pct, 4), "net_contributed": round(net_flow, 2),
+        "return_pct": round(return_pct, 4), "net_contributed": round(net_contributed, 2),
         "start_value": round(start_total, 2), "end_value": round(end_total, 2),
         "window_days": span_days,
     }

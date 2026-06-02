@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -69,10 +69,29 @@ def history_backfill(
 
 
 @router.post("/cashflows/sync")
-def cashflows_sync(db: Session = Depends(get_db)) -> dict:
-    """Pull the latest deposits/withdrawals/transfers from T212 (deduped).
-    Used by the return curve to net contributions out of performance."""
-    from app.services.cashflow_service import sync_all
+def cashflows_sync(
+    deep: bool = Query(default=False),
+    background: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Pull deposits/withdrawals/transfers from T212 (deduped), used by the return
+    curve to net contributions out of performance.
+
+    ``deep=true`` runs a FULL historical backfill that pages to the start of the
+    feed with rate-limit backoff — needed to recover gaps left when an earlier
+    sync was rate-limited mid-history. It can take minutes, so it runs off the
+    request on its own DB session."""
+    from app.services.cashflow_service import backfill_all_cashflows, sync_all
+
+    if deep:
+        def _run() -> None:
+            from app.core.database import SessionLocal
+
+            with SessionLocal() as session:
+                backfill_all_cashflows(session)
+
+        background.add_task(_run)
+        return {"started": True, "mode": "deep-backfill"}
 
     return sync_all(db)
 
