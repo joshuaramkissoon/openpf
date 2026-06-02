@@ -16,6 +16,7 @@ import type {
   SchedulerTaskLog,
   SchedulerToday,
   ChatRuntimeInfo,
+  HeldLeveragedPosition,
   Thesis,
   TradeIntent,
   WatchlistItem,
@@ -493,6 +494,30 @@ export async function closeLeveragedTrade(tradeId: string, reason = 'manual') {
 
 export async function refreshInstrumentCache() {
   const { data } = await api.post('/leveraged/cache/instruments')
+  return data
+}
+
+export async function getLeveragedPositions() {
+  const { data } = await api.get<{ positions: HeldLeveragedPosition[] }>('/leveraged/positions')
+  return data.positions
+}
+
+export async function closeLeveragedPosition(instrumentCode: string, quantity?: number, reason = 'manual') {
+  const payload: Record<string, unknown> = { instrument_code: instrumentCode, reason }
+  if (quantity != null) payload.quantity = quantity
+  const { data } = await api.post('/leveraged/positions/close', payload)
+  return data
+}
+
+export async function adoptLeveragedPosition(
+  instrumentCode: string,
+  stopLossPct?: number,
+  takeProfitPct?: number,
+) {
+  const payload: Record<string, unknown> = { instrument_code: instrumentCode }
+  if (stopLossPct != null) payload.stop_loss_pct = stopLossPct
+  if (takeProfitPct != null) payload.take_profit_pct = takeProfitPct
+  const { data } = await api.post('/leveraged/positions/adopt', payload)
   return data
 }
 
