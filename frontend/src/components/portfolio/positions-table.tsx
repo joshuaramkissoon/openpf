@@ -25,7 +25,7 @@ type SortKey = "ticker" | "quantity" | "invested" | "value" | "weight" | "ppl" |
 function sortValue(p: PositionItem, key: SortKey): number | string {
   switch (key) {
     case "ticker":
-      return p.ticker
+      return p.display_ticker || p.ticker
     case "quantity":
       return p.quantity
     case "invested":
@@ -138,7 +138,7 @@ export function PositionsTable({
                 >
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <span className="font-medium">{p.ticker}</span>
+                      <span className="font-medium">{p.display_ticker || p.ticker}</span>
                       <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-muted-foreground">
                         {accountTag(p.account_kind)}
                       </Badge>

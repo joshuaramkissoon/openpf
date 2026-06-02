@@ -93,7 +93,7 @@ export function InstrumentSpotlight({
   const holdings = useMemo(
     () =>
       positions
-        .filter((p) => matches(query, p.ticker, p.name))
+        .filter((p) => matches(query, p.ticker, p.display_ticker, p.name))
         .slice()
         .sort((a, b) => b.weight - a.weight),
     [positions, query]
@@ -170,7 +170,7 @@ export function InstrumentSpotlight({
                   onSelect={() => onSelect(p.ticker, { name: p.name, price: p.current_price })}
                 >
                   <TrendingUp className="size-3.5 text-muted-foreground" />
-                  <Row ticker={p.ticker} name={p.name} />
+                  <Row ticker={p.display_ticker || p.ticker} name={p.name} />
                   <Badge variant="outline" className="ml-auto shrink-0 text-[10px] text-muted-foreground">
                     {accountTag(p.account_kind)}
                   </Badge>
@@ -218,7 +218,7 @@ export function InstrumentSpotlight({
                   onSelect={() => onSelect(r.ticker, { name: r.name, currency: r.currency })}
                 >
                   <Search className="size-3.5 text-muted-foreground" />
-                  <Row ticker={r.ticker} name={r.name} />
+                  <Row ticker={r.display_ticker || r.ticker} name={r.name} />
                 </CommandItem>
               ))}
             </CommandGroup>

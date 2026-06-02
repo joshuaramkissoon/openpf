@@ -566,8 +566,10 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
                 if not ticker:
                     continue
                 name = inst.get("name") or inst.get("shortName")
+                short = inst.get("shortName")
                 mapping[ticker.upper()] = {
                     "name": str(name) if name else "",
+                    "short_name": str(short).strip() if short else "",
                     "ticker": ticker,
                     "currency": str(inst.get("currencyCode", "") or ""),
                 }
@@ -577,6 +579,23 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
     if mapping:
         _instrument_meta_cache = (now, mapping)
     return mapping
+
+
+def display_ticker(legacy_symbol: str | None, short_name: str | None) -> str:
+    """The real market ticker to show the user.
+
+    T212 freezes a company's original instrument code as the ``ticker`` — for
+    names that listed via a SPAC merger or were renamed this is a stale shell
+    symbol (e.g. ``YNDX`` for Nebius, ``DMYI`` for IonQ, ``VACQ`` for Rocket
+    Lab). The current market symbol lives only in ``shortName`` (``NBIS``,
+    ``IONQ``, …). Prefer ``shortName`` when it's a clean ticker that differs
+    from the frozen code; otherwise fall back to the legacy symbol.
+    """
+    legacy = (legacy_symbol or "").strip().upper()
+    short = (short_name or "").strip().upper()
+    if short and short != legacy and re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,7}", short):
+        return short
+    return legacy
 
 
 def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[str, Any]]:
@@ -601,17 +620,19 @@ def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[s
     for code, info in meta.items():
         symbol = code.split("_", 1)[0].upper()
         name = str(info.get("name", ""))
+        short = str(info.get("short_name", "")).upper()
         row = {
             "instrument_code": code,
             "ticker": symbol,
+            "display_ticker": display_ticker(symbol, short),
             "name": name,
             "currency": info.get("currency") or None,
         }
-        if symbol == q or code.upper() == q:
+        if q in (symbol, short, code.upper()):
             exact.append(row)
-        elif symbol.startswith(q):
+        elif symbol.startswith(q) or short.startswith(q):
             prefix.append(row)
-        elif q in symbol or q in name.upper():
+        elif q in symbol or q in short or q in name.upper():
             partial.append(row)
 
     ranked = (
@@ -701,6 +722,7 @@ def get_portfolio_snapshot(
             yf_ticker = None
         return {
             "name": meta.get("name") or None,
+            "display_ticker": display_ticker(ticker, meta.get("short_name")),
             "instrument_currency": venue_currency or None,
             "yfinance_ticker": yf_ticker,
         }
@@ -745,6 +767,7 @@ def get_portfolio_snapshot(
             {
                 "account_kind": p.account_kind,
                 "ticker": p.ticker,
+                "display_ticker": resolved["display_ticker"],
                 "instrument_code": p.instrument_code,
                 "name": resolved["name"],
                 "yfinance_ticker": resolved["yfinance_ticker"],

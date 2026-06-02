@@ -161,6 +161,7 @@ function aggregatePositionsByTicker(positions: PositionItem[], portfolioTotal: n
     return {
       account_kind: accountKind,
       ticker: row.ticker,
+      display_ticker: row.display_ticker,
       instrument_code: row.instrument_code,
       name: row.name,
       yfinance_ticker: row.yfinance_ticker,

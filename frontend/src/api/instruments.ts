@@ -8,6 +8,7 @@ const api = axios.create({
 export interface InstrumentSearchRow {
   instrument_code: string | null
   ticker: string
+  display_ticker?: string | null
   name: string
   currency: string | null
 }
@@ -67,6 +68,7 @@ export interface InstrumentThesisSummary {
 
 export interface InstrumentDetail {
   ticker: string
+  display_ticker?: string | null
   instrument_code: string | null
   name: string | null
   yfinance_ticker: string | null
