@@ -95,6 +95,14 @@ def instrument_detail(
     yf_ticker = ident.get("yfinance_ticker") if ident else None
     native_currency = ident.get("currency") if ident else None
 
+    # US equities: T212 freezes the code (e.g. SNDK1_US_EQ); the tradable symbol is
+    # the shortName-derived display_ticker (SNDK). Prefer it for the chart + price so
+    # they don't 404 on the frozen symbol. (LSE ETPs keep structural resolution.)
+    if not yf_ticker and instrument_code and instrument_code.upper().endswith("_US_EQ"):
+        legacy = instrument_code.upper().split("_", 1)[0]
+        if display_ticker and display_ticker.upper() != legacy and "." not in display_ticker:
+            yf_ticker = display_ticker.upper()
+
     # ── 2. Live price in the instrument's native quote (for the verdict math) ─
     price_ticker = yf_ticker or instrument_code or sym
     native_price: float | None = None
