@@ -161,3 +161,18 @@ def test_detail_unheld_falls_back_gracefully(client, monkeypatch):
     assert body["watchlist"] is None
     assert body["alerts"] == []
     assert body["theses"] == []
+
+
+@pytest.mark.parametrize(
+    "code,short,expected",
+    [
+        ("SNDK1_US_EQ", "SNDK", "SNDK"),   # renamed/suffixed US equity → real Nasdaq symbol
+        ("YNDX_US_EQ", "NBIS", "NBIS"),    # SPAC/rename → current symbol
+        ("AAPL_US_EQ", "AAPL", "AAPL"),    # normal US equity, unchanged
+        ("AAPL_US_EQ", "", "AAPL"),        # no shortName → legacy symbol
+        ("AAPL_US_EQ", "Apple Inc.", "AAPL"),  # multi-word shortName is not a ticker → legacy
+        ("GOOGL_EQ", "GOOG", "GOOGL"),     # LSE ETP (not _US_EQ): keep structural resolution, NOT the underlying
+    ],
+)
+def test_market_yfinance_ticker(code, short, expected):
+    assert portfolio_service.market_yfinance_ticker(code, short, "USD") == expected

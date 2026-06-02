@@ -598,6 +598,34 @@ def display_ticker(legacy_symbol: str | None, short_name: str | None) -> str:
     return legacy
 
 
+def market_yfinance_ticker(original_code: str | None, short_name: str | None, currency: str | None) -> str | None:
+    """Resolve the yfinance ticker, preferring the real market symbol for US equities.
+
+    Same frozen-code problem as :func:`display_ticker`, but for charts/technicals:
+    ``SNDK1_US_EQ`` structurally resolves to ``SNDK1``, which isn't a tradable
+    Nasdaq symbol (yfinance 404s) — the real one is the ``shortName`` (``SNDK``).
+    For ``_US_EQ`` instruments resolve from ``shortName`` when it's a clean ticker
+    that differs from the frozen symbol; otherwise fall back to the structural
+    resolution (which handles LSE/Euronext venue suffixes + leveraged short codes,
+    and must keep the original case for the lowercase exchange letter). Returns
+    ``None`` on failure — the chart is best-effort. NB: only US equities; LSE ETPs
+    like ``GOOGL_EQ`` (Leverage Shares 1x Alphabet, shortName ``GOOG``) keep their
+    structural resolution so we don't mistake the wrapper for its underlying.
+    """
+    raw = (original_code or "").strip()
+    if not raw:
+        return None
+    legacy_symbol = raw.upper().split("_", 1)[0]
+    try:
+        if raw.upper().endswith("_US_EQ"):
+            dt = display_ticker(legacy_symbol, short_name)
+            if dt and dt != legacy_symbol and "." not in dt:
+                return resolve_yfinance_ticker(dt, currency)
+        return resolve_yfinance_ticker(raw, currency)
+    except Exception:  # noqa: BLE001 — chart ticker is best-effort
+        return None
+
+
 def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[str, Any]]:
     """Typeahead search over T212 instrument metadata for the Spotlight palette.
 
@@ -715,11 +743,9 @@ def get_portfolio_snapshot(
         meta = meta_map.get((code or "").upper()) or meta_map.get((ticker or "").upper()) or {}
         original = meta.get("ticker") or code or ticker or ""
         venue_currency = meta.get("currency") or currency or ""
-        yf_ticker = None
-        try:
-            yf_ticker = resolve_yfinance_ticker(original, venue_currency)
-        except Exception:  # noqa: BLE001 — chart ticker is best-effort
-            yf_ticker = None
+        # Prefer the real market symbol (shortName) for US equities so charts +
+        # technicals resolve (frozen codes like SNDK1_US_EQ → SNDK, not SNDK1).
+        yf_ticker = market_yfinance_ticker(original, meta.get("short_name"), venue_currency)
         return {
             "name": meta.get("name") or None,
             "display_ticker": display_ticker(ticker, meta.get("short_name")),
