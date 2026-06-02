@@ -128,6 +128,7 @@ def intents(db: Session = Depends(get_db)) -> list[TradeIntentItem]:
             risk_score=r.risk_score,
             rationale=r.rationale,
             broker_mode=r.broker_mode,
+            account_kind=(r.meta or {}).get("account_kind") if isinstance(r.meta, dict) else None,
             approved_at=r.approved_at,
             executed_at=r.executed_at,
             broker_order_id=r.broker_order_id,

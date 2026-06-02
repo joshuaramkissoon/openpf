@@ -91,6 +91,24 @@ def expire_stale_intents(db: Session, ttl_hours: int = _INTENT_TTL_HOURS) -> int
     return len(stale)
 
 
+def supersede_open_proposals(db: Session) -> int:
+    """Mark every un-acted 'proposed' intent as superseded.
+
+    Called when a new agent run produces fresh proposals so the queue shows only
+    the latest run, instead of stacking a duplicate batch every time the agent
+    runs. Leaves 'approved'/'executed' intents untouched (those were deliberate)."""
+    open_proposals = (
+        db.execute(select(TradeIntent).where(TradeIntent.status == "proposed")).scalars().all()
+    )
+    for intent in open_proposals:
+        intent.status = "expired"
+        if not intent.failure_reason:
+            intent.failure_reason = "superseded by a newer agent run"
+    if open_proposals:
+        db.commit()
+    return len(open_proposals)
+
+
 def list_intents(db: Session, limit: int = 100) -> list[TradeIntent]:
     expire_stale_intents(db)
     q = select(TradeIntent).order_by(desc(TradeIntent.created_at)).limit(limit)
