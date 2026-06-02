@@ -261,8 +261,15 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [chatRailOpen, setChatRailOpen] = useState(false)
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem('mypf:nav-collapsed') === '1' } catch { return false }
+    try { return localStorage.getItem('openpf:nav-collapsed') === '1' } catch { return false }
   })
+  const toggleNavCollapsed = useCallback(() => {
+    setNavCollapsed((prev) => {
+      const next = !prev
+      try { localStorage.setItem('openpf:nav-collapsed', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
 
   // Guards for the background (fire-and-forget) snapshot re-pull in loadAll: don't
@@ -426,10 +433,22 @@ export default function App() {
         event.preventDefault()
         setPrivacyMode((prev) => nextPrivacyMode(prev))
       }
+      // `/` toggles the sidebar collapse — bare key only, never while typing or
+      // with a modifier held (Cmd/Ctrl+/ still switches section).
+      if (
+        event.key === '/' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !isTypingTarget()
+      ) {
+        event.preventDefault()
+        toggleNavCollapsed()
+      }
     }
     window.addEventListener('keydown', onKeydown)
     return () => window.removeEventListener('keydown', onKeydown)
-  }, [])
+  }, [toggleNavCollapsed])
 
   useEffect(() => {
     savePrivacyMode(privacyMode)
@@ -609,7 +628,7 @@ export default function App() {
           <Plus className="size-4" />
         </Button>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex flex-col gap-0.5 px-2 pb-2">
           {chatSessions.length === 0 ? (
             <p className="px-2 py-3 text-xs text-muted-foreground">No chats yet.</p>
@@ -653,7 +672,7 @@ export default function App() {
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
     </>
   )
 
@@ -737,13 +756,7 @@ export default function App() {
         privacyMode={privacyMode}
         onCyclePrivacyMode={() => setPrivacyMode((prev) => nextPrivacyMode(prev))}
         collapsed={navCollapsed}
-        onToggleCollapsed={() =>
-          setNavCollapsed((prev) => {
-            const next = !prev
-            try { localStorage.setItem('mypf:nav-collapsed', next ? '1' : '0') } catch { /* ignore */ }
-            return next
-          })
-        }
+        onToggleCollapsed={toggleNavCollapsed}
       />
 
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>

@@ -189,7 +189,7 @@ export function SettingsPanel({
   async function triggerTelegramTest() {
     setWorking(true)
     try {
-      await testTelegram('MyPF test ping: Telegram integration is active.')
+      await testTelegram('OpenPF test ping: Telegram integration is active.')
       onReload()
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to send Telegram test message'
