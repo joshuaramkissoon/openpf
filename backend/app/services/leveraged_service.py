@@ -829,7 +829,12 @@ def execute_signal(db: Session, signal_id: str, source: str = "manual") -> Lever
 
     if broker_mode == "live":
         store = ConfigStore(db)
-        client = build_t212_client(store, account_kind="stocks_isa")
+        exec_creds = store.get_account_exec_credentials("stocks_isa")
+        if not exec_creds.get("exec_enabled", True):
+            raise LeveragedError("live execution is disabled for stocks_isa (enable it in Settings)")
+        if not exec_creds.get("t212_api_key") or not exec_creds.get("t212_api_secret"):
+            raise LeveragedError("no execution key configured for stocks_isa (add it in Settings → Credentials)")
+        client = build_t212_client(store, account_kind="stocks_isa", purpose="execute")
         try:
             resp = client.place_market_order(signal.instrument_code, qty)
         except T212Error as exc:
@@ -937,7 +942,7 @@ def close_trade(db: Session, trade_id: str, reason: str = "manual") -> Leveraged
 
     if broker_mode == "live":
         store = ConfigStore(db)
-        client = build_t212_client(store, account_kind="stocks_isa")
+        client = build_t212_client(store, account_kind="stocks_isa", purpose="execute")
         try:
             resp = client.place_market_order(trade.instrument_code, -abs(float(trade.quantity)))
         except T212Error as exc:

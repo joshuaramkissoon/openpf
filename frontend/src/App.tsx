@@ -25,6 +25,7 @@ import { AgentChatPanel } from './components/AgentChatPanel'
 import { BacktestLab } from './components/BacktestLab'
 import { EventsFeed } from './components/EventsFeed'
 import { IntentQueue } from './components/IntentQueue'
+import { OrdersWorkspace } from './components/OrdersWorkspace'
 import { RuntimeDiagnosticsPanel } from './components/RuntimeDiagnosticsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ThesisBoard } from './components/ThesisBoard'
@@ -56,11 +57,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
+import { toastApiError } from '@/lib/api-error'
 import type { AgentRun, AgentRunDetail, AppConfig, ChatSession, ExecutionEvent, PortfolioSnapshot, PositionItem, Thesis, TradeIntent } from './types'
 
 function parseApiError(error: unknown): string {
-  const candidate = error as ApiError
-  return candidate?.response?.data?.detail || (error instanceof Error ? error.message : 'Unexpected error')
+  const detail = (error as ApiError)?.response?.data?.detail as unknown
+  // New endpoints return a typed envelope ({code, message, meta}); older ones a string.
+  if (detail && typeof detail === 'object') {
+    return (detail as { message?: string }).message || 'Request failed'
+  }
+  if (typeof detail === 'string' && detail) return detail
+  return error instanceof Error ? error.message : 'Unexpected error'
 }
 
 function aggregatePositionsByTicker(positions: PositionItem[], portfolioTotal: number): PositionItem[] {
@@ -213,6 +221,7 @@ const SECTION_LABELS: Record<SectionKey, string> = {
   watchlist: 'Watchlist',
   chat: 'Archie',
   execution: 'Execution',
+  orders: 'Orders',
   leveraged: 'Leveraged Desk',
   jobs: 'Scheduled Jobs',
   artifacts: 'Artifacts',
@@ -228,6 +237,7 @@ const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
   attention: "What Archie's spotted across your holdings, news, and macro — ranked.",
   watchlist: 'Tracked ideas — Archie watches these and flags what\'s worth noticing.',
   execution: 'Review and act on proposed trade intents.',
+  orders: 'Live broker orders — view in-flight orders, cancel, and browse history.',
   leveraged: 'Leveraged positions, rails, and signal queue.',
   jobs: 'Automated agent routines on a schedule.',
   artifacts: 'Generated briefings and reports.',
@@ -549,12 +559,17 @@ export default function App() {
     }
   }
 
-  async function handleExecute(id: string) {
+  async function handleExecute(id: string, accountKind?: 'invest' | 'stocks_isa') {
     try {
-      await executeIntent(id, false)
+      await executeIntent(id, false, accountKind)
+      const acct = accountKind === 'stocks_isa' ? 'Stocks ISA' : accountKind === 'invest' ? 'Invest' : undefined
+      const paper = config?.broker.broker_mode === 'paper'
+      toast.success(paper ? 'Paper fill recorded' : 'Order submitted to broker', {
+        description: acct ? `Account: ${acct}` : undefined,
+      })
       await loadAll(true)
     } catch (err) {
-      setError(parseApiError(err))
+      toastApiError(err, 'Execution failed')
     }
   }
 
@@ -733,6 +748,7 @@ export default function App() {
       )
     }
 
+    if (activeSection === 'orders') return <OrdersWorkspace onError={setError} />
     if (activeSection === 'attention') return <AttentionFeed onError={setError} />
     if (activeSection === 'watchlist') return <WatchlistBoard onError={setError} />
     if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} />

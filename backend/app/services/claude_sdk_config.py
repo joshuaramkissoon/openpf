@@ -47,6 +47,8 @@ def resolve_t212_env() -> dict[str, str]:
     env: dict[str, str] = {"T212_BASE_ENV": settings.t212_base_env}
     invest = ("", "")
     isa = ("", "")
+    invest_exec = ("", "")
+    isa_exec = ("", "")
     try:
         from app.core.database import SessionLocal
         from app.services.config_store import ConfigStore
@@ -58,6 +60,12 @@ def resolve_t212_env() -> dict[str, str]:
             sc = store.get_account_credentials("stocks_isa")
             invest = (str(ic.get("t212_api_key", "")).strip(), str(ic.get("t212_api_secret", "")).strip())
             isa = (str(sc.get("t212_api_key", "")).strip(), str(sc.get("t212_api_secret", "")).strip())
+            # Dedicated IP-restricted execution (write) keys — injected separately so
+            # Archie's reads keep working even when the exec key's IP allowlist is stale.
+            xic = store.get_account_exec_credentials("invest")
+            xsc = store.get_account_exec_credentials("stocks_isa")
+            invest_exec = (str(xic.get("t212_api_key", "")).strip(), str(xic.get("t212_api_secret", "")).strip())
+            isa_exec = (str(xsc.get("t212_api_key", "")).strip(), str(xsc.get("t212_api_secret", "")).strip())
     except Exception:  # noqa: BLE001 — fall back to .env below
         pass
 
@@ -71,11 +79,25 @@ def resolve_t212_env() -> dict[str, str]:
             (settings.t212_stocks_isa_api_key or settings.t212_api_key_stocks_isa or "").strip(),
             (settings.t212_stocks_isa_api_secret or settings.t212_api_secret_stocks_isa or "").strip(),
         )
+    if not all(invest_exec):
+        invest_exec = (
+            (settings.t212_exec_invest_api_key or "").strip(),
+            (settings.t212_exec_invest_api_secret or "").strip(),
+        )
+    if not all(isa_exec):
+        isa_exec = (
+            (settings.t212_exec_stocks_isa_api_key or "").strip(),
+            (settings.t212_exec_stocks_isa_api_secret or "").strip(),
+        )
 
     if all(invest):
         env["T212_API_KEY_INVEST"], env["T212_API_SECRET_INVEST"] = invest
     if all(isa):
         env["T212_API_KEY_STOCKS_ISA"], env["T212_API_SECRET_STOCKS_ISA"] = isa
+    if all(invest_exec):
+        env["T212_EXEC_API_KEY_INVEST"], env["T212_EXEC_API_SECRET_INVEST"] = invest_exec
+    if all(isa_exec):
+        env["T212_EXEC_API_KEY_STOCKS_ISA"], env["T212_EXEC_API_SECRET_STOCKS_ISA"] = isa_exec
     return env
 
 
@@ -308,7 +330,15 @@ _EXECUTION_PROMPT = (
     "You are Archie's trade execution specialist. You place and cancel orders "
     "via the Trading 212 tools, using only the account balance, positions, and "
     "exact order instructions passed to you. Do not improvise sizing or "
-    "instruments. Always finish with a single JSON block matching the execution "
+    "instruments. "
+    "ACCOUNT: every order tool takes an explicit `account` ('invest' or "
+    "'stocks_isa'). Never assume or default the account — use exactly the account "
+    "specified in your instructions, and if it was not specified, do NOT guess: "
+    "return an error asking which account to use. Echo the account you acted on in "
+    "your commentary. (Order writes use the IP-restricted execution key; a tool "
+    "error mentioning IP restriction means the key's allowlist is stale — surface "
+    "that verbatim in `errors`, do not retry.) "
+    "Always finish with a single JSON block matching the execution "
     "schema: {\"trades\": [...], \"errors\": [...], \"commentary\": \"...\"}. "
     "Return structured JSON only — never unstructured prose as the final answer."
 )

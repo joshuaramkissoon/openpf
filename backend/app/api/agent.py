@@ -43,6 +43,8 @@ from app.services.chat_title_service import retitle_in_request
 from app.services.claude_chat_runtime import claude_chat_runtime
 from app.services.claude_memory_service import schedule_memory_distillation
 from app.services.execution_service import ExecutionError, approve_intent, execute_intent, list_events, list_intents, reject_intent
+from app.services.t212_client import T212Error
+from app.services.t212_errors import classify_t212_error
 from app.schemas.artifacts import ArtifactDetail, ArtifactItem
 from app.services.artifact_service import get_artifact, list_artifacts
 from app.services import costs_service
@@ -161,10 +163,15 @@ def reject(intent_id: str, payload: IntentDecisionRequest, db: Session = Depends
 @router.post("/intents/{intent_id}/execute", response_model=IntentActionResponse)
 def execute(intent_id: str, payload: IntentExecuteRequest, db: Session = Depends(get_db)) -> IntentActionResponse:
     try:
-        intent = execute_intent(db, intent_id, force_live=payload.force_live)
+        intent = execute_intent(
+            db, intent_id, force_live=payload.force_live, account_kind=payload.account_kind
+        )
         return IntentActionResponse(intent_id=intent.id, status=intent.status, message="intent executed")
-    except ExecutionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ExecutionError, T212Error) as exc:
+        # Typed envelope so the UI can route to a specific toast (insufficient
+        # funds, IP-restricted exec key, risk-guard block, …).
+        classified = classify_t212_error(exc, account_kind=payload.account_kind)
+        raise HTTPException(status_code=classified.status_code, detail=classified.as_detail()) from exc
 
 
 @router.get("/events", response_model=list[ExecutionEventItem])

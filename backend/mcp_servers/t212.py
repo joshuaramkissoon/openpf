@@ -112,12 +112,32 @@ def _auth_header(api_key: str, api_secret: str) -> str:
     return f"Basic {base64.b64encode(raw).decode('utf-8')}"
 
 
-def _resolve_credentials(account: AccountKind) -> tuple[str, str]:
+def _resolve_credentials(account: AccountKind, scope: str = "read") -> tuple[str, str]:
     """Resolve API key + secret for the given account from env vars.
+
+    ``scope="read"`` (default) returns the IP-unrestricted read key used for every
+    read-only call. ``scope="execute"`` returns the dedicated IP-restricted
+    execution (write) key — required for placing/cancelling orders — so an IP
+    rotation only ever breaks writes, never Archie's analysis/reads.
 
     Tries multiple naming conventions used across the project.
     Raises ValueError with a clear message if credentials are missing.
     """
+    if scope == "execute":
+        if account == "invest":
+            key = (os.environ.get("T212_EXEC_API_KEY_INVEST") or "").strip()
+            secret = (os.environ.get("T212_EXEC_API_SECRET_INVEST") or "").strip()
+        else:
+            key = (os.environ.get("T212_EXEC_API_KEY_STOCKS_ISA") or "").strip()
+            secret = (os.environ.get("T212_EXEC_API_SECRET_STOCKS_ISA") or "").strip()
+        if not key or not secret:
+            raise ValueError(
+                f"Missing T212 EXECUTION credentials for '{account}'. Set the execution (write) "
+                f"key for {account} in Settings → Credentials (or env "
+                f"T212_EXEC_API_KEY_{account.upper()} / T212_EXEC_API_SECRET_{account.upper()})."
+            )
+        return key, secret
+
     if account == "invest":
         key = (
             os.environ.get("T212_API_KEY_INVEST")
@@ -164,12 +184,17 @@ async def _request(
     path: str,
     account: AccountKind,
     *,
+    scope: str = "read",
     rate_group: str | None = None,
     params: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
 ) -> dict[str, Any] | list[Any]:
-    """Make an authenticated request to the T212 API with rate limiting and retries."""
-    api_key, api_secret = _resolve_credentials(account)
+    """Make an authenticated request to the T212 API with rate limiting and retries.
+
+    ``scope="execute"`` uses the IP-restricted execution key (for order writes);
+    everything else uses the read key.
+    """
+    api_key, api_secret = _resolve_credentials(account, scope)
     url = f"{_base_url()}{path}"
     group = rate_group or path
     headers = {
@@ -397,6 +422,7 @@ async def place_market_order(
         "POST",
         "/equity/orders/market",
         acct,
+        scope="execute",
         rate_group="place_order",
         json_body={"ticker": ticker.strip(), "quantity": quantity},
     )
@@ -425,6 +451,7 @@ async def place_limit_order(
         "POST",
         "/equity/orders/limit",
         acct,
+        scope="execute",
         rate_group="place_order",
         json_body={
             "ticker": ticker.strip(),
@@ -458,6 +485,7 @@ async def place_stop_order(
         "POST",
         "/equity/orders/stop",
         acct,
+        scope="execute",
         rate_group="place_order",
         json_body={
             "ticker": ticker.strip(),
@@ -493,6 +521,7 @@ async def place_stop_limit_order(
         "POST",
         "/equity/orders/stop_limit",
         acct,
+        scope="execute",
         rate_group="place_order",
         json_body={
             "ticker": ticker.strip(),
@@ -518,6 +547,7 @@ async def cancel_order(account: str, order_id: str) -> str:
         "DELETE",
         f"/equity/orders/{order_id.strip()}",
         acct,
+        scope="execute",
         rate_group="cancel_order",
     )
     return _fmt(data)

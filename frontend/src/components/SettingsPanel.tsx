@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Eye, EyeOff, Send, Shield, ShieldCheck } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Send, Shield, ShieldCheck } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { setLeveragedAutoExecute, testTelegram, updateAccountCredentials, updateBroker, updateRisk, updateTelegram } from '../api/client'
+import { testExecutionKey } from '../api/orders'
 import type { AppConfig } from '../types'
 
 import { SectionCard } from '@/components/kit'
@@ -44,6 +46,13 @@ export function SettingsPanel({
   const [investSecret, setInvestSecret] = useState('')
   const [isaKey, setIsaKey] = useState('')
   const [isaSecret, setIsaSecret] = useState('')
+
+  // Dedicated IP-restricted execution (write) keys.
+  const [investExecKey, setInvestExecKey] = useState('')
+  const [investExecSecret, setInvestExecSecret] = useState('')
+  const [isaExecKey, setIsaExecKey] = useState('')
+  const [isaExecSecret, setIsaExecSecret] = useState('')
+  const [testingKey, setTestingKey] = useState<'invest' | 'stocks_isa' | null>(null)
 
   const [telegramToken, setTelegramToken] = useState('')
   const [telegramChatId, setTelegramChatId] = useState('')
@@ -109,8 +118,13 @@ export function SettingsPanel({
 
   async function saveInvestCredentials(formData: FormData) {
     const enabled = formData.get('invest_enabled') === 'on'
+    const exec_enabled = formData.get('invest_exec_enabled') === 'on'
     if ((investKey || investSecret) && (!investKey || !investSecret)) {
       onError('Provide both Invest key and secret, or leave both blank.')
+      return
+    }
+    if ((investExecKey || investExecSecret) && (!investExecKey || !investExecSecret)) {
+      onError('Provide both Invest execution key and secret, or leave both blank.')
       return
     }
 
@@ -120,9 +134,14 @@ export function SettingsPanel({
         t212_api_key: investKey,
         t212_api_secret: investSecret,
         enabled,
+        exec_api_key: investExecKey,
+        exec_api_secret: investExecSecret,
+        exec_enabled,
       })
       setInvestKey('')
       setInvestSecret('')
+      setInvestExecKey('')
+      setInvestExecSecret('')
       onReload()
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to save Invest credentials'
@@ -134,8 +153,13 @@ export function SettingsPanel({
 
   async function saveIsaCredentials(formData: FormData) {
     const enabled = formData.get('isa_enabled') === 'on'
+    const exec_enabled = formData.get('isa_exec_enabled') === 'on'
     if ((isaKey || isaSecret) && (!isaKey || !isaSecret)) {
       onError('Provide both ISA key and secret, or leave both blank.')
+      return
+    }
+    if ((isaExecKey || isaExecSecret) && (!isaExecKey || !isaExecSecret)) {
+      onError('Provide both ISA execution key and secret, or leave both blank.')
       return
     }
 
@@ -145,15 +169,43 @@ export function SettingsPanel({
         t212_api_key: isaKey,
         t212_api_secret: isaSecret,
         enabled,
+        exec_api_key: isaExecKey,
+        exec_api_secret: isaExecSecret,
+        exec_enabled,
       })
       setIsaKey('')
       setIsaSecret('')
+      setIsaExecKey('')
+      setIsaExecSecret('')
       onReload()
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to save ISA credentials'
       onError(msg)
     } finally {
       setWorking(false)
+    }
+  }
+
+  async function handleTestExecKey(account: 'invest' | 'stocks_isa') {
+    setTestingKey(account)
+    try {
+      const res = await testExecutionKey(account)
+      const label = account === 'stocks_isa' ? 'Stocks ISA' : 'Invest'
+      if (res.test.result === 'ok') {
+        toast.success(`${label} execution key works`, { description: res.test.message ?? undefined })
+      } else if (res.test.result === 'ip_restricted') {
+        toast.error(`${label} key blocked`, {
+          description: `${res.test.message ?? ''}${res.egress_ip ? ` Current IP: ${res.egress_ip}` : ''}`,
+          duration: 12000,
+        })
+      } else {
+        toast.error(`${label} key test: ${res.test.result}`, { description: res.test.message ?? undefined })
+      }
+      onReload()
+    } catch (error) {
+      onError(error instanceof Error ? error.message : 'Execution key test failed')
+    } finally {
+      setTestingKey(null)
     }
   }
 
@@ -366,11 +418,16 @@ export function SettingsPanel({
         {/* Invest Credentials */}
         <SectionCard
           title="Invest Credentials"
-          description="Trading 212 Invest account"
+          description="Read key (unrestricted) + execution key (IP-restricted)"
           action={
-            <Badge variant={config?.credentials?.invest?.configured ? 'default' : 'outline'}>
-              {config?.credentials?.invest?.configured ? 'Configured' : 'Not configured'}
-            </Badge>
+            <div className="flex items-center gap-1.5">
+              <Badge variant={config?.credentials?.invest?.configured ? 'secondary' : 'outline'}>
+                read {config?.credentials?.invest?.configured ? 'set' : 'missing'}
+              </Badge>
+              <Badge variant={config?.credentials?.invest?.exec_configured ? 'default' : 'outline'}>
+                exec {config?.credentials?.invest?.exec_configured ? 'set' : 'missing'}
+              </Badge>
+            </div>
           }
         >
           <form
@@ -410,21 +467,75 @@ export function SettingsPanel({
                 placeholder="Leave blank to keep existing"
               />
             </div>
+
             <Separator />
-            <Button type="submit" size="sm" disabled={working}>
-              Save Invest credentials
-            </Button>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Label htmlFor="invest_exec_enabled" className="text-sm font-medium">
+                  Live execution (Invest)
+                </Label>
+                <p className="text-[11px] text-muted-foreground">
+                  IP-restricted write key. Off pauses live orders for this account.
+                </p>
+              </div>
+              <Switch
+                id="invest_exec_enabled"
+                name="invest_exec_enabled"
+                defaultChecked={config?.credentials?.invest?.exec_enabled ?? true}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="invest_exec_key">Invest execution key</Label>
+              <Input
+                id="invest_exec_key"
+                type="password"
+                value={investExecKey}
+                onChange={(e) => setInvestExecKey(e.target.value)}
+                placeholder="Leave blank to keep existing"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="invest_exec_secret">Invest execution secret</Label>
+              <Input
+                id="invest_exec_secret"
+                type="password"
+                value={investExecSecret}
+                onChange={(e) => setInvestExecSecret(e.target.value)}
+                placeholder="Leave blank to keep existing"
+              />
+            </div>
+            <Separator />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" size="sm" disabled={working}>
+                Save Invest credentials
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={testingKey === 'invest' || !config?.credentials?.invest?.exec_configured}
+                onClick={() => void handleTestExecKey('invest')}
+              >
+                {testingKey === 'invest' ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                Test execution key
+              </Button>
+            </div>
           </form>
         </SectionCard>
 
         {/* Stocks ISA Credentials */}
         <SectionCard
           title="Stocks ISA Credentials"
-          description="Trading 212 Stocks ISA account"
+          description="Read key (unrestricted) + execution key (IP-restricted)"
           action={
-            <Badge variant={config?.credentials?.stocks_isa?.configured ? 'default' : 'outline'}>
-              {config?.credentials?.stocks_isa?.configured ? 'Configured' : 'Not configured'}
-            </Badge>
+            <div className="flex items-center gap-1.5">
+              <Badge variant={config?.credentials?.stocks_isa?.configured ? 'secondary' : 'outline'}>
+                read {config?.credentials?.stocks_isa?.configured ? 'set' : 'missing'}
+              </Badge>
+              <Badge variant={config?.credentials?.stocks_isa?.exec_configured ? 'default' : 'outline'}>
+                exec {config?.credentials?.stocks_isa?.exec_configured ? 'set' : 'missing'}
+              </Badge>
+            </div>
           }
         >
           <form
@@ -464,10 +575,59 @@ export function SettingsPanel({
                 placeholder="Leave blank to keep existing"
               />
             </div>
+
             <Separator />
-            <Button type="submit" size="sm" disabled={working}>
-              Save ISA credentials
-            </Button>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Label htmlFor="isa_exec_enabled" className="text-sm font-medium">
+                  Live execution (Stocks ISA)
+                </Label>
+                <p className="text-[11px] text-muted-foreground">
+                  IP-restricted write key. Off pauses live orders for this account.
+                </p>
+              </div>
+              <Switch
+                id="isa_exec_enabled"
+                name="isa_exec_enabled"
+                defaultChecked={config?.credentials?.stocks_isa?.exec_enabled ?? true}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="isa_exec_key">ISA execution key</Label>
+              <Input
+                id="isa_exec_key"
+                type="password"
+                value={isaExecKey}
+                onChange={(e) => setIsaExecKey(e.target.value)}
+                placeholder="Leave blank to keep existing"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="isa_exec_secret">ISA execution secret</Label>
+              <Input
+                id="isa_exec_secret"
+                type="password"
+                value={isaExecSecret}
+                onChange={(e) => setIsaExecSecret(e.target.value)}
+                placeholder="Leave blank to keep existing"
+              />
+            </div>
+            <Separator />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" size="sm" disabled={working}>
+                Save ISA credentials
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={testingKey === 'stocks_isa' || !config?.credentials?.stocks_isa?.exec_configured}
+                onClick={() => void handleTestExecKey('stocks_isa')}
+              >
+                {testingKey === 'stocks_isa' ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                Test execution key
+              </Button>
+            </div>
           </form>
         </SectionCard>
       </div>

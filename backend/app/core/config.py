@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     t212_api_secret_invest: str = Field(default="", alias="T212_API_SECRET_INVEST")
     t212_api_key_stocks_isa: str = Field(default="", alias="T212_API_KEY_STOCKS_ISA")
     t212_api_secret_stocks_isa: str = Field(default="", alias="T212_API_SECRET_STOCKS_ISA")
+    # Dedicated execution (write) keys, IP-restricted to this machine. Kept
+    # separate from the read keys above so an IP rotation only breaks writes,
+    # never reads. Used only for placing/cancelling orders. Env vars are a
+    # fallback — the DB (ConfigStore) is the source of truth (set via Settings).
+    t212_exec_invest_api_key: str = Field(default="", alias="T212_EXEC_API_KEY_INVEST")
+    t212_exec_invest_api_secret: str = Field(default="", alias="T212_EXEC_API_SECRET_INVEST")
+    t212_exec_stocks_isa_api_key: str = Field(default="", alias="T212_EXEC_API_KEY_STOCKS_ISA")
+    t212_exec_stocks_isa_api_secret: str = Field(default="", alias="T212_EXEC_API_SECRET_STOCKS_ISA")
     portfolio_display_currency: str = Field(default="GBP", alias="PORTFOLIO_DISPLAY_CURRENCY")
 
     # Archie-specific T212 keys (unrestricted / read-only).

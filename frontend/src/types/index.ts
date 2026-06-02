@@ -72,13 +72,21 @@ export interface TelegramConfig {
   bot_token_configured: boolean
 }
 
+export interface AccountCredentialView {
+  account_kind: 'invest' | 'stocks_isa'
+  enabled: boolean
+  configured: boolean
+  exec_enabled: boolean
+  exec_configured: boolean
+}
+
 export interface AppConfig {
   risk: RiskConfig
   broker: BrokerConfig
   telegram: TelegramConfig
   credentials: {
-    invest: { account_kind: 'invest'; enabled: boolean; configured: boolean }
-    stocks_isa: { account_kind: 'stocks_isa'; enabled: boolean; configured: boolean }
+    invest: AccountCredentialView
+    stocks_isa: AccountCredentialView
   }
   leveraged: LeveragedConfig
 }
