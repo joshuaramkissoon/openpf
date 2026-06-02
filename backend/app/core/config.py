@@ -88,6 +88,15 @@ class Settings(BaseSettings):
     agent_provider: Literal["rules", "claude"] = Field(default="claude", alias="AGENT_PROVIDER")
     agent_workspace: str = Field(default="./.claude/agent_workspace", alias="AGENT_WORKSPACE")
     agent_max_turns: int = Field(default=25, alias="AGENT_MAX_TURNS")
+    # Interactive chat has NO turn cap by default — Archie runs until it
+    # naturally finishes (the Agent SDK omits --max-turns when this is None).
+    # Set AGENT_CHAT_MAX_TURNS to a positive int only to re-impose a hard cap.
+    agent_chat_max_turns: int | None = Field(default=None, alias="AGENT_CHAT_MAX_TURNS")
+    # Cost-based backstop for a single chat response (USD). Replaces the turn cap
+    # as the runaway guard: never interrupts a legitimate long task, only stops a
+    # pathological loop, returning an error_max_budget_usd result the UI surfaces.
+    # Set to None / 0 to disable.
+    agent_chat_max_budget_usd: float | None = Field(default=2.0, alias="AGENT_CHAT_MAX_BUDGET_USD")
     agent_allow_bash: bool = Field(default=False, alias="AGENT_ALLOW_BASH")
     inproc_scheduler_enabled: bool = Field(default=False, alias="INPROC_SCHEDULER_ENABLED")
 
