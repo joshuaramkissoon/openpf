@@ -156,19 +156,66 @@ def test_normalize_split_basis_scales_pre_split_fills_to_today_units():
     assert out[("AAPL", date(2020, 1, 1))].cash_impact == -1000.0
 
 
-def test_to_today_basis_divides_pre_split_prices_by_later_splits():
-    # Unadjusted closes → today's basis: a close before a 4:1 split is divided by
-    # 4 (so shares×price stays invariant); a close after it is unchanged. With no
-    # split data, prices pass through untouched (the graceful fallback for ETPs).
-    from app.services.equity_backfill import _to_today_basis
+from collections import namedtuple
 
-    rows = [(date(2020, 1, 1), 400.0), (date(2022, 1, 1), 100.0)]
-    adj = _to_today_basis(rows, [(date(2021, 1, 1), 4.0)])
-    assert adj.on(date(2020, 6, 1)) == 100.0   # 400 / 4 (split is later)
-    assert adj.on(date(2022, 6, 1)) == 100.0   # unchanged (split before it)
 
-    passthrough = _to_today_basis(rows, [])     # no splits → real prices kept
-    assert passthrough.on(date(2020, 6, 1)) == 400.0
+def _patch_yf(monkeypatch, closes, splits):
+    """Stub yfinance access in _load_prices: split-adjusted closes + a split list."""
+    from app.services import equity_backfill as eb
+
+    Row = namedtuple("Row", "date close")
+
+    class _Frame:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def itertuples(self):
+            return iter(self._rows)
+
+    monkeypatch.setattr(eb, "fetch_history",
+                        lambda t, lookback_days, auto_adjust: _Frame([Row(d, c) for d, c in sorted(closes.items())]))
+    monkeypatch.setattr(eb, "_fetch_splits", lambda t: list(splits))
+    monkeypatch.setattr(eb, "resolve_yfinance_ticker", lambda code, ccy: code)
+
+
+def test_load_prices_keeps_split_stock_on_market_data(monkeypatch):
+    # NVDA-style: yfinance closes are SPLIT-ADJUSTED ($13 in 2021, $140 now); the
+    # earliest fill is the pre-split as-executed price ($520). Normalizing $520 by
+    # the 4× and 10× splits → $13, which matches yfinance → must stay trustworthy
+    # (NOT fall back to fill prices, which is what produced the May-1 cliff).
+    from app.services import equity_backfill as eb
+
+    _patch_yf(monkeypatch,
+              closes={date(2021, 1, 4): 13.0, date(2026, 5, 1): 140.0},
+              splits=[(date(2021, 7, 20), 4.0), (date(2024, 6, 10), 10.0)])
+    keys_meta = {"NVDA_US_EQ": {"code": "NVDA_US_EQ", "currency": "USD"}}
+    fills = {"NVDA_US_EQ": [(date(2021, 1, 4), 520.0)]}
+
+    lookup, _ccy, unpriced, splits_by_key, fallback = eb._load_prices(
+        keys_meta, {}, span_days=2000, fill_prices_by_key=fills)
+
+    assert fallback == []                       # not wrongly rejected
+    assert unpriced == []
+    assert "NVDA_US_EQ" in splits_by_key        # splits returned for qty normalization
+    assert lookup("NVDA_US_EQ", date(2026, 5, 1)) == 140.0  # uses yfinance, not fills
+
+
+def test_load_prices_falls_back_when_yfinance_is_the_wrong_security(monkeypatch):
+    # Recycled/delisted ticker: yfinance prices ($3) are nowhere near the fill
+    # ($520) and no split explains it → carry the real fill price forward.
+    from app.services import equity_backfill as eb
+
+    _patch_yf(monkeypatch,
+              closes={date(2021, 1, 4): 3.0, date(2026, 5, 1): 4.0},
+              splits=[])
+    keys_meta = {"XYZ_US_EQ": {"code": "XYZ_US_EQ", "currency": "USD"}}
+    fills = {"XYZ_US_EQ": [(date(2021, 1, 4), 520.0)]}
+
+    lookup, _ccy, unpriced, splits_by_key, fallback = eb._load_prices(
+        keys_meta, {}, span_days=2000, fill_prices_by_key=fills)
+
+    assert fallback == ["XYZ_US_EQ"]
+    assert lookup("XYZ_US_EQ", date(2026, 5, 1)) == 520.0   # carried fill price
 
 
 def test_normalize_orders_keys_by_code_and_signs_by_side():

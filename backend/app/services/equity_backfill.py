@@ -86,28 +86,6 @@ class _PriceSeries:
         return self._closes[i - 1]
 
 
-def _to_today_basis(rows: list[tuple[date, float]], splits: list[tuple[date, float]]) -> _PriceSeries:
-    """Convert *unadjusted* closes to today's split basis using ONLY the splits
-    we can actually see, so price and share normalization stay consistent.
-
-    A close on date d is divided by the product of split ratios dated after d
-    (a 4:1 split → later prices unchanged, earlier prices ÷4). Crucially, when a
-    consolidation isn't in the split feed (common for leveraged ETPs), we fall
-    back to the *real* traded price rather than yfinance's silently back-adjusted
-    one — which is what caused the 2020 value to explode."""
-    if not splits:
-        return _PriceSeries(rows)
-    sdates = sorted(splits)
-    out: list[tuple[date, float]] = []
-    for d, close in rows:
-        factor = 1.0
-        for sd, ratio in sdates:
-            if sd > d and ratio > 0:
-                factor /= ratio
-        out.append((d, close * factor))
-    return _PriceSeries(out)
-
-
 def _make_fx_lookup(fx_hist):
     def fx(src: str, tgt: str, on: date) -> float:
         s = (src or "GBP").upper()
@@ -261,12 +239,16 @@ def _load_prices(
 ):
     """Build a daily price series per instrument key, in today's split basis.
 
-    Uses unadjusted yfinance closes + the visible split calendar, but FIRST
-    sanity-checks yfinance against the user's own fill price on the trade date.
-    If they diverge wildly (recycled/delisted ticker → wrong company's prices),
-    we fall back to carrying the real fill price forward — which never explodes
-    and is split-robust. Returns (price_lookup, instr_ccy_override, unpriced,
-    splits_by_key, fill_fallback)."""
+    yfinance returns SPLIT-ADJUSTED closes (today's basis) even with
+    auto_adjust=False, and fill *quantities* are normalized to the same basis
+    (see ``normalize_split_basis``), so value = shares × close is already
+    consistent — we use the closes as-is. We still sanity-check yfinance against
+    the user's own fill price (normalized to today's basis via the split
+    calendar, so a legitimately-split stock isn't rejected): a gap splits can't
+    explain means yfinance returned the wrong security (recycled/delisted ticker)
+    or a split it doesn't know about, so we carry the real fill price forward
+    instead. Returns (price_lookup, instr_ccy_override, unpriced, splits_by_key,
+    fill_fallback)."""
     fill_prices_by_key = fill_prices_by_key or {}
     series_by_key: dict[str, _PriceSeries] = {}
     instr_ccy: dict[str, str] = {}
@@ -288,30 +270,39 @@ def _load_prices(
 
         rows: list[tuple[date, float]] = []
         try:
-            # Unadjusted (real) closes — we apply splits ourselves so prices and
-            # share counts use the SAME (visible) split data and stay consistent.
+            # Split-adjusted closes (today's basis); see the docstring — we do NOT
+            # re-apply splits to the price, only normalize fill quantities.
             frame = fetch_history(yf_ticker, lookback_days=lookback, auto_adjust=False)
             rows = [(r.date, float(r.close)) for r in frame.itertuples() if r.close and r.close > 0]
         except Exception as exc:  # noqa: BLE001 — one bad symbol must not abort the backfill
             logger.warning("equity_backfill: no price history for %s (%s): %s", code, yf_ticker, exc)
 
-        # Sanity-check yfinance against the earliest fill price (same day, same
-        # basis): if it's off by >4× either way, it's the wrong security's data.
+        splits = _fetch_splits(yf_ticker) if rows else []
+
+        # Sanity-check yfinance against the user's fill price, normalized to
+        # today's split basis (divide the as-executed price by the product of
+        # split ratios dated after the fill). A legitimately-split stock then
+        # matches; a >4× gap that splits can't explain means the wrong security
+        # (recycled/delisted ticker) or a split yfinance doesn't know about.
         trustworthy = bool(rows)
         if rows and fps:
-            unadj = _PriceSeries(rows)
+            yseries = _PriceSeries(rows)
             fill_d, fill_p = fps[0]
-            yp = unadj.on(fill_d)
-            if yp is not None and fill_p > 0 and not (0.25 <= yp / fill_p <= 4.0):
+            split_factor = 1.0
+            for sd, ratio in splits:
+                if sd > fill_d and ratio and ratio > 0:
+                    split_factor *= ratio
+            fill_p_today = fill_p / split_factor if split_factor else fill_p
+            yp = yseries.on(fill_d)
+            if yp is not None and fill_p_today > 0 and not (0.25 <= yp / fill_p_today <= 4.0):
                 trustworthy = False
 
         if trustworthy:
-            splits = _fetch_splits(yf_ticker)
             if splits:
                 splits_by_key[key] = splits
-            series_by_key[key] = _to_today_basis(rows, splits)
+            series_by_key[key] = _PriceSeries(rows)  # already in today's split basis
         elif fps:
-            # Bad/again no market data, but we have real fill prices → carry them.
+            # Wrong/again-unpriced security, but we have real fills → carry them.
             series_by_key[key] = _fill_price_series(fps)
             fill_fallback.append(code)
         else:
