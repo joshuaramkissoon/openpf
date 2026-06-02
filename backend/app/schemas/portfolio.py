@@ -17,6 +17,9 @@ class AccountSummary(BaseModel):
 class PositionItem(BaseModel):
     account_kind: str
     ticker: str
+    # Real current market ticker (T212 shortName) for display; falls back to `ticker`.
+    # e.g. Nebius is held as YNDX_US_EQ but trades as NBIS.
+    display_ticker: str | None = None
     instrument_code: str
     name: str | None = None
     # yfinance symbol resolved from T212 venue metadata (e.g. NUCGl_EQ → NUCG.L)

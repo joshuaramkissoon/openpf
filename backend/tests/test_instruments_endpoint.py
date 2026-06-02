@@ -176,3 +176,51 @@ def test_detail_unheld_falls_back_gracefully(client, monkeypatch):
 )
 def test_market_yfinance_ticker(code, short, expected):
     assert portfolio_service.market_yfinance_ticker(code, short, "USD") == expected
+
+
+_GOOGL_META = {
+    "GOOGL_US_EQ": {"name": "Alphabet (Class A)", "short_name": "GOOGL", "ticker": "GOOGL_US_EQ", "currency": "USD"},
+    "GOOGL_EQ": {"name": "Leverage Shares 1x Alphabet", "short_name": "GOOG", "ticker": "GOOGL_EQ", "currency": "GBX"},
+}
+
+
+def test_search_prefers_primary_listing_over_leverage_etp(client, monkeypatch):
+    # Both instruments carry the GOOGL symbol; the real US listing must rank first.
+    monkeypatch.setattr(portfolio_service, "_instrument_meta_map", lambda db: _GOOGL_META)
+    rows = client.get("/api/instruments/search?q=GOOGL").json()["results"]
+    assert rows[0]["instrument_code"] == "GOOGL_US_EQ"
+    assert rows[0]["display_ticker"] == "GOOGL"
+
+
+_GOOGL_HELD = {
+    "account_kind": "stocks_isa", "ticker": "GOOGL", "instrument_code": "GOOGL_US_EQ",
+    "name": "Alphabet (Class A)", "yfinance_ticker": "GOOGL", "instrument_currency": "USD",
+    "quantity": 44.55, "average_price": 152.99, "current_price": 271.33,
+    "total_cost": 6815.0, "value": 12088.31, "ppl": 5272.23, "weight": 0.055,
+    "momentum_63d": None, "rsi_14": 60.0, "trend_score": 1.0, "volatility_30d": 0.2, "risk_flag": "ok",
+}
+
+
+def test_detail_held_identity_overrides_ambiguous_resolution(client, monkeypatch):
+    # resolve_primary_instrument picks the WRONG instrument (a GOOGL-symbol ETP), but
+    # the user holds the real Nasdaq Alphabet — the held identity must win.
+    monkeypatch.setattr(
+        portfolio_service, "resolve_primary_instrument",
+        lambda term, db: {"instrument_code": "GOOGL_EQ", "ticker": "GOOGL",
+                          "display_ticker": "GOOG", "name": "Leverage Shares 1x Alphabet", "currency": "GBX"},
+    )
+    monkeypatch.setattr(
+        portfolio_service, "get_portfolio_snapshot",
+        lambda db, ak="all", dc=None, **kw: {"positions": [_GOOGL_HELD], "account": {}, "metrics": {}},
+    )
+    monkeypatch.setattr(
+        leveraged_market, "get_price",
+        lambda t, c=None: {"ticker": "GOOGL", "yfinance_ticker": "GOOGL", "price": 271.33,
+                           "currency": "USD", "is_minor_unit": False, "change_pct": -0.029},
+    )
+    b = client.get("/api/instruments/GOOGL/detail").json()
+    assert b["held"] is True
+    assert b["instrument_code"] == "GOOGL_US_EQ"
+    assert b["name"] == "Alphabet (Class A)"
+    assert b["display_ticker"] == "GOOGL"
+    assert b["yfinance_ticker"] == "GOOGL"
