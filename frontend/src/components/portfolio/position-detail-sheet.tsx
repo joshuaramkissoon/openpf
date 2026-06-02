@@ -122,7 +122,7 @@ export function PositionDetailSheet({
                   ticker={position.yfinance_ticker || position.instrument_code || position.ticker}
                   period="6mo"
                   interval="1d"
-                  chartType="candlestick"
+                  chartType="line"
                   indicators={["sma20", "sma50"]}
                   height={340}
                   forecast={forecast}

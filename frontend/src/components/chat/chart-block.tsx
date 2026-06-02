@@ -198,7 +198,7 @@ export function ChartBlock({ spec }: { spec: string }) {
           ticker={value.ticker}
           period={value.period ?? '6mo'}
           interval={value.interval ?? '1d'}
-          chartType={value.chartType ?? 'candlestick'}
+          chartType={value.chartType ?? 'line'}
           indicators={value.indicators ?? ['sma20', 'sma50']}
           forecast={value.forecast ?? false}
           forecastHorizon={value.forecastHorizon ?? 30}

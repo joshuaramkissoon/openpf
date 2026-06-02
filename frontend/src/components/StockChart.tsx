@@ -13,11 +13,13 @@ import {
   type MACDPoint,
   type IndicatorPoint,
 } from '../api/charts'
+import { Tabs, TabsList, TabsTrigger } from './ui/tabs'
 
 interface Props {
   ticker: string
   period?: string
   interval?: string
+  /** Initial series style. Users can flip between line/candles via the in-chart toggle. */
   chartType?: 'candlestick' | 'line'
   indicators?: string[]
   height?: number
@@ -97,7 +99,7 @@ export function StockChart({
   ticker,
   period = '3mo',
   interval = '1d',
-  chartType = 'candlestick',
+  chartType = 'line',
   indicators = [],
   height = 300,
   forecast = false,
@@ -112,6 +114,14 @@ export function StockChart({
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ChartData | null>(null)
   const [collapsed, setCollapsed] = useState(false)
+
+  // Series style is user-toggleable in the header; seeded from the `chartType`
+  // prop (which defaults to the more digestible line view).
+  const [chartKind, setChartKind] = useState<'candlestick' | 'line'>(chartType)
+  // Honour an explicit chartType change from the parent (e.g. a new Archie spec).
+  useEffect(() => {
+    setChartKind(chartType)
+  }, [chartType])
 
   // Forecast cone state (only fetched when `forecast` is enabled).
   const forecastEnabled = forecast && interval === '1d'
@@ -201,7 +211,7 @@ export function StockChart({
     chartsRef.current.push(mainChart)
 
     // Primary series
-    if (chartType === 'candlestick') {
+    if (chartKind === 'candlestick') {
       const candleSeries = mainChart.addCandlestickSeries({
         upColor: '#5fb98a',
         downColor: '#e0635a',
@@ -459,7 +469,7 @@ export function StockChart({
       chartsRef.current.forEach((c) => c.remove())
       chartsRef.current = []
     }
-  }, [data, forecastData, chartType, height, collapsed, panelKeys.join(',')])
+  }, [data, forecastData, chartKind, height, collapsed, panelKeys.join(',')])
 
   if (loading) {
     return (
@@ -489,9 +499,7 @@ export function StockChart({
           className="flex items-center gap-2 text-sm text-foreground transition-colors hover:text-foreground/80"
         >
           <span className="font-semibold tracking-tight">{ticker}</span>
-          <span className="text-xs font-normal text-muted-foreground">
-            {period} · {chartType}
-          </span>
+          <span className="text-xs font-normal text-muted-foreground">{period}</span>
           <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
         </button>
 
@@ -530,6 +538,23 @@ export function StockChart({
               </LegendItem>
             )}
           </div>
+        )}
+
+        {!collapsed && (
+          <Tabs
+            value={chartKind}
+            onValueChange={(v) => setChartKind(v as 'candlestick' | 'line')}
+            className="ml-auto"
+          >
+            <TabsList className="h-7">
+              <TabsTrigger value="line" className="px-2.5 text-xs">
+                Line
+              </TabsTrigger>
+              <TabsTrigger value="candlestick" className="px-2.5 text-xs">
+                Candles
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
         )}
       </div>
 
