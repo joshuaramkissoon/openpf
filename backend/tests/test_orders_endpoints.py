@@ -63,13 +63,20 @@ class FakeClient:
         self._summary = summary or {}
         self._error = error
         self.cancelled = []
+        self.ticker_calls = []
 
     def get_pending_orders(self):
         if self._error:
             raise self._error
         return self._pending
 
-    def get_orders_history_page(self, *, limit=50, ticker=None):
+    def get_orders_history_page(self, *, limit=50):
+        if self._error:
+            raise self._error
+        return self._history
+
+    def get_orders_for_ticker(self, ticker, **_kw):
+        self.ticker_calls.append(ticker)
         if self._error:
             raise self._error
         return self._history
@@ -186,3 +193,32 @@ def test_execution_test_ip_restricted(client, session_factory, monkeypatch):
     resp = client.post("/api/orders/execution-test", json={"account_kind": "invest"})
     assert resp.status_code == 200
     assert resp.json()["test"]["result"] == "ip_restricted"
+
+
+def test_history_no_filter_uses_recent_page(client, session_factory, monkeypatch):
+    _seed_invest(session_factory)
+    fake = FakeClient(history=[{"order": {"id": "r1", "ticker": "AAPL_US_EQ", "quantity": 1.0, "status": "FILLED"}, "fill": {"price": 50.0}}])
+    monkeypatch.setattr(orders_api, "build_t212_client", lambda *a, **k: fake)
+
+    resp = client.get("/api/orders/history?account=invest")
+    assert resp.status_code == 200
+    assert fake.ticker_calls == []  # no server-side ticker filter without a term
+    assert len(resp.json()["orders"]) == 1
+
+
+def test_history_ticker_resolves_and_server_filters(client, session_factory, monkeypatch):
+    _seed_invest(session_factory)
+    # 'nvda' must resolve to the full instrument code via the metadata map.
+    monkeypatch.setattr(
+        orders_api, "_instrument_meta_map",
+        lambda db: {"NVDA_US_EQ": {"name": "NVIDIA", "ticker": "NVDA_US_EQ"}},
+    )
+    fake = FakeClient(history=[{"order": {"id": "h1", "ticker": "NVDA_US_EQ", "quantity": 2.0, "status": "FILLED", "dateCreated": "2025-01-01T00:00:00Z"}, "fill": {"price": 100.0, "quantity": 2.0}}])
+    monkeypatch.setattr(orders_api, "build_t212_client", lambda *a, **k: fake)
+
+    resp = client.get("/api/orders/history?account=invest&ticker=nvda")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert fake.ticker_calls == ["NVDA_US_EQ"]  # resolved bare 'nvda' → full code, server-filtered
+    assert len(body["orders"]) == 1
+    assert body["orders"][0]["ticker"] == "NVDA_US_EQ"

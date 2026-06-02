@@ -164,14 +164,17 @@ class T212Client:
         max_pages: int = 400,
         page_sleep: float = 1.2,
         max_429_retries: int = 6,
+        extra_params: dict[str, Any] | None = None,
         on_page: Callable[[list[dict[str, Any]], int], bool] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield every item from a cursor-paginated history feed, newest first.
 
         Retries on 429 with a bounded backoff (capped, honours reset header).
+        ``extra_params`` seeds the first request (e.g. a ``ticker`` filter); T212
+        carries it forward in ``nextPagePath`` so later pages keep it.
         ``on_page(items, page_index)`` is invoked once per fetched page; return
         False from it to stop early (resumable backfill checkpoints)."""
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit, **(extra_params or {})}
         for page in range(max_pages):
             attempt = 0
             while True:
@@ -232,21 +235,38 @@ class T212Client:
             return data["items"]
         return []
 
-    def get_orders_history_page(self, *, limit: int = 50, ticker: str | None = None) -> list[dict[str, Any]]:
+    def get_orders_history_page(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """A single (newest-first) page of order history for snappy UI loads.
 
         Unlike ``get_order_history`` (which walks every page with multi-second
         sleeps for a one-time backfill), this fetches just the first page so the
         Orders tab loads immediately. Each item is ``{"order": {...}, "fill": {...}}``."""
         params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
-        if ticker:
-            params["instrumentCode"] = ticker
         data, _ = self._request("GET", "/equity/history/orders", params=params)
         if isinstance(data, dict):
             return data.get("items", []) or []
         if isinstance(data, list):
             return data
         return []
+
+    def get_orders_for_ticker(self, ticker: str, *, max_pages: int = 6, page_sleep: float = 1.0) -> list[dict[str, Any]]:
+        """All orders for a single instrument across history, newest-first.
+
+        Uses T212's server-side ``ticker`` filter (note: ``instrumentCode`` is
+        silently ignored by this endpoint). A single instrument has few orders,
+        so this is bounded and cheap — unlike walking the whole unfiltered feed.
+        ``ticker`` must be the full instrument code (e.g. ``NVDA_US_EQ``)."""
+        code = (ticker or "").strip()
+        if not code:
+            return []
+        return list(
+            self._paginate_history(
+                "/equity/history/orders",
+                extra_params={"ticker": code},
+                max_pages=max_pages,
+                page_sleep=page_sleep,
+            )
+        )
 
     def place_market_order(self, instrument_code: str, quantity: float, *, extended_hours: bool = False) -> dict[str, Any]:
         self._require_execute()

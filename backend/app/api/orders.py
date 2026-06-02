@@ -145,6 +145,29 @@ def _resolve_accounts(account: str, store: ConfigStore) -> list[AccountKind]:
     return [value]  # type: ignore[list-item]
 
 
+def _resolve_instrument_codes(term: str, db: Session, *, limit: int = 3) -> list[str]:
+    """Map a user filter term to full T212 instrument code(s) for the server-side
+    ``ticker`` history filter. Prefers an exact symbol/code match (so 'nvda' →
+    'NVDA_US_EQ'); falls back to substring on code or name. Capped to keep the
+    number of per-ticker history calls small."""
+    q = (term or "").strip().upper()
+    if len(q) < 1:
+        return []
+    meta = _instrument_meta_map(db)
+    exact: list[str] = []
+    partial: list[str] = []
+    for code, info in meta.items():
+        symbol = code.split("_", 1)[0]
+        name = str(info.get("name", "")).upper()
+        if symbol == q or code == q:
+            exact.append(code)
+        elif q in code or q in name:
+            partial.append(code)
+    # Exact matches win; otherwise shortest codes first (closest match).
+    codes = exact or sorted(partial, key=len)
+    return codes[:limit]
+
+
 # ── endpoints ────────────────────────────────────────────────────────────
 
 
@@ -178,11 +201,29 @@ def order_history(
     names = _name_map(db)
     orders: list[OrderItem] = []
     errors: list[AccountError] = []
+    seen: set[tuple[str, str]] = set()
+
+    # With a filter term: resolve it to instrument code(s) and use T212's
+    # server-side `ticker` filter to pull that instrument's FULL history (cheap —
+    # one instrument has few orders). Without a term: the recent page.
+    codes = _resolve_instrument_codes(ticker, db) if (ticker and ticker.strip()) else []
+
     for kind in _resolve_accounts(account, store):
         try:
             client = build_t212_client(store, account_kind=kind)  # read key
-            for item in client.get_orders_history_page(limit=limit, ticker=ticker):
-                orders.append(_normalize_history(kind, item, names))
+            if ticker and ticker.strip():
+                items: list[dict] = []
+                for code in codes:
+                    items.extend(client.get_orders_for_ticker(code))
+            else:
+                items = client.get_orders_history_page(limit=limit)
+            for item in items:
+                normalized = _normalize_history(kind, item, names)
+                key = (kind, normalized.order_id or "")
+                if normalized.order_id and key in seen:
+                    continue
+                seen.add(key)
+                orders.append(normalized)
         except Exception as exc:  # noqa: BLE001
             c = classify_t212_error(exc, account_kind=kind)
             errors.append(AccountError(account_kind=kind, code=c.code, message=c.message))

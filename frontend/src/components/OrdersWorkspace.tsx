@@ -112,26 +112,38 @@ export function OrdersWorkspace({ onError }: Props) {
     [scope, onError],
   )
 
-  // Order history — fetched on-demand (never polled), then filtered CLIENT-SIDE.
-  // We don't pass the ticker to T212's instrumentCode filter (it needs the exact
-  // full code, e.g. NVDA_US_EQ) — substring matching here is what users expect.
-  const loadHistory = useCallback(async () => {
-    const id = ++histLoadId.current
-    setLoadingHistory(true)
-    try {
-      const res = await getOrderHistory(scope, undefined, 50)
-      if (id !== histLoadId.current) return
-      setHistory(res.orders)
-      setHistoryErrors(res.errors)
-    } catch (err) {
-      if (id !== histLoadId.current) return
-      setHistoryErrors([
-        { account_kind: scope, code: 'unknown', message: err instanceof Error ? err.message : 'Failed to load history' },
-      ])
-    } finally {
-      if (id === histLoadId.current) setLoadingHistory(false)
-    }
-  }, [scope])
+  // Order history — fetched on-demand (never polled). With a filter term, the
+  // backend resolves it to an instrument code and uses T212's server-side
+  // `ticker` filter to return that instrument's FULL history (not just the
+  // recent window). Without a term, the recent page. Client-side narrowing on
+  // top gives instant feedback while the (debounced) fetch is in flight.
+  const loadHistory = useCallback(
+    async (term?: string) => {
+      const id = ++histLoadId.current
+      setLoadingHistory(true)
+      try {
+        const res = await getOrderHistory(scope, term, 50)
+        if (id !== histLoadId.current) return
+        setHistory(res.orders)
+        setHistoryErrors(res.errors)
+      } catch (err) {
+        if (id !== histLoadId.current) return
+        setHistoryErrors([
+          { account_kind: scope, code: 'unknown', message: err instanceof Error ? err.message : 'Failed to load history' },
+        ])
+      } finally {
+        if (id === histLoadId.current) setLoadingHistory(false)
+      }
+    },
+    [scope],
+  )
+
+  // A filter of < 2 chars stays a recent-page client narrow; 2+ triggers the
+  // server-side full-history lookup for the matched instrument.
+  const serverTerm = useCallback(() => {
+    const t = tickerFilter.trim()
+    return t.length >= 2 ? t : undefined
+  }, [tickerFilter])
 
   const filteredHistory = useMemo(() => {
     const q = tickerFilter.trim().toLowerCase()
@@ -151,14 +163,15 @@ export function OrdersWorkspace({ onError }: Props) {
     return () => window.clearInterval(interval)
   }, [loadLive])
 
-  // History loads on mount + account change; the ticker filter is client-side.
+  // History loads on mount + account change + (debounced) filter change.
   useEffect(() => {
-    void loadHistory()
-  }, [loadHistory])
+    const t = window.setTimeout(() => void loadHistory(serverTerm()), 450)
+    return () => window.clearTimeout(t)
+  }, [loadHistory, serverTerm])
 
   async function handleRefresh() {
     setRefreshing(true)
-    await Promise.all([loadLive({ silent: true }), loadHistory()])
+    await Promise.all([loadLive({ silent: true }), loadHistory(serverTerm())])
     setRefreshing(false)
   }
 
@@ -200,7 +213,7 @@ export function OrdersWorkspace({ onError }: Props) {
         description: `${cancelTarget.name ?? cancelTarget.ticker ?? cancelTarget.order_id} on ${accountLabel(account)}`,
       })
       setCancelTarget(null)
-      await Promise.all([loadLive({ silent: true }), loadHistory()])
+      await Promise.all([loadLive({ silent: true }), loadHistory(serverTerm())])
     } catch (err) {
       toastApiError(err, 'Cancel failed')
     } finally {
@@ -284,7 +297,7 @@ export function OrdersWorkspace({ onError }: Props) {
 
       <SectionCard
         title="Order history"
-        description="Recent fills and cancellations, newest first"
+        description="Recent fills, newest first — filter by ticker to search full history"
         noPadding
         action={
           <InputGroup className="w-[190px]">
@@ -309,7 +322,7 @@ export function OrdersWorkspace({ onError }: Props) {
         ) : filteredHistory.length === 0 ? (
           <EmptyRow
             icon={Inbox}
-            text={tickerFilter.trim() ? `No recent orders match “${tickerFilter.trim()}”.` : 'No order history.'}
+            text={tickerFilter.trim() ? `No orders found for “${tickerFilter.trim()}”.` : 'No order history.'}
           />
         ) : (
           <OrdersTable orders={filteredHistory} showAccount={showAccountCol} history />
