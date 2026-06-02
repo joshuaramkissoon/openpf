@@ -11,7 +11,7 @@ from app.models.entities import AgentRun, Thesis, TradeIntent
 from app.services.analytics import signal_for_symbol
 from app.services.claude_agent_runtime import run_claude_analyst_cycle
 from app.services.config_store import ConfigStore
-from app.services.execution_service import approve_intent, execute_intent
+from app.services.execution_service import approve_intent, execute_intent, supersede_open_proposals
 from app.services.market_data import fetch_history
 from app.services.portfolio_service import get_portfolio_snapshot
 from app.services.regime_service import compute_regime
@@ -33,6 +33,57 @@ class ProposedIntent:
     metadata: dict[str, Any]
 
 
+def _dedupe_and_route(ideas: list[ProposedIntent], snapshot: dict[str, Any]) -> list[ProposedIntent]:
+    """Collapse per-account duplicates and route each intent to one account.
+
+    A name held in both Invest and ISA otherwise yields one near-identical
+    proposal per account. Keep a single representative per (symbol, side) — the
+    highest-confidence one — then route it:
+      • BUY  → prefer the ISA while it has free cash for the order (consumed
+               greedily across buys), else Invest. Buys can only use cash that's
+               actually in the account, so free cash is the real constraint —
+               not the £20k allowance (a *deposit* cap, tracked elsewhere).
+      • SELL → the account that holds the most of the name (so it's executable).
+    """
+    isa_cash = next(
+        (float(a.get("free_cash") or 0.0) for a in snapshot.get("accounts", [])
+         if a.get("account_kind") == "stocks_isa"),
+        0.0,
+    )
+    held: dict[tuple[str, str], float] = {}
+    for p in snapshot.get("positions", []):
+        key = (str(p.get("ticker", "")).upper(), p.get("account_kind"))
+        held[key] = held.get(key, 0.0) + float(p.get("value") or 0.0)
+
+    best: dict[tuple[str, str], ProposedIntent] = {}
+    order: list[tuple[str, str]] = []
+    for idea in ideas:
+        k = (idea.symbol.upper(), idea.side)
+        if k not in best:
+            order.append(k)
+            best[k] = idea
+        elif idea.confidence > best[k].confidence:
+            best[k] = idea
+
+    routed: list[ProposedIntent] = []
+    isa_remaining = isa_cash
+    for symbol, side in order:
+        idea = best[(symbol, side)]
+        if side == "buy":
+            if isa_remaining >= idea.estimated_notional:
+                acct = "stocks_isa"
+                isa_remaining -= idea.estimated_notional
+            else:
+                acct = "invest"
+        else:
+            isa_h = held.get((symbol, "stocks_isa"), 0.0)
+            inv_h = held.get((symbol, "invest"), 0.0)
+            acct = "stocks_isa" if isa_h >= inv_h else "invest"
+        idea.metadata = {**(idea.metadata or {}), "account_kind": acct}
+        routed.append(idea)
+    return routed
+
+
 def _market_regime() -> str:
     """Human-readable regime line for the agent run summary.
 
@@ -50,15 +101,61 @@ def _market_regime() -> str:
         return "neutral"
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _size_add(
+    *,
+    total_book: float,
+    current_weight: float,
+    max_weight: float,
+    momentum: float,
+    trend: float,
+    rsi: float,
+    volatility: float,
+    max_single: float,
+    free_cash: float,
+    min_trade: float = 25.0,
+) -> float:
+    """Conviction-, position-, and risk-aware size for a 'buy' add.
+
+    Sizes a fraction of the per-order limit by a 0–1 score, so each add reflects
+    the specific name and holding rather than a flat % of book:
+      • conviction — momentum, trend, and RSI headroom (the stock's signal),
+      • room       — how far the current weight sits below the cap (your position),
+      • vol_scale  — risk-parity-ish: higher volatility → smaller (the stock's risk).
+    Never exceeds the configured single-order cap or available cash; returns 0
+    when there's no room or the result is too small to be worth proposing."""
+    gap = max_weight - current_weight
+    if gap <= 0 or total_book <= 0 or max_weight <= 0:
+        return 0.0
+
+    mom = _clamp(momentum / 0.30, 0.0, 1.0)            # 30% 3m momentum ≈ full
+    tr = _clamp(trend, 0.0, 1.0)
+    rsi_room = _clamp((75.0 - rsi) / 25.0, 0.0, 1.0)   # fades as RSI → overbought
+    conviction = 0.5 * mom + 0.4 * tr + 0.1 * rsi_room
+
+    vol_scale = _clamp(0.25 / max(volatility, 0.05), 0.3, 1.0)
+    room_factor = _clamp(gap / max_weight, 0.0, 1.0)
+
+    score = conviction * vol_scale * room_factor
+    notional = min(max_single * score, free_cash)
+    return round(notional, 2) if notional >= min_trade else 0.0
+
+
 def _safe_qty(notional: float, price: float) -> float:
     if price <= 0:
         return 0.0
     return round(notional / price, 4)
 
 
-def _position_intents(snapshot: dict[str, Any], max_weight: float) -> list[ProposedIntent]:
+def _position_intents(snapshot: dict[str, Any], risk: dict[str, Any]) -> list[ProposedIntent]:
     positions: list[dict[str, Any]] = snapshot["positions"]
     total = float(snapshot["account"]["total"] or 0.0)
+    max_weight = float(risk.get("max_position_weight", 0.25))
+    max_single = float(risk.get("max_single_order_notional", 500.0))
+    free_cash = float(snapshot.get("metrics", {}).get("free_cash", 0.0) or 0.0)
     ideas: list[ProposedIntent] = []
 
     for p in positions:
@@ -115,7 +212,11 @@ def _position_intents(snapshot: dict[str, Any], max_weight: float) -> list[Propo
                 )
 
         if momentum > 0.1 and trend > 0.7 and rsi < 72 and weight < max_weight * 0.75 and price > 0:
-            notional = total * 0.015
+            notional = _size_add(
+                total_book=total, current_weight=weight, max_weight=max_weight,
+                momentum=momentum, trend=trend, rsi=rsi, volatility=vol,
+                max_single=max_single, free_cash=free_cash,
+            )
             qty = _safe_qty(notional, price)
             if qty > 0:
                 confidence = min(0.92, 0.55 + momentum + trend / 4)
@@ -161,9 +262,12 @@ def _position_intents(snapshot: dict[str, Any], max_weight: float) -> list[Propo
     return ideas
 
 
-def _watchlist_intents(snapshot: dict[str, Any], watchlist: list[str], max_weight: float) -> list[ProposedIntent]:
+def _watchlist_intents(snapshot: dict[str, Any], watchlist: list[str], risk: dict[str, Any]) -> list[ProposedIntent]:
     held = {str(row["ticker"]).upper() for row in snapshot["positions"]}
     total = float(snapshot["account"]["total"] or 0.0)
+    max_weight = float(risk.get("max_position_weight", 0.25))
+    max_single = float(risk.get("max_single_order_notional", 500.0))
+    free_cash = float(snapshot.get("metrics", {}).get("free_cash", 0.0) or 0.0)
     ideas: list[ProposedIntent] = []
     default_account = "invest"
     if snapshot.get("accounts"):
@@ -192,9 +296,15 @@ def _watchlist_intents(snapshot: dict[str, Any], watchlist: list[str], max_weigh
             except Exception:
                 continue
 
-            starter_weight = min(max_weight * 0.4, 0.04)
-            notional = max(total * starter_weight, 75.0)
-            qty = _safe_qty(notional, price)
+            # New position (current weight 0); size by conviction/vol against the
+            # per-order cap, same model as adds, but start at half the room to cap.
+            vol = float(getattr(signal, "volatility_30d", None) or 0.30)
+            notional = 0.5 * _size_add(
+                total_book=total, current_weight=0.0, max_weight=max_weight,
+                momentum=momentum, trend=trend, rsi=rsi, volatility=vol,
+                max_single=max_single, free_cash=free_cash,
+            )
+            qty = _safe_qty(notional, price) if notional > 0 else 0.0
             if qty <= 0:
                 continue
 
@@ -375,9 +485,13 @@ def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool
         ideas.extend(_claude_payload_to_intents(snapshot, claude_result.get("intents", []), risk))
 
     if not ideas:
-        ideas = _position_intents(snapshot, max_weight=float(risk["max_position_weight"]))
+        ideas = _position_intents(snapshot, risk)
         if include_watchlist:
-            ideas.extend(_watchlist_intents(snapshot, watchlist, max_weight=float(risk["max_position_weight"])))
+            ideas.extend(_watchlist_intents(snapshot, watchlist, risk))
+
+    # Collapse per-account duplicates (a name held in both accounts) into one
+    # proposal and route it (ISA-first by free cash; sells to the holding account).
+    ideas = _dedupe_and_route(ideas, snapshot)
 
     ideas = sorted(
         ideas,
@@ -407,6 +521,12 @@ def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool
     db.add(run)
     db.commit()
     db.refresh(run)
+
+    # A fresh batch of proposals supersedes the previous run's un-acted ones, so
+    # the queue reflects the latest run instead of stacking duplicate batches.
+    # Guarded: an empty run doesn't wipe still-relevant proposals.
+    if ideas:
+        supersede_open_proposals(db)
 
     created = 0
     for idea in ideas:

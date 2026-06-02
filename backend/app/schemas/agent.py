@@ -42,6 +42,7 @@ class TradeIntentItem(BaseModel):
     risk_score: float
     rationale: str
     broker_mode: str
+    account_kind: str | None = None
     approved_at: datetime | None = None
     executed_at: datetime | None = None
     broker_order_id: str | None = None

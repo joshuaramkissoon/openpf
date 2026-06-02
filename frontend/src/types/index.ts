@@ -236,6 +236,7 @@ export interface TradeIntent {
   risk_score: number
   rationale: string
   broker_mode: string
+  account_kind?: string | null
   approved_at?: string | null
   executed_at?: string | null
   broker_order_id?: string | null

@@ -56,6 +56,11 @@ export function IntentQueue({ intents, onApprove, onReject, onExecute }: Props) 
                     <span className="font-mono text-xs text-muted-foreground tabular-nums">
                       {intent.quantity.toFixed(4)} qty
                     </span>
+                    {intent.account_kind && (
+                      <Badge variant="outline" className="text-[10px] font-normal">
+                        {intent.account_kind === 'stocks_isa' ? 'ISA' : 'Invest'}
+                      </Badge>
+                    )}
                   </div>
                   <Badge variant={statusVariant(intent.status)}>{intent.status}</Badge>
                 </div>
@@ -78,7 +83,7 @@ export function IntentQueue({ intents, onApprove, onReject, onExecute }: Props) 
                   <span>
                     Notional{' '}
                     <span className="font-mono text-foreground tabular-nums">
-                      {formatMoney(intent.estimated_notional, 'USD')}
+                      {formatMoney(intent.estimated_notional, 'GBP')}
                     </span>
                   </span>
                   <span className="font-mono tabular-nums">{dayjs(intent.created_at).format('MMM D HH:mm')}</span>
