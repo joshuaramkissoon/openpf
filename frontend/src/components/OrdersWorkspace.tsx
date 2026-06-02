@@ -232,11 +232,15 @@ export function OrdersWorkspace({ onError }: Props) {
                     : 'Orders are simulated locally — nothing is sent to Trading 212.'
                 }
               >
-                {health.broker_mode === 'live' ? 'Live orders' : 'Paper (simulated)'}
+                {health.broker_mode === 'live' ? 'Live' : 'Paper (simulated)'}
               </Badge>
-              <Badge variant="outline" title="Which Trading 212 API the app reads from.">
-                {health.base_env} account
-              </Badge>
+              {/* Only surface the environment when it's the unusual demo account —
+                  no redundant "Live · live". */}
+              {health.base_env === 'demo' ? (
+                <Badge variant="outline" title="Reading from Trading 212's practice (demo) account.">
+                  demo account
+                </Badge>
+              ) : null}
             </>
           ) : null}
         </div>
