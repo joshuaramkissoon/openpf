@@ -607,7 +607,7 @@ export default function App() {
           <Plus className="size-4" />
         </Button>
       </div>
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-0.5 px-2 pb-2">
           {chatSessions.length === 0 ? (
             <p className="px-2 py-3 text-xs text-muted-foreground">No chats yet.</p>

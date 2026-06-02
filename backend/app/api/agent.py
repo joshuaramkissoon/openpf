@@ -39,6 +39,7 @@ from app.services.chat_service import (
     require_session,
     send_message,
 )
+from app.services.chat_title_service import retitle_in_request
 from app.services.claude_chat_runtime import claude_chat_runtime
 from app.services.claude_memory_service import schedule_memory_distillation
 from app.services.execution_service import ExecutionError, approve_intent, execute_intent, list_events, list_intents, reject_intent
@@ -411,6 +412,9 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             tool_calls=collected_tool_calls if collected_tool_calls else None,
         )
         schedule_memory_distillation(user_message=payload.content, assistant_message=assistant_text)
+        # (Re)title the chat once it has a real exchange, so the rail shows a
+        # meaningful name. Mutates session.title in place → reflected in `done`.
+        await retitle_in_request(db, session)
         await websocket.send_json({
             "type": "done",
             "session": _session_item(session).model_dump(mode="json"),

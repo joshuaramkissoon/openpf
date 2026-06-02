@@ -14,3 +14,4 @@ tenacity==9.0.0
 pytest==8.3.4
 claude-agent-sdk>=0.1.36
 mcp>=1.0.0
+google-genai==2.7.0
