@@ -12,6 +12,8 @@ export interface AccountSummary {
 export interface PositionItem {
   account_kind: 'invest' | 'stocks_isa' | string
   ticker: string
+  /** Real current market ticker (T212 shortName) for display; falls back to `ticker`. */
+  display_ticker?: string | null
   instrument_code: string
   name?: string | null
   /** yfinance symbol resolved from venue metadata (e.g. NUCGl_EQ → NUCG.L). */

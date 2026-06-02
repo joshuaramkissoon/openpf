@@ -91,6 +91,7 @@ def instrument_detail(
     instrument_code = ident.get("instrument_code") if ident else None
     name = (ident.get("name") if ident else None) or None
     display_symbol = (ident.get("ticker") if ident else None) or sym
+    display_ticker = (ident.get("display_ticker") if ident else None) or None
     yf_ticker = ident.get("yfinance_ticker") if ident else None
     native_currency = ident.get("currency") if ident else None
 
@@ -131,6 +132,7 @@ def instrument_detail(
         instrument_code = instrument_code or first.get("instrument_code")
         if display_symbol == sym and first.get("ticker"):
             display_symbol = first["ticker"]
+        display_ticker = display_ticker or first.get("display_ticker")
 
     # ── 4. Signals: prefer the held row; fall back to technicals for RSI/trend ─
     sig_row = next((p for p in matched if p.get("rsi_14") is not None), matched[0] if matched else None)
@@ -225,6 +227,7 @@ def instrument_detail(
 
     return InstrumentDetail(
         ticker=display_symbol or sym,
+        display_ticker=display_ticker or display_symbol or sym,
         instrument_code=instrument_code,
         name=name,
         yfinance_ticker=yf_ticker,

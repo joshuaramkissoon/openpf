@@ -16,6 +16,9 @@ from pydantic import BaseModel, Field
 class InstrumentSearchRow(BaseModel):
     instrument_code: str | None = None
     ticker: str
+    # Real market ticker for display (T212's shortName), falling back to ``ticker``
+    # when there's no distinct market symbol. ``ticker`` stays canonical for keys.
+    display_ticker: str | None = None
     name: str = ""
     currency: str | None = None
 
@@ -85,6 +88,8 @@ class InstrumentThesis(BaseModel):
 class InstrumentDetail(BaseModel):
     # Identity
     ticker: str
+    # Real market ticker for display; ``ticker`` stays canonical for resolution.
+    display_ticker: str | None = None
     instrument_code: str | None = None
     name: str | None = None
     yfinance_ticker: str | None = None

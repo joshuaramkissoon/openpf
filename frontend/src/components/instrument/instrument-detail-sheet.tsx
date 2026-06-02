@@ -108,10 +108,10 @@ export function InstrumentDetailSheet({
     try {
       if (detail.watchlist) {
         await deleteWatchlistItem(detail.watchlist.id)
-        toast.success(`Removed ${detail.ticker} from watchlist`)
+        toast.success(`Removed ${detail.display_ticker || detail.ticker} from watchlist`)
       } else {
         await createWatchlistItem({ symbol: ticker })
-        toast.success(`Added ${detail.ticker} to watchlist`)
+        toast.success(`Added ${detail.display_ticker || detail.ticker} to watchlist`)
       }
       await loadDetail()
       onWatchlistChanged?.()
@@ -137,6 +137,7 @@ export function InstrumentDetailSheet({
   }
 
   const name = detail?.name ?? hint?.name ?? null
+  const displayTicker = detail?.display_ticker || detail?.ticker || ticker || ""
   const headerCurrency = detail?.currency ?? hint?.currency ?? currency
   const price = detail?.price ?? hint?.price ?? null
   const changePct = detail?.change_pct ?? hint?.change_pct ?? null
@@ -153,7 +154,7 @@ export function InstrumentDetailSheet({
           <>
             <SheetHeader className="border-b border-border/60 px-6 py-5">
               <div className="flex items-center gap-2.5">
-                <SheetTitle className="text-2xl font-semibold tracking-tight">{detail?.ticker || ticker}</SheetTitle>
+                <SheetTitle className="text-2xl font-semibold tracking-tight">{displayTicker}</SheetTitle>
                 {detail?.held && detail.position
                   ? detail.position.accounts.map((a) => (
                       <Badge key={a} variant="outline" className="text-muted-foreground">
@@ -230,7 +231,7 @@ export function InstrumentDetailSheet({
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      onAskArchie(detail?.ticker || ticker, name)
+                      onAskArchie(displayTicker, name)
                       onOpenChange(false)
                     }}
                   >
@@ -347,7 +348,7 @@ export function InstrumentDetailSheet({
                     {ordersLoading ? "Loading order history…" : "Load order history"}
                   </Button>
                 ) : orders.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No orders found for {detail?.ticker || ticker}.</p>
+                  <p className="text-xs text-muted-foreground">No orders found for {displayTicker}.</p>
                 ) : (
                   <>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
