@@ -180,7 +180,7 @@ _WL_NEWS_LOOKBACK_DAYS = 1
 
 
 def _watch_watchlist_target(db: Session, seen: set[str], out: list[Alert]) -> None:
-    from app.services.leveraged_market import get_price
+    from app.services.leveraged_market import get_price, is_minor_unit_currency
     from app.services import watchlist_service
 
     for item in watchlist_service.monitored_items(db):
@@ -189,10 +189,16 @@ def _watch_watchlist_target(db: Session, seen: set[str], out: list[Alert]) -> No
         if level is None or direction not in ("above", "below"):
             continue
         try:
-            price = float(get_price(item.symbol).get("price") or 0.0)
+            quote = get_price(item.symbol)
+            price = float(quote.get("price") or 0.0)
         except Exception:  # noqa: BLE001
             continue
         if price <= 0:
+            continue
+        # GBX/pence (and other minor-unit) venues quote ~100x the major unit, so a
+        # target typed in the major unit would mis-fire by 100x. Skip rather than
+        # raise a wrong alert — targets are reliable only on major-unit quotes.
+        if is_minor_unit_currency(quote.get("currency")):
             continue
         breached = (direction == "above" and price >= level) or (direction == "below" and price <= level)
         if not breached:
@@ -283,8 +289,13 @@ def _watch_watchlist_news(db: Session, seen: set[str], out: list[Alert]) -> None
         headline = (top.get("headline") or "").strip()
         if not headline or not url:
             continue
-        key = f"wl_news:{tk}:{url}"  # dedupe by article — never re-fires for the same story
+        key = f"wl_news:{tk}:{url}"  # dedupe by article URL
         if key in seen:
+            continue
+        # A news article is a point-in-time event: once flagged it should never
+        # re-fire, even after Josh dismisses it (dismissed keys are absent from
+        # `seen`). So check ALL statuses for this exact article, not just open ones.
+        if db.execute(select(Alert.id).where(Alert.dedupe_key == key)).first():
             continue
         seen.add(key)
         out.append(Alert(

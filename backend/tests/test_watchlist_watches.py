@@ -15,6 +15,7 @@ import app.services.leveraged_market as lm
 import app.services.watch_service as ws
 from app.core.database import Base
 from app.models import entities  # noqa: F401
+from app.models.entities import Alert
 from app.services import watchlist_service as wl
 
 
@@ -51,11 +52,20 @@ def test_target_not_breached_silent(db, monkeypatch):
 
 
 def test_target_above_breach_alerts(db, monkeypatch):
-    monkeypatch.setattr(lm, "get_price", lambda *a, **k: {"price": 185.0})
+    monkeypatch.setattr(lm, "get_price", lambda *a, **k: {"price": 185.0, "currency": "USD"})
     item = wl.add_item(db, "NVDA")
     wl.update_item(db, item.id, {"target_price": 180.0, "target_direction": "above"})
     out = _run(ws._watch_watchlist_target, db)
     assert len(out) == 1 and out[0].source == "wl_target"
+
+
+def test_target_skips_minor_unit_currency_to_avoid_100x_mismatch(db, monkeypatch):
+    # A .L name quotes in pence (GBX). A target typed in the major unit would
+    # mis-fire 100x — the watch must skip rather than raise a wrong alert.
+    monkeypatch.setattr(lm, "get_price", lambda *a, **k: {"price": 33000.0, "currency": "GBX"})
+    item = wl.add_item(db, "VOD.L")
+    wl.update_item(db, item.id, {"target_price": 350.0, "target_direction": "above"})
+    assert _run(ws._watch_watchlist_target, db) == []
 
 
 def test_muted_item_is_not_watched(db, monkeypatch):
@@ -122,4 +132,17 @@ def test_news_alerts_newest_and_dedupes_by_url(db, monkeypatch):
 def test_news_silent_when_no_headline(db, monkeypatch):
     monkeypatch.setattr(intel, "get_company_news", lambda tk, since_days=1, limit=5: [])
     wl.add_item(db, "KEYS")
+    assert _run(ws._watch_watchlist_news, db) == []
+
+
+def test_news_does_not_refire_after_dismissal(db, monkeypatch):
+    # A dismissed news alert's key is absent from the open `seen` set; the watch
+    # must still not re-create it (a story is a point-in-time event).
+    monkeypatch.setattr(intel, "get_company_news", lambda tk, since_days=1, limit=5: [
+        {"headline": "KEYS news", "url": "http://x/1", "summary": "", "source": "X"},
+    ])
+    wl.add_item(db, "KEYS")
+    db.add(Alert(category="watchlist", severity="info", source="wl_news", status="dismissed",
+                 dedupe_key="wl_news:KEYS:http://x/1", title="old", detail="x"))
+    db.commit()
     assert _run(ws._watch_watchlist_news, db) == []

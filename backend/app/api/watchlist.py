@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/watchlist", tags=["watchlist"])
 
+_SEV_RANK = {"critical": 0, "warning": 1, "info": 2}
+
 
 def _fetch_quote(symbol: str) -> dict[str, Any]:
     """Best-effort live price + day change for one symbol. Never raises."""
@@ -64,9 +66,11 @@ def list_watchlist(
     quotes = _quotes(symbols) if enrich else {}
     flag_map = wl.open_flag_counts(db, symbols)
     views = [_to_view(i, quotes.get(i.symbol, {}), flag_map.get(i.symbol, {})) for i in items]
-    # Items with fresh open flags float to the top so the board resurfaces activity.
-    views.sort(key=lambda v: (v.open_flags == 0, v.created_at or ""), reverse=False)
-    views.sort(key=lambda v: v.open_flags, reverse=True)
+    # Two stable passes: baseline newest-first, then float flagged (and, within
+    # equal flag counts, more-severe) items to the top — so the board resurfaces
+    # activity while keeping recent items above older ones in the unflagged tail.
+    views.sort(key=lambda v: v.created_at or "", reverse=True)
+    views.sort(key=lambda v: (-v.open_flags, _SEV_RANK.get(v.latest_severity or "", 3)))
     return views
 
 
