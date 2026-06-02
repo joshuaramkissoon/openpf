@@ -20,7 +20,7 @@ from sqlalchemy import select, update
 from app.core.config import get_settings
 from app.core.database import SessionLocal, init_db
 from app.models.entities import ChatMessage, ChatSession
-from app.services.chat_title_service import PLACEHOLDER_TITLES, build_transcript, generate_title
+from app.services.chat_title_service import build_transcript, generate_title, is_placeholder_title
 
 settings = get_settings()
 
@@ -61,8 +61,7 @@ async def main() -> None:
 
     considered = renamed = 0
     for session in sessions:
-        is_placeholder = (session.title or "").strip().lower() in PLACEHOLDER_TITLES
-        if not args.all and not is_placeholder:
+        if not args.all and not is_placeholder_title(session.title or ""):
             continue
 
         with SessionLocal() as db:

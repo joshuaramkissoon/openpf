@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -25,6 +26,15 @@ settings = get_settings()
 
 # Titles a session may carry before it has been named for real.
 PLACEHOLDER_TITLES = {"", "portfolio chat", "new chat"}
+# The UI's "New Chat" button stamps a timestamp title, e.g. "Chat Jun 1 10:19"
+# (dayjs "MMM D HH:mm"). Treat those as unnamed too, so they get a real title.
+_AUTO_TITLE_RE = re.compile(r"^chat [a-z]{3} \d{1,2} \d{2}:\d{2}$")
+
+
+def is_placeholder_title(title: str) -> bool:
+    """True if `title` is a generic/auto-generated default rather than a real name."""
+    normalized = (title or "").strip().lower()
+    return normalized in PLACEHOLDER_TITLES or bool(_AUTO_TITLE_RE.match(normalized))
 # Re-evaluate the title every N assistant turns (after the first) to catch drift.
 REEVAL_EVERY_ASSISTANT_TURNS = 5
 # Keep the title call cheap: cap how much conversation it sees.
@@ -91,8 +101,7 @@ def build_transcript(db: Session, session_id: str) -> str:
 
 
 def _build_prompt(current_title: str, transcript: str) -> str:
-    is_placeholder = current_title.strip().lower() in PLACEHOLDER_TITLES
-    if is_placeholder:
+    if is_placeholder_title(current_title):
         gate = "This conversation has no real title yet — give it one."
     else:
         gate = (
