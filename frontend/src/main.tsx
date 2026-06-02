@@ -8,7 +8,9 @@ import './index.css'
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <>
     <App />
-    {/* Operator theme is dark; pin the toaster to match (no next-themes provider). */}
-    <Toaster theme="dark" richColors position="top-right" closeButton />
+    {/* Operator theme is dark; pin the toaster to match (no next-themes provider).
+        No richColors — toasts use the slate popover tokens + a colored icon, which
+        is far less jarring than saturated full-bleed red/green panels. */}
+    <Toaster theme="dark" position="top-right" closeButton />
   </>
 )
