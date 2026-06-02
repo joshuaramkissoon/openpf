@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { toast } from 'sonner'
-import { AlertTriangle, Ban, CheckCircle2, Copy, Inbox, Loader2, RefreshCw, Search, ShieldAlert, Wifi } from 'lucide-react'
+import { AlertTriangle, Ban, CheckCircle2, Copy, Inbox, Loader2, RefreshCw, Search, ShieldAlert, ShieldCheck, Wifi } from 'lucide-react'
 
 import {
   cancelOrder,
@@ -31,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { accountLabel, formatMoney, formatNumber } from '@/utils/format'
@@ -40,7 +41,6 @@ import { cn } from '@/lib/utils'
 // T212 history endpoint is aggressively rate-limited, so it loads on demand only
 // (mount, account change, debounced filter, manual refresh).
 const POLL_MS = 20_000
-const FILTER_DEBOUNCE_MS = 400
 const ACCOUNTS: OrderAccount[] = ['invest', 'stocks_isa']
 
 interface Props {
@@ -112,12 +112,14 @@ export function OrdersWorkspace({ onError }: Props) {
     [scope, onError],
   )
 
-  // Order history — on-demand only (never polled). Errors surface inline, not as toasts.
+  // Order history — fetched on-demand (never polled), then filtered CLIENT-SIDE.
+  // We don't pass the ticker to T212's instrumentCode filter (it needs the exact
+  // full code, e.g. NVDA_US_EQ) — substring matching here is what users expect.
   const loadHistory = useCallback(async () => {
     const id = ++histLoadId.current
     setLoadingHistory(true)
     try {
-      const res = await getOrderHistory(scope, tickerFilter.trim() || undefined, 50)
+      const res = await getOrderHistory(scope, undefined, 50)
       if (id !== histLoadId.current) return
       setHistory(res.orders)
       setHistoryErrors(res.errors)
@@ -129,7 +131,15 @@ export function OrdersWorkspace({ onError }: Props) {
     } finally {
       if (id === histLoadId.current) setLoadingHistory(false)
     }
-  }, [scope, tickerFilter])
+  }, [scope])
+
+  const filteredHistory = useMemo(() => {
+    const q = tickerFilter.trim().toLowerCase()
+    if (!q) return history
+    return history.filter(
+      (o) => (o.ticker ?? '').toLowerCase().includes(q) || (o.name ?? '').toLowerCase().includes(q),
+    )
+  }, [history, tickerFilter])
 
   // Live data: load on scope change + poll while visible.
   useEffect(() => {
@@ -141,10 +151,9 @@ export function OrdersWorkspace({ onError }: Props) {
     return () => window.clearInterval(interval)
   }, [loadLive])
 
-  // History: debounced on scope/filter change (covers mount too).
+  // History loads on mount + account change; the ticker filter is client-side.
   useEffect(() => {
-    const t = window.setTimeout(() => void loadHistory(), FILTER_DEBOUNCE_MS)
-    return () => window.clearTimeout(t)
+    void loadHistory()
   }, [loadHistory])
 
   async function handleRefresh() {
@@ -250,7 +259,7 @@ export function OrdersWorkspace({ onError }: Props) {
         </Button>
       </div>
 
-      <ExecutionHealthCard
+      <ExecutionHealthBar
         health={health}
         loading={loadingLive && !health}
         testing={testing}
@@ -297,10 +306,13 @@ export function OrdersWorkspace({ onError }: Props) {
               <Skeleton key={i} className="h-10 rounded-lg" />
             ))}
           </div>
-        ) : history.length === 0 ? (
-          <EmptyRow icon={Inbox} text="No order history for this filter." />
+        ) : filteredHistory.length === 0 ? (
+          <EmptyRow
+            icon={Inbox}
+            text={tickerFilter.trim() ? `No recent orders match “${tickerFilter.trim()}”.` : 'No order history.'}
+          />
         ) : (
-          <OrdersTable orders={history} showAccount={showAccountCol} history />
+          <OrdersTable orders={filteredHistory} showAccount={showAccountCol} history />
         )}
         <AccountErrorNote errors={historyErrors} />
       </SectionCard>
@@ -456,7 +468,26 @@ function OrdersTable({
   )
 }
 
-function ExecutionHealthCard({
+function chipStatus(data: AccountExecutionHealth | undefined): { dotCls: string; label: string; labelCls: string } {
+  if (!data?.exec_configured) return { dotCls: 'bg-muted-foreground/40', label: 'no key', labelCls: 'text-muted-foreground' }
+  if (!data.exec_enabled) return { dotCls: 'bg-negative', label: 'off', labelCls: 'text-muted-foreground' }
+  switch (data.last_test?.result) {
+    case 'ok':
+      return { dotCls: 'bg-positive', label: 'ready', labelCls: 'text-muted-foreground' }
+    case 'ip_restricted':
+      return { dotCls: 'bg-warning', label: 'IP blocked', labelCls: 'text-warning' }
+    case 'auth_failed':
+      return { dotCls: 'bg-negative', label: 'rejected', labelCls: 'text-negative' }
+    case 'error':
+      return { dotCls: 'bg-negative', label: 'error', labelCls: 'text-negative' }
+    default:
+      return { dotCls: 'bg-muted-foreground/60', label: 'untested', labelCls: 'text-muted-foreground' }
+  }
+}
+
+// A condensed, always-on strip: per-account status dots + egress IP. Hover an
+// account for full detail + the Test-key action (replaces the big health card).
+function ExecutionHealthBar({
   health,
   loading,
   testing,
@@ -469,56 +500,42 @@ function ExecutionHealthCard({
   onTest: (account: OrderAccount) => void
   onCopyIp: () => void
 }) {
-  const isPaper = health?.broker_mode === 'paper'
   return (
-    <SectionCard
-      title="Execution health"
-      description="The IP-restricted write key — reads always use the unrestricted key"
-      action={
-        <div className="flex items-center gap-2 text-xs">
-          <Wifi className="size-3.5 text-muted-foreground" />
-          {loading ? (
-            <Skeleton className="h-4 w-24" />
-          ) : (
-            <>
-              <span className="text-muted-foreground">IP</span>
-              <span className="font-mono tabular-nums">{health?.egress_ip ?? 'unknown'}</span>
-              {health?.egress_ip ? (
-                <button type="button" onClick={onCopyIp} title="Copy IP" className="text-muted-foreground hover:text-foreground">
-                  <Copy className="size-3.5" />
-                </button>
-              ) : null}
-            </>
-          )}
-        </div>
-      }
-    >
-      {isPaper ? (
-        <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-          <AlertTriangle className="size-3.5 shrink-0" />
-          Broker mode is <span className="font-semibold">PAPER</span> — orders are simulated, not sent to Trading 212.
-        </div>
-      ) : null}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {ACCOUNTS.map((account) => (
-          <ExecAccountRow
-            key={account}
-            account={account}
-            data={health?.accounts?.[account]}
-            testing={testing === account}
-            onTest={() => onTest(account)}
-          />
-        ))}
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
+          <ShieldCheck className="size-3.5" />
+          Execution
+        </span>
+        {loading ? (
+          <Skeleton className="h-4 w-40" />
+        ) : (
+          ACCOUNTS.map((account) => (
+            <AccountStatusChip
+              key={account}
+              account={account}
+              data={health?.accounts?.[account]}
+              testing={testing === account}
+              onTest={() => onTest(account)}
+            />
+          ))
+        )}
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">
-        If a write is rejected for IP reasons, update the key's IP allowlist in Trading 212 to the IP shown above (or paste a
-        fresh key in Settings → Credentials), then re-test.
-      </p>
-    </SectionCard>
+      <div className="flex items-center gap-1.5 text-muted-foreground">
+        <Wifi className="size-3.5" />
+        <span>IP</span>
+        <span className="font-mono tabular-nums text-foreground">{health?.egress_ip ?? 'unknown'}</span>
+        {health?.egress_ip ? (
+          <button type="button" onClick={onCopyIp} title="Copy IP" className="hover:text-foreground">
+            <Copy className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
-function ExecAccountRow({
+function AccountStatusChip({
   account,
   data,
   testing,
@@ -529,36 +546,53 @@ function ExecAccountRow({
   testing: boolean
   onTest: () => void
 }) {
+  const status = chipStatus(data)
   const test = data?.last_test
   const badge = TEST_BADGE[test?.result ?? 'untested'] ?? TEST_BADGE.untested
   const BadgeIcon = badge.Icon
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{accountLabel(account)}</span>
-        <span className={cn('flex items-center gap-1 text-xs', badge.cls)}>
-          <BadgeIcon className="size-3.5" />
-          {badge.label}
-        </span>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-        <Badge variant={data?.read_configured ? 'secondary' : 'outline'}>
-          read {data?.read_configured ? 'set' : 'missing'}
-        </Badge>
-        <Badge variant={data?.exec_configured ? 'default' : 'outline'}>
-          exec {data?.exec_configured ? 'set' : 'missing'}
-        </Badge>
-        {data && !data.exec_enabled ? <Badge variant="destructive">exec off</Badge> : null}
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-[11px] text-muted-foreground">
-          {test?.checked_at ? `tested ${dayjs(test.checked_at).format('MMM D HH:mm')}` : 'not tested yet'}
-        </span>
-        <Button variant="outline" size="sm" className="h-7" onClick={onTest} disabled={testing || !data?.exec_configured}>
-          {testing ? <Loader2 className="size-3.5 animate-spin" /> : null}
-          Test key
-        </Button>
-      </div>
-    </div>
+    <HoverCard>
+      <HoverCardTrigger className="flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-0.5 outline-none transition-colors hover:bg-muted/60">
+        <span className={cn('size-2 rounded-full', status.dotCls)} />
+        <span className="font-medium text-foreground">{account === 'stocks_isa' ? 'ISA' : 'Invest'}</span>
+        <span className={status.labelCls}>{status.label}</span>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" className="w-64">
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">{accountLabel(account)}</span>
+            <span className={cn('flex items-center gap-1 text-xs', badge.cls)}>
+              <BadgeIcon className="size-3.5" />
+              {badge.label}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+            <Badge variant={data?.read_configured ? 'secondary' : 'outline'}>
+              read {data?.read_configured ? 'set' : 'missing'}
+            </Badge>
+            <Badge variant={data?.exec_configured ? 'default' : 'outline'}>
+              exec {data?.exec_configured ? 'set' : 'missing'}
+            </Badge>
+            {data && !data.exec_enabled ? <Badge variant="destructive">exec off</Badge> : null}
+          </div>
+          {test?.message ? <p className="text-[11px] text-muted-foreground">{test.message}</p> : null}
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[11px] text-muted-foreground">
+              {test?.checked_at ? `tested ${dayjs(test.checked_at).format('MMM D HH:mm')}` : 'not tested yet'}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              onClick={onTest}
+              disabled={testing || !data?.exec_configured}
+            >
+              {testing ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              Test key
+            </Button>
+          </div>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
   )
 }
