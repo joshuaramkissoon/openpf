@@ -75,7 +75,6 @@ export interface TelegramConfig {
 export interface AppConfig {
   risk: RiskConfig
   broker: BrokerConfig
-  watchlist: string[]
   telegram: TelegramConfig
   credentials: {
     invest: { account_kind: 'invest'; enabled: boolean; configured: boolean }
@@ -285,6 +284,30 @@ export interface Thesis {
   confidence: number
   status: string
   meta: Record<string, unknown>
+}
+
+export interface WatchlistItem {
+  id: string
+  created_at: string | null
+  updated_at: string | null
+  symbol: string
+  name: string
+  note: string
+  source: 'manual' | 'archie' | 'agent_run' | 'watchlist_review' | string
+  conviction: 'low' | 'medium' | 'high' | null
+  status: 'watching' | 'acted' | 'archived' | string
+  target_price: number | null
+  target_direction: 'above' | 'below' | null
+  monitor: boolean
+  last_reviewed_at: string | null
+  // Live enrichment (request-time; null on failure).
+  price: number | null
+  change_pct: number | null
+  currency: string | null
+  // Board "stays alive" signals.
+  open_flags: number
+  latest_flag: string | null
+  latest_severity: 'info' | 'warning' | 'critical' | null
 }
 
 export interface ChatSession {

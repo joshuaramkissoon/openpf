@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Settings,
   Shield,
+  Star,
   Telescope,
   type LucideIcon,
 } from "lucide-react"
@@ -35,6 +36,7 @@ const PRIVACY_ICON: Record<PrivacyMode, LucideIcon> = {
 export type SectionKey =
   | "overview"
   | "attention"
+  | "watchlist"
   | "chat"
   | "execution"
   | "leveraged"
@@ -55,6 +57,7 @@ const NAV: NavGroup[] = [
     items: [
       { key: "overview", label: "Portfolio", icon: LayoutDashboard },
       { key: "attention", label: "Attention", icon: Bell },
+      { key: "watchlist", label: "Watchlist", icon: Star },
       { key: "chat", label: "Archie", icon: MessageSquare },
     ],
   },

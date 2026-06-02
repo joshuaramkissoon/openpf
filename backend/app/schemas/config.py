@@ -41,10 +41,6 @@ class CredentialsPublicView(BaseModel):
     stocks_isa: AccountCredentialView
 
 
-class WatchlistConfig(BaseModel):
-    symbols: list[str]
-
-
 class LeveragedConfig(BaseModel):
     enabled: bool
     account_kind: Literal["stocks_isa"] = "stocks_isa"
@@ -63,7 +59,6 @@ class LeveragedConfig(BaseModel):
 class AppConfigResponse(BaseModel):
     risk: RiskConfig
     broker: BrokerConfig
-    watchlist: list[str]
     telegram: TelegramConfigView
     credentials: CredentialsPublicView
     leveraged: LeveragedConfig

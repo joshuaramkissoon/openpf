@@ -28,6 +28,7 @@ import { IntentQueue } from './components/IntentQueue'
 import { RuntimeDiagnosticsPanel } from './components/RuntimeDiagnosticsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ThesisBoard } from './components/ThesisBoard'
+import { WatchlistBoard } from './components/WatchlistBoard'
 import { LeveragedWorkspace } from './components/LeveragedWorkspace'
 import { ScheduledJobsWorkspace } from './components/ScheduledJobsWorkspace'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
@@ -209,6 +210,7 @@ function obfuscateSnapshot(snapshot: PortfolioSnapshot): PortfolioSnapshot {
 const SECTION_LABELS: Record<SectionKey, string> = {
   overview: 'Portfolio',
   attention: 'Attention',
+  watchlist: 'Watchlist',
   chat: 'Archie',
   execution: 'Execution',
   leveraged: 'Leveraged Desk',
@@ -224,6 +226,7 @@ const SECTION_LABELS: Record<SectionKey, string> = {
 const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
   overview: 'Holdings, allocation, and risk at a glance.',
   attention: "What Archie's spotted across your holdings, news, and macro — ranked.",
+  watchlist: 'Tracked ideas — Archie watches these and flags what\'s worth noticing.',
   execution: 'Review and act on proposed trade intents.',
   leveraged: 'Leveraged positions, rails, and signal queue.',
   jobs: 'Automated agent routines on a schedule.',
@@ -686,6 +689,7 @@ export default function App() {
     }
 
     if (activeSection === 'attention') return <AttentionFeed onError={setError} />
+    if (activeSection === 'watchlist') return <WatchlistBoard onError={setError} />
     if (activeSection === 'analysis') return <ResearchDesk accountView={accountView} onError={setError} />
     if (activeSection === 'leveraged') return <LeveragedWorkspace onError={setError} />
     if (activeSection === 'jobs') return <ScheduledJobsWorkspace onError={setError} />

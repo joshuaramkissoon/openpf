@@ -15,7 +15,6 @@ from app.schemas.config import (
     CredentialsPublicView,
     LeveragedConfig,
     RiskConfig,
-    WatchlistConfig,
 )
 from app.schemas.telegram import TelegramConfigUpdate, TelegramConfigView
 from app.services.config_store import ConfigStore
@@ -90,13 +89,6 @@ def update_account_credentials(
     store = ConfigStore(db)
     store.set_account_credentials(account_kind, payload.model_dump())
     return MessageResponse(message=f"{account_kind} credentials updated")
-
-
-@router.put("/watchlist", response_model=WatchlistConfig)
-def update_watchlist(payload: WatchlistConfig, db: Session = Depends(get_db)) -> WatchlistConfig:
-    store = ConfigStore(db)
-    value = store.set_watchlist(payload.model_dump())
-    return WatchlistConfig(**value)
 
 
 @router.put("/leveraged", response_model=LeveragedConfig)

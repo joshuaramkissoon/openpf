@@ -31,10 +31,6 @@ BROKER_DEFAULT = {
     "scheduler_enabled": settings.inproc_scheduler_enabled,
 }
 
-WATCHLIST_DEFAULT = {
-    "symbols": ["SPY", "QQQ", "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "META"],
-}
-
 CREDENTIALS_DEFAULT = {
     "invest": {
         "t212_api_key": str(settings.t212_invest_api_key or settings.t212_api_key_invest or settings.t212_api_key or "").strip(),
@@ -120,13 +116,6 @@ class ConfigStore:
     def set_broker(self, value: dict[str, Any]) -> dict[str, Any]:
         merged = {**self.get_broker(), **value}
         return self.set("broker_config", merged)
-
-    def get_watchlist(self) -> dict[str, Any]:
-        return self.get("watchlist", WATCHLIST_DEFAULT)
-
-    def set_watchlist(self, value: dict[str, Any]) -> dict[str, Any]:
-        symbols = [s.strip().upper() for s in value.get("symbols", []) if s.strip()]
-        return self.set("watchlist", {"symbols": symbols})
 
     @staticmethod
     def _normalize_credentials_fields(api_key: str, api_secret: str) -> dict[str, str]:
@@ -355,14 +344,12 @@ class ConfigStore:
     def assembled_public(self) -> dict[str, Any]:
         risk = self.get_risk()
         broker = self.get_broker()
-        watchlist = self.get_watchlist().get("symbols", [])
         telegram = self.telegram_public()
         credentials = self.credentials_public()
         leveraged = self.get_leveraged()
         return {
             "risk": risk,
             "broker": broker,
-            "watchlist": watchlist,
             "telegram": telegram,
             "credentials": credentials,
             "leveraged": leveraged,

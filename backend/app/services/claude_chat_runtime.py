@@ -19,7 +19,7 @@ from app.services.claude_sdk_config import (
     resolve_t212_env,
     runtime_info as sdk_runtime_info,
     _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
+    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS, _WATCHLIST_MCP_TOOLS,
 )
 
 settings = get_settings()
@@ -77,6 +77,12 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__scheduler__get_scheduled_task_logs": "Reading task logs",
     "mcp__scheduler__run_due_scheduled_tasks": "Running due tasks",
     "mcp__scheduler__seed_default_scheduled_tasks": "Seeding default tasks",
+    # Watchlist MCP tools
+    "mcp__watchlist__list_watchlist": "Reading the watchlist",
+    "mcp__watchlist__add_to_watchlist": "Adding to the watchlist",
+    "mcp__watchlist__update_watchlist_item": "Updating a watchlist item",
+    "mcp__watchlist__remove_from_watchlist": "Removing from the watchlist",
+    "mcp__watchlist__flag_watchlist_item": "Flagging a watchlist item",
 }
 
 
@@ -373,6 +379,17 @@ class ClaudeChatRuntime:
             }
             allowed_tools.extend(_INTEL_MCP_TOOLS)
 
+        # Watchlist MCP — Archie CRUDs the tracked-ideas board + flags into Attention.
+        watchlist_script = _MCP_SERVER_DIR / "watchlist.py"
+        if watchlist_script.is_file():
+            mcp_servers["watchlist"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(watchlist_script)],
+                "env": _mcp_env,
+            }
+            allowed_tools.extend(_WATCHLIST_MCP_TOOLS)
+
         self._info = {
             **runtime,
             "allowed_tools": allowed_tools,
@@ -392,7 +409,8 @@ class ClaudeChatRuntime:
                     "You have MCP market data tools for spot/historical/technical data, "
                     "fundamentals tools (get_fundamentals, get_valuation, get_financial_statements, "
                     "get_earnings_calendar) for company facts, valuation ratios, statements, and earnings, "
-                    "scheduler tools for cron task management, and a Kronos forecasting "
+                    "scheduler tools for cron task management, watchlist tools "
+                    "(list/add/update/remove + flag) for Josh's tracked-ideas board, and a Kronos forecasting "
                     "tool (forecast_prices) that projects a holding's close price over a "
                     "future horizon with p10/p50/p90 uncertainty bands. Treat forecasts as "
                     "probabilistic analysis with clear uncertainty, never as certainties or "
@@ -410,6 +428,9 @@ class ClaudeChatRuntime:
                     "{\"ticker\": \"MU\", \"period\": \"6mo\", \"indicators\": [\"sma20\", \"sma50\"], \"forecast\": true}; "
                     "the dashboard renders it as an interactive candlestick chart with SMAs and the Kronos forecast "
                     "cone. NEVER use matplotlib, Python, or image files to draw charts. "
+                    "When you recommend a name worth tracking (not an immediate trade), add it to the watchlist "
+                    "with add_to_watchlist and a concise note of WHY — that note is the condition the watch "
+                    "service later checks, so the idea resurfaces instead of being forgotten. "
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },

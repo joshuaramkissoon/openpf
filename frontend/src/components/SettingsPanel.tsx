@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Eye, EyeOff, Send, Shield, ShieldCheck } from 'lucide-react'
 
-import { setLeveragedAutoExecute, testTelegram, updateAccountCredentials, updateBroker, updateRisk, updateTelegram, updateWatchlist } from '../api/client'
+import { setLeveragedAutoExecute, testTelegram, updateAccountCredentials, updateBroker, updateRisk, updateTelegram } from '../api/client'
 import type { AppConfig } from '../types'
 
 import { SectionCard } from '@/components/kit'
@@ -45,7 +45,6 @@ export function SettingsPanel({
   const [isaKey, setIsaKey] = useState('')
   const [isaSecret, setIsaSecret] = useState('')
 
-  const [watchlistText, setWatchlistText] = useState('')
   const [telegramToken, setTelegramToken] = useState('')
   const [telegramChatId, setTelegramChatId] = useState('')
   const [telegramUsers, setTelegramUsers] = useState('')
@@ -152,24 +151,6 @@ export function SettingsPanel({
       onReload()
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to save ISA credentials'
-      onError(msg)
-    } finally {
-      setWorking(false)
-    }
-  }
-
-  async function saveWatchlist() {
-    setWorking(true)
-    try {
-      const parsed = watchlistText
-        .split(',')
-        .map((s) => s.trim().toUpperCase())
-        .filter(Boolean)
-      await updateWatchlist(parsed)
-      setWatchlistText('')
-      onReload()
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to update watchlist'
       onError(msg)
     } finally {
       setWorking(false)
@@ -491,26 +472,7 @@ export function SettingsPanel({
         </SectionCard>
       </div>
 
-      {/* Watchlist — full width */}
-      <SectionCard
-        title="Watchlist"
-        description={`Current: ${config?.watchlist?.join(', ') || 'none'}`}
-      >
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="watchlist_symbols">Symbols (comma-separated)</Label>
-            <Input
-              id="watchlist_symbols"
-              value={watchlistText}
-              onChange={(e) => setWatchlistText(e.target.value)}
-              placeholder="SMCI, AVGO, META"
-            />
-          </div>
-          <Button type="button" size="sm" onClick={() => void saveWatchlist()} disabled={working}>
-            Update watchlist
-          </Button>
-        </div>
-      </SectionCard>
+      {/* Watchlist moved to its own view — see the Watchlist tab in the sidebar. */}
 
       {/* Telegram Ops — full width */}
       <SectionCard

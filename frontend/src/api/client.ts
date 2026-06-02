@@ -17,6 +17,7 @@ import type {
   ChatRuntimeInfo,
   Thesis,
   TradeIntent,
+  WatchlistItem,
 } from '../types'
 
 const api = axios.create({
@@ -44,8 +45,36 @@ export async function setLeveragedAutoExecute(enabled: boolean) {
   return data
 }
 
-export async function updateWatchlist(symbols: string[]) {
-  const { data } = await api.put('/config/watchlist', { symbols })
+export async function getWatchlist(status = 'watching') {
+  const { data } = await api.get<WatchlistItem[]>('/watchlist', { params: { status } })
+  return data
+}
+
+export async function createWatchlistItem(payload: {
+  symbol: string
+  note?: string
+  conviction?: 'low' | 'medium' | 'high' | null
+  target_price?: number | null
+  target_direction?: 'above' | 'below' | null
+}) {
+  const { data } = await api.post<WatchlistItem>('/watchlist', payload)
+  return data
+}
+
+export async function updateWatchlistItem(id: string, patch: Partial<{
+  note: string
+  conviction: 'low' | 'medium' | 'high' | null
+  status: 'watching' | 'acted' | 'archived'
+  target_price: number | null
+  target_direction: 'above' | 'below' | null
+  monitor: boolean
+}>) {
+  const { data } = await api.patch<WatchlistItem>(`/watchlist/${id}`, patch)
+  return data
+}
+
+export async function deleteWatchlistItem(id: string) {
+  const { data } = await api.delete(`/watchlist/${id}`)
   return data
 }
 

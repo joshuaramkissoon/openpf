@@ -170,11 +170,152 @@ def _watch_thesis_invalidation(db: Session, seen: set[str], out: list[Alert]) ->
         ))
 
 
+# ── Watchlist watches — keep the watchlist from being a graveyard ─────────────
+# Watchlist items are first-class watched entities alongside holdings. These
+# raise `watchlist`-category alerts (which the board surfaces inline) so a tracked
+# idea resurfaces the moment its target is hit, it moves hard, earnings loom, or
+# material news lands — without Josh having to check it.
+
+_WL_NEWS_LOOKBACK_DAYS = 1
+
+
+def _watch_watchlist_target(db: Session, seen: set[str], out: list[Alert]) -> None:
+    from app.services.leveraged_market import get_price, is_minor_unit_currency
+    from app.services import watchlist_service
+
+    for item in watchlist_service.monitored_items(db):
+        level = item.target_price
+        direction = (item.target_direction or "").lower()
+        if level is None or direction not in ("above", "below"):
+            continue
+        try:
+            quote = get_price(item.symbol)
+            price = float(quote.get("price") or 0.0)
+        except Exception:  # noqa: BLE001
+            continue
+        if price <= 0:
+            continue
+        # GBX/pence (and other minor-unit) venues quote ~100x the major unit, so a
+        # target typed in the major unit would mis-fire by 100x. Skip rather than
+        # raise a wrong alert — targets are reliable only on major-unit quotes.
+        if is_minor_unit_currency(quote.get("currency")):
+            continue
+        breached = (direction == "above" and price >= level) or (direction == "below" and price <= level)
+        if not breached:
+            continue
+        key = f"wl_target:{item.symbol}:{direction}:{level}"  # stable — fires once until dismissed
+        if key in seen:
+            continue
+        seen.add(key)
+        arrow = "above" if direction == "above" else "below"
+        out.append(Alert(
+            category="watchlist", severity="warning", ticker=item.symbol,
+            dedupe_key=key, source="wl_target",
+            title=f"{item.symbol} hit your {level:g} level",
+            detail=f"{item.symbol} is at {price:.2f}, now {arrow} your watchlist target of {level:g}.",
+            consider=item.note.strip() or None,
+            meta={"watchlist_item_id": item.id, "level": level, "price": price, "direction": direction},
+        ))
+
+
+def _watch_watchlist_big_move(db: Session, seen: set[str], out: list[Alert]) -> None:
+    from app.services.leveraged_market import get_price
+    from app.services import watchlist_service
+
+    for item in watchlist_service.monitored_items(db):
+        tk = item.symbol
+        # Don't double-fire if the holdings big-move watch already alerted this name today.
+        if f"big_move:{tk}:{_today()}" in seen:
+            continue
+        try:
+            chg = float(get_price(tk).get("change_pct") or 0.0)
+        except Exception:  # noqa: BLE001
+            continue
+        if abs(chg) < _BIG_MOVE:
+            continue
+        key = f"wl_big_move:{tk}:{_today()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(Alert(
+            category="watchlist", severity="warning" if abs(chg) >= _BIG_MOVE_WARN else "info",
+            ticker=tk, dedupe_key=key, source="wl_big_move",
+            title=f"{tk} {chg * 100:+.1f}% today (watchlist)",
+            detail=f"{tk} on your watchlist has moved {chg * 100:+.1f}% on the day.",
+            consider=item.note.strip() or None,
+            meta={"watchlist_item_id": item.id, "change_pct": round(chg, 4)},
+        ))
+
+
+def _watch_watchlist_earnings(db: Session, seen: set[str], out: list[Alert]) -> None:
+    from app.services import intel_service, watchlist_service
+
+    for item in watchlist_service.monitored_items(db):
+        tk = item.symbol
+        nxt = (intel_service.get_earnings(tk) or {}).get("next")
+        if not nxt or nxt.get("days_away") is None:
+            continue
+        if not (0 <= nxt["days_away"] <= _EARNINGS_WINDOW_DAYS):
+            continue
+        # Skip if the holdings earnings watch already covered this date.
+        if f"earnings:{tk}:{nxt.get('date')}" in seen:
+            continue
+        key = f"wl_earnings:{tk}:{nxt.get('date')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(Alert(
+            category="watchlist", severity="info", ticker=tk, dedupe_key=key, source="wl_earnings",
+            title=f"{tk} reports in {nxt['days_away']}d ({nxt.get('date')})",
+            detail=f"{tk} on your watchlist reports on {nxt.get('date')} ({nxt.get('hour') or 'time TBD'}).",
+            consider=item.note.strip() or None,
+            meta={"watchlist_item_id": item.id, "date": nxt.get("date")},
+        ))
+
+
+def _watch_watchlist_news(db: Session, seen: set[str], out: list[Alert]) -> None:
+    from app.services import intel_service, watchlist_service
+
+    for item in watchlist_service.monitored_items(db):
+        tk = item.symbol
+        try:
+            news = intel_service.get_company_news(tk, since_days=_WL_NEWS_LOOKBACK_DAYS, limit=5)
+        except Exception:  # noqa: BLE001
+            continue
+        if not news:
+            continue
+        top = news[0]  # newest only — keep it high-signal, one per cycle per item
+        url = (top.get("url") or top.get("id") or "").strip()
+        headline = (top.get("headline") or "").strip()
+        if not headline or not url:
+            continue
+        key = f"wl_news:{tk}:{url}"  # dedupe by article URL
+        if key in seen:
+            continue
+        # A news article is a point-in-time event: once flagged it should never
+        # re-fire, even after Josh dismisses it (dismissed keys are absent from
+        # `seen`). So check ALL statuses for this exact article, not just open ones.
+        if db.execute(select(Alert.id).where(Alert.dedupe_key == key)).first():
+            continue
+        seen.add(key)
+        out.append(Alert(
+            category="watchlist", severity="info", ticker=tk, dedupe_key=key, source="wl_news",
+            title=f"{tk}: {headline[:140]}",
+            detail=(top.get("summary") or headline).strip()[:500] + (f"\n\n{top.get('source')}" if top.get("source") else ""),
+            consider=None,
+            meta={"watchlist_item_id": item.id, "url": url, "source": top.get("source")},
+        ))
+
+
 _WATCHES: list[tuple[str, Callable[[Session, set[str], list[Alert]], None]]] = [
     ("thesis_invalidation", _watch_thesis_invalidation),
     ("concentration", _watch_concentration),
     ("earnings", _watch_earnings),
     ("big_move", _watch_big_move),
+    ("watchlist_target", _watch_watchlist_target),
+    ("watchlist_big_move", _watch_watchlist_big_move),
+    ("watchlist_earnings", _watch_watchlist_earnings),
+    ("watchlist_news", _watch_watchlist_news),
 ]
 
 
