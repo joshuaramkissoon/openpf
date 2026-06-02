@@ -104,7 +104,14 @@ export async function updateLeveragedPolicy(payload: LeveragedConfig) {
 
 export async function updateAccountCredentials(
   account_kind: 'invest' | 'stocks_isa',
-  payload: { t212_api_key: string; t212_api_secret: string; enabled: boolean }
+  payload: {
+    t212_api_key?: string
+    t212_api_secret?: string
+    enabled?: boolean
+    exec_api_key?: string
+    exec_api_secret?: string
+    exec_enabled?: boolean
+  }
 ) {
   const { data } = await api.put(`/config/credentials/${account_kind}`, payload)
   return data
@@ -153,8 +160,15 @@ export async function rejectIntent(id: string, note?: string) {
   return data
 }
 
-export async function executeIntent(id: string, forceLive = false) {
-  const { data } = await api.post(`/agent/intents/${id}/execute`, { force_live: forceLive })
+export async function executeIntent(
+  id: string,
+  forceLive = false,
+  accountKind?: 'invest' | 'stocks_isa',
+) {
+  const { data } = await api.post(`/agent/intents/${id}/execute`, {
+    force_live: forceLive,
+    account_kind: accountKind,
+  })
   return data
 }
 

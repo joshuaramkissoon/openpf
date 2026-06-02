@@ -12,6 +12,7 @@ import {
   Lightbulb,
   ListChecks,
   MessageSquare,
+  Receipt,
   PanelLeftClose,
   Settings,
   Shield,
@@ -41,6 +42,7 @@ export type SectionKey =
   | "watchlist"
   | "chat"
   | "execution"
+  | "orders"
   | "leveraged"
   | "jobs"
   | "artifacts"
@@ -67,6 +69,7 @@ const NAV: NavGroup[] = [
     label: "Trading",
     items: [
       { key: "execution", label: "Execution", icon: ListChecks },
+      { key: "orders", label: "Orders", icon: Receipt },
       { key: "leveraged", label: "Leveraged", icon: Gauge },
     ],
   },

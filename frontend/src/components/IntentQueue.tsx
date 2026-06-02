@@ -1,17 +1,25 @@
+import { useState } from 'react'
 import dayjs from 'dayjs'
 import { Inbox } from 'lucide-react'
 
 import { SectionCard } from '@/components/kit'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { formatMoney, formatPercent } from '@/utils/format'
 import type { TradeIntent } from '@/types'
+
+type ExecAccount = 'invest' | 'stocks_isa'
 
 interface Props {
   intents: TradeIntent[]
   onApprove: (id: string) => void
   onReject: (id: string) => void
-  onExecute: (id: string) => void
+  onExecute: (id: string, accountKind: ExecAccount) => void
+}
+
+function defaultAccount(intent: TradeIntent): ExecAccount {
+  return intent.account_kind === 'stocks_isa' ? 'stocks_isa' : 'invest'
 }
 
 function statusVariant(status: string): 'default' | 'secondary' | 'outline' | 'destructive' {
@@ -22,6 +30,8 @@ function statusVariant(status: string): 'default' | 'secondary' | 'outline' | 'd
 }
 
 export function IntentQueue({ intents, onApprove, onReject, onExecute }: Props) {
+  // Explicit per-intent destination account — no silent 'invest' default.
+  const [accounts, setAccounts] = useState<Record<string, ExecAccount>>({})
   return (
     <SectionCard
       title="Execution Queue"
@@ -42,6 +52,7 @@ export function IntentQueue({ intents, onApprove, onReject, onExecute }: Props) 
         <div className="flex flex-col gap-3">
           {intents.map((intent) => {
             const actionable = intent.status === 'proposed' || intent.status === 'approved'
+            const account = accounts[intent.id] ?? defaultAccount(intent)
             return (
               <div
                 key={intent.id}
@@ -93,14 +104,30 @@ export function IntentQueue({ intents, onApprove, onReject, onExecute }: Props) 
                   <p className="text-xs text-negative">{intent.failure_reason}</p>
                 )}
 
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="mr-auto flex items-center gap-1.5">
+                    <span className="text-[11px] text-muted-foreground">Account</span>
+                    <Select
+                      value={account}
+                      onValueChange={(v) => setAccounts((prev) => ({ ...prev, [intent.id]: v as ExecAccount }))}
+                      disabled={!actionable}
+                    >
+                      <SelectTrigger size="sm" className="h-8 w-[130px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="invest">Invest</SelectItem>
+                        <SelectItem value="stocks_isa">Stocks ISA</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Button variant="ghost" size="sm" onClick={() => onReject(intent.id)} disabled={!actionable}>
                     Reject
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => onApprove(intent.id)} disabled={!actionable}>
                     Approve
                   </Button>
-                  <Button size="sm" onClick={() => onExecute(intent.id)} disabled={!actionable}>
+                  <Button size="sm" onClick={() => onExecute(intent.id, account)} disabled={!actionable}>
                     Execute
                   </Button>
                 </div>
