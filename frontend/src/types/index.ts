@@ -202,6 +202,44 @@ export interface SchedulerTask {
   meta: Record<string, unknown>
 }
 
+export interface TimelineRun {
+  log_id: number
+  ran_at: string
+  status: string
+  message: string
+  has_output: boolean
+  output_path?: string | null
+}
+
+export interface TimelinePastGroup {
+  task_id: string
+  name: string
+  task_kind: string
+  run_count: number
+  first_ran_at: string
+  last_ran_at: string
+  status_summary: Record<string, number>
+  runs: TimelineRun[]
+}
+
+export interface TimelineUpcoming {
+  task_id: string
+  name: string
+  task_kind: string
+  cron_expr: string
+  next_fire_at: string
+  remaining_today: number
+  fires: string[]
+}
+
+export interface SchedulerToday {
+  date: string
+  timezone: string
+  now: string
+  past: TimelinePastGroup[]
+  upcoming: TimelineUpcoming[]
+}
+
 export interface AgentRun {
   id: string
   created_at: string

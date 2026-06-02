@@ -4,7 +4,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -263,6 +263,139 @@ def _next_run_utc(cron_expr: str, tz_name: str, now_utc: datetime | None = None)
     if next_local is None:
         raise RuntimeError(f"invalid next run for cron '{cron_expr}'")
     return next_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def fires_in_window(cron_expr: str, tz_name: str, start: datetime, end: datetime) -> list[datetime]:
+    """All fire times of ``cron_expr`` in the half-open window ``(start, end]``.
+
+    Start-exclusive, end-inclusive, evaluated in ``tz_name``. ``start``/``end``
+    must be timezone-aware; returned datetimes are aware (in ``tz_name``). The
+    loop is capped to stay bounded even on a pathological (e.g. every-minute)
+    cron over a long window.
+    """
+    tz = ZoneInfo(tz_name)
+    trigger = CronTrigger.from_crontab(cron_expr, timezone=tz)
+    fires: list[datetime] = []
+    # get_next_fire_time returns the first fire at-or-after its ``now`` arg, so we
+    # advance a cursor past each hit. Starting one tick past ``start`` makes the
+    # window start-exclusive.
+    cursor = start.astimezone(tz) + timedelta(microseconds=1)
+    for _ in range(2000):
+        nxt = trigger.get_next_fire_time(None, cursor)
+        if nxt is None or nxt > end:
+            break
+        fires.append(nxt)
+        cursor = nxt + timedelta(microseconds=1)
+    return fires
+
+
+def build_today_timeline(db: Session, tz_name: str = "Europe/London", now_utc: datetime | None = None) -> dict[str, Any]:
+    """Aggregate today's scheduler activity for the 'Today' timeline view.
+
+    ``past`` — task logs created today (in ``tz_name``), grouped per task,
+    newest-first within each group, groups ordered by their last run.
+    ``upcoming`` — for each enabled task, the fire times left before end-of-day
+    (collapsed: next fire + ``remaining_today`` + the full ``fires`` list).
+
+    Raises if ``tz_name`` is not a known IANA timezone (caller maps to 400).
+    """
+    tz = ZoneInfo(tz_name)  # raises ZoneInfoNotFoundError on unknown tz
+
+    now_naive = now_utc or _utcnow()
+    now_aware_utc = (
+        now_naive.replace(tzinfo=timezone.utc) if now_naive.tzinfo is None else now_naive.astimezone(timezone.utc)
+    )
+    now_local = now_aware_utc.astimezone(tz)
+
+    day_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end_local = day_start_local + timedelta(days=1) - timedelta(microseconds=1)
+    day_start_utc_naive = day_start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    now_utc_naive = now_aware_utc.replace(tzinfo=None)
+
+    def _to_local(dt_naive_utc: datetime) -> datetime:
+        return dt_naive_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+
+    # ── PAST — today's logs grouped per task (newest-first) ──
+    log_rows = list(
+        db.execute(
+            select(ScheduledTaskLog)
+            .where(
+                ScheduledTaskLog.created_at >= day_start_utc_naive,
+                ScheduledTaskLog.created_at <= now_utc_naive,
+            )
+            .order_by(desc(ScheduledTaskLog.created_at))
+        ).scalars().all()
+    )
+
+    tasks_by_id: dict[str, ScheduledTask] = {}
+    task_ids = {row.task_id for row in log_rows}
+    if task_ids:
+        for task in db.execute(select(ScheduledTask).where(ScheduledTask.id.in_(task_ids))).scalars().all():
+            tasks_by_id[task.id] = task
+
+    groups: dict[str, dict[str, Any]] = {}
+    for row in log_rows:  # desc order → first seen per task is its most recent run
+        ran_at = _to_local(row.created_at)
+        group = groups.get(row.task_id)
+        if group is None:
+            task = tasks_by_id.get(row.task_id)
+            group = {
+                "task_id": row.task_id,
+                "name": task.name if task else row.task_id,
+                "task_kind": str((task.meta or {}).get("task_kind") or "claude") if task else "claude",
+                "run_count": 0,
+                "first_ran_at": ran_at,
+                "last_ran_at": ran_at,  # newest run (first seen)
+                "status_summary": {"ok": 0, "error": 0, "running": 0},
+                "runs": [],
+            }
+            groups[row.task_id] = group
+        group["run_count"] += 1
+        group["first_ran_at"] = ran_at  # overwritten each row → ends as the oldest
+        status = row.status or "ok"
+        group["status_summary"][status] = group["status_summary"].get(status, 0) + 1
+        group["runs"].append({
+            "log_id": row.id,
+            "ran_at": ran_at,
+            "status": row.status,
+            "message": row.message or "",
+            "has_output": bool(row.output_path),
+            "output_path": row.output_path,
+        })
+
+    past = sorted(groups.values(), key=lambda g: g["last_ran_at"])
+
+    # ── UPCOMING — remaining fires today per enabled task (collapsed) ──
+    upcoming: list[dict[str, Any]] = []
+    enabled_tasks = list(
+        db.execute(select(ScheduledTask).where(ScheduledTask.enabled.is_(True))).scalars().all()
+    )
+    for task in enabled_tasks:
+        try:
+            fires = fires_in_window(task.cron_expr, task.timezone or tz_name, now_local, day_end_local)
+        except Exception:  # noqa: BLE001 — a bad cron must not 500 the whole view
+            continue
+        if not fires:
+            continue
+        fires_local = [f.astimezone(tz) for f in fires]
+        upcoming.append({
+            "task_id": task.id,
+            "name": task.name,
+            "task_kind": str((task.meta or {}).get("task_kind") or "claude"),
+            "cron_expr": task.cron_expr,
+            "next_fire_at": fires_local[0],
+            "remaining_today": len(fires_local) - 1,
+            "fires": fires_local,
+        })
+    upcoming.sort(key=lambda u: u["next_fire_at"])
+
+    return {
+        "date": day_start_local.strftime("%Y-%m-%d"),
+        "timezone": tz_name,
+        "now": now_local,
+        "past": past,
+        "upcoming": upcoming,
+    }
 
 
 def _serialize_task(task: ScheduledTask) -> dict[str, Any]:
