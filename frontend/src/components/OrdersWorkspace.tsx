@@ -79,6 +79,8 @@ export function OrdersWorkspace({ onError }: Props) {
   const [pendingErrors, setPendingErrors] = useState<AccountError[]>([])
   const [history, setHistory] = useState<OrderItem[]>([])
   const [historyErrors, setHistoryErrors] = useState<AccountError[]>([])
+  const [historyCursors, setHistoryCursors] = useState<Record<string, string | null>>({})
+  const [loadingMore, setLoadingMore] = useState(false)
   const [health, setHealth] = useState<ExecutionHealthResponse | null>(null)
   const [loadingLive, setLoadingLive] = useState(true)
   const [loadingHistory, setLoadingHistory] = useState(true)
@@ -126,6 +128,7 @@ export function OrdersWorkspace({ onError }: Props) {
         if (id !== histLoadId.current) return
         setHistory(res.orders)
         setHistoryErrors(res.errors)
+        setHistoryCursors(res.next_cursors ?? {})
       } catch (err) {
         if (id !== histLoadId.current) return
         setHistoryErrors([
@@ -228,6 +231,50 @@ export function OrdersWorkspace({ onError }: Props) {
     else toast.message('Copy unavailable here', { description: `Select it manually: ${health.egress_ip}` })
   }
 
+  // Accounts covered by the current scope, and whether any has an older page.
+  const scopeAccounts: OrderAccount[] = scope === 'all' ? ACCOUNTS : [scope]
+  const hasMore = scopeAccounts.some((a) => historyCursors[a])
+
+  // "Load more" pages one older page per in-scope account (cursor-based, so the
+  // rate-limited history feed is only hit on an explicit click). Only available
+  // for the unfiltered view — a ticker filter already returns full history.
+  async function loadMore() {
+    if (loadingMore) return
+    const targets = scopeAccounts.filter((a) => historyCursors[a])
+    if (!targets.length) return
+    setLoadingMore(true)
+    try {
+      const results = await Promise.all(
+        targets.map((a) => getOrderHistory(a, undefined, 50, historyCursors[a] || undefined)),
+      )
+      setHistory((prev) => {
+        const seen = new Set(prev.map((o) => `${o.account_kind}:${o.order_id}`))
+        const merged = [...prev]
+        for (const res of results) {
+          for (const o of res.orders) {
+            const key = `${o.account_kind}:${o.order_id}`
+            if (o.order_id && seen.has(key)) continue
+            seen.add(key)
+            merged.push(o)
+          }
+        }
+        merged.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+        return merged
+      })
+      setHistoryCursors((prev) => {
+        const next = { ...prev }
+        targets.forEach((a, i) => {
+          next[a] = results[i].next_cursors?.[a] ?? null
+        })
+        return next
+      })
+    } catch (err) {
+      toastApiError(err, 'Failed to load more')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   const showAccountCol = scope === 'all'
 
   return (
@@ -327,6 +374,16 @@ export function OrdersWorkspace({ onError }: Props) {
         ) : (
           <OrdersTable orders={filteredHistory} showAccount={showAccountCol} history />
         )}
+        {/* Load more only for the unfiltered view — a ticker filter already
+            returns that instrument's full history. */}
+        {!tickerFilter.trim() && hasMore ? (
+          <div className="flex justify-center border-t border-border/60 py-2.5">
+            <Button variant="ghost" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+              {loadingMore ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              Load older orders
+            </Button>
+          </div>
+        ) : null}
         <AccountErrorNote errors={historyErrors} />
       </SectionCard>
 
@@ -452,7 +509,9 @@ function OrdersTable({
                 {o.value != null ? formatMoney(Math.abs(o.value), 'GBP') : '—'}
               </TableCell>
               <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">
-                {o.created_at ? dayjs(o.created_at).format('MMM D HH:mm') : '—'}
+                {o.created_at
+                  ? dayjs(o.created_at).format(history ? 'MMM D, YYYY HH:mm' : 'MMM D HH:mm')
+                  : '—'}
               </TableCell>
               <TableCell>
                 <Badge variant={statusBadgeVariant(o.status)} className="text-[10px]">

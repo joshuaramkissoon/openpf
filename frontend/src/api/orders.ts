@@ -35,6 +35,8 @@ export interface AccountError {
 export interface OrdersResponse {
   orders: OrderItem[]
   errors: AccountError[]
+  /** Per-account opaque cursor for the next (older) history page; null when exhausted. */
+  next_cursors?: Record<string, string | null>
 }
 
 export interface CancelOrderResponse {
@@ -89,9 +91,10 @@ export async function getOrderHistory(
   account: OrderScope = 'all',
   ticker?: string,
   limit = 50,
+  cursor?: string,
 ): Promise<OrdersResponse> {
   const { data } = await api.get<OrdersResponse>('/orders/history', {
-    params: { account, ticker: ticker || undefined, limit },
+    params: { account, ticker: ticker || undefined, limit, cursor: cursor || undefined },
   })
   return data
 }

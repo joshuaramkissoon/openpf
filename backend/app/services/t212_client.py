@@ -235,19 +235,25 @@ class T212Client:
             return data["items"]
         return []
 
-    def get_orders_history_page(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        """A single (newest-first) page of order history for snappy UI loads.
+    def get_orders_history_page(
+        self, *, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """One (newest-first) page of order history, for user-paced 'Load more'.
 
-        Unlike ``get_order_history`` (which walks every page with multi-second
-        sleeps for a one-time backfill), this fetches just the first page so the
-        Orders tab loads immediately. Each item is ``{"order": {...}, "fill": {...}}``."""
-        params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
+        Returns ``(items, next_cursor)``. ``cursor`` is the opaque
+        ``nextPagePath`` from a previous page (None for the first page); the
+        returned ``next_cursor`` is None when there are no older orders. One page
+        per call keeps the rate-limited history endpoint happy (vs the multi-page
+        backfill walk in ``get_order_history``). Each item is
+        ``{"order": {...}, "fill": {...}}``."""
+        params = self._history_next_params(cursor) if cursor else {"limit": max(1, min(int(limit), 50))}
         data, _ = self._request("GET", "/equity/history/orders", params=params)
         if isinstance(data, dict):
-            return data.get("items", []) or []
+            items = data.get("items", []) or []
+            return items, (data.get("nextPagePath") or None)
         if isinstance(data, list):
-            return data
-        return []
+            return data, None
+        return [], None
 
     def get_orders_for_ticker(self, ticker: str, *, max_pages: int = 6, page_sleep: float = 1.0) -> list[dict[str, Any]]:
         """All orders for a single instrument across history, newest-first.
