@@ -1,12 +1,10 @@
-import { useState } from "react"
-
 import { Money, MoneyDelta, Pct, StatCard } from "@/components/kit"
+import { useInstrument } from "@/components/instrument/instrument-provider"
 import { accountLabel, formatNumber, formatPercent } from "@/utils/format"
 import type { PortfolioSnapshot, PositionItem } from "@/types"
 
 import { AllocationCard } from "./allocation-card"
 import { PortfolioHistoryCard } from "./portfolio-history-card"
-import { PositionDetailSheet } from "./position-detail-sheet"
 import { PositionsTable } from "./positions-table"
 import { RebalanceCard } from "./rebalance-card"
 
@@ -21,8 +19,7 @@ export function PortfolioOverview({
   accountView: "all" | "invest" | "stocks_isa"
   displayCurrency: "GBP" | "USD"
 }) {
-  const [selected, setSelected] = useState<PositionItem | null>(null)
-  const [open, setOpen] = useState(false)
+  const { openInstrument } = useInstrument()
 
   const { account, metrics, accounts } = snapshot
   const topWeight = positions.length ? Math.max(...positions.map((p) => p.weight)) : 0
@@ -30,8 +27,7 @@ export function PortfolioOverview({
   const accountRows = accountView === "all" ? accounts : accounts.filter((a) => a.account_kind === accountView)
 
   function handleSelect(p: PositionItem) {
-    setSelected(p)
-    setOpen(true)
+    openInstrument(p.ticker, { name: p.name, price: p.current_price })
   }
 
   return (
@@ -88,13 +84,6 @@ export function PortfolioOverview({
       </div>
 
       <RebalanceCard accountView={accountView} />
-
-      <PositionDetailSheet
-        position={selected}
-        currency={displayCurrency}
-        open={open}
-        onOpenChange={setOpen}
-      />
     </div>
   )
 }

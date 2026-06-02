@@ -19,6 +19,7 @@ import {
 import { toastApiError } from '@/lib/api-error'
 import { copyToClipboard } from '@/lib/clipboard'
 import { SectionCard } from '@/components/kit'
+import { useInstrument } from '@/components/instrument/instrument-provider'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
@@ -74,6 +75,7 @@ const TEST_BADGE: Record<string, { label: string; cls: string; Icon: typeof Chec
 }
 
 export function OrdersWorkspace({ onError }: Props) {
+  const { openInstrument } = useInstrument()
   const [scope, setScope] = useState<OrderScope>('all')
   const [pending, setPending] = useState<OrderItem[]>([])
   const [pendingErrors, setPendingErrors] = useState<AccountError[]>([])
@@ -337,7 +339,7 @@ export function OrdersWorkspace({ onError }: Props) {
         ) : pending.length === 0 ? (
           <EmptyRow icon={Inbox} text="No open orders." />
         ) : (
-          <OrdersTable orders={pending} showAccount={showAccountCol} showCancel onCancel={setCancelTarget} />
+          <OrdersTable orders={pending} showAccount={showAccountCol} showCancel onCancel={setCancelTarget} onOpenTicker={openInstrument} />
         )}
         <AccountErrorNote errors={pendingErrors} />
       </SectionCard>
@@ -372,7 +374,7 @@ export function OrdersWorkspace({ onError }: Props) {
             text={tickerFilter.trim() ? `No orders found for “${tickerFilter.trim()}”.` : 'No order history.'}
           />
         ) : (
-          <OrdersTable orders={filteredHistory} showAccount={showAccountCol} history />
+          <OrdersTable orders={filteredHistory} showAccount={showAccountCol} history onOpenTicker={openInstrument} />
         )}
         {/* Load more only for the unfiltered view — a ticker filter already
             returns that instrument's full history. */}
@@ -447,12 +449,14 @@ function OrdersTable({
   showCancel = false,
   history = false,
   onCancel,
+  onOpenTicker,
 }: {
   orders: OrderItem[]
   showAccount: boolean
   showCancel?: boolean
   history?: boolean
   onCancel?: (o: OrderItem) => void
+  onOpenTicker?: (ticker: string) => void
 }) {
   return (
     <div className="overflow-x-auto">
@@ -482,12 +486,21 @@ function OrdersTable({
                 </TableCell>
               ) : null}
               <TableCell className="min-w-0 max-w-[220px]">
-                <div className="flex flex-col">
-                  <span className="truncate font-medium">{o.name ?? o.ticker ?? '—'}</span>
-                  {o.name && o.ticker ? (
-                    <span className="truncate font-mono text-xs text-muted-foreground">{o.ticker}</span>
-                  ) : null}
-                </div>
+                {o.ticker ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTicker?.(o.ticker!)}
+                    className="flex flex-col items-start text-left hover:underline"
+                    title={`Open ${o.ticker}`}
+                  >
+                    <span className="truncate font-medium">{o.name ?? o.ticker}</span>
+                    {o.name ? (
+                      <span className="truncate font-mono text-xs text-muted-foreground">{o.ticker}</span>
+                    ) : null}
+                  </button>
+                ) : (
+                  <span className="truncate font-medium">{o.name ?? '—'}</span>
+                )}
               </TableCell>
               <TableCell>{sideBadge(o.side)}</TableCell>
               <TableCell className="text-xs text-muted-foreground">{o.type ?? '—'}</TableCell>

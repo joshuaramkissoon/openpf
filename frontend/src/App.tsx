@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
-import { Loader2, Menu, Plus, RefreshCw, X } from 'lucide-react'
+import { Loader2, Menu, Plus, RefreshCw, Search, X } from 'lucide-react'
 
 import {
   archiveThesis,
@@ -35,6 +35,7 @@ import { ScheduledJobsWorkspace } from './components/ScheduledJobsWorkspace'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { CostsWorkspace } from './components/CostsWorkspace'
 import { AppSidebar, SidebarBody, type SectionKey } from '@/components/layout/app-sidebar'
+import { InstrumentProvider, useInstrument } from '@/components/instrument/instrument-provider'
 import { AttentionFeed, AttentionChip } from '@/components/attention/attention-feed'
 import { PortfolioOverview } from '@/components/portfolio/portfolio-overview'
 import { ResearchDesk } from '@/components/research/research-desk'
@@ -256,6 +257,25 @@ const SECTION_DESCRIPTIONS: Partial<Record<SectionKey, string>> = {
   costs: 'Token usage on your Claude subscription (estimated).',
   diagnostics: 'Runtime, MCP servers, and capabilities.',
   help: 'What the app can do and how to use it.',
+}
+
+/** Header affordance for the Cmd+K instrument palette. Lives inside the
+ *  InstrumentProvider so it can reach the context. */
+function SpotlightTrigger() {
+  const { openPalette } = useInstrument()
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={openPalette}
+      className="gap-2 text-muted-foreground"
+      title="Jump to an instrument (⌘K)"
+    >
+      <Search className="size-4" />
+      <span className="hidden sm:inline">Jump to…</span>
+      <kbd className="hidden rounded border border-border/60 bg-muted/50 px-1 font-mono text-[10px] sm:inline">⌘K</kbd>
+    </Button>
+  )
 }
 
 export default function App() {
@@ -787,6 +807,13 @@ export default function App() {
 
   return (
     <PrivacyProvider mode={privacyMode}>
+    <InstrumentProvider
+      positions={displayPositions}
+      currency={displayCurrency}
+      onAskArchie={(ticker, name) =>
+        seedChat(`What's your current read on ${ticker}${name ? ` (${name})` : ''}? Anything I should act on?`)
+      }
+    >
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <AppSidebar
         active={activeSection}
@@ -837,8 +864,10 @@ export default function App() {
               </p>
             </div>
           </div>
-          {activeSection === 'overview' ? (
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <SpotlightTrigger />
+            {activeSection === 'overview' ? (
+            <>
             <Select
               value={accountView}
               onValueChange={(v) => {
@@ -882,8 +911,9 @@ export default function App() {
             >
               <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
             </Button>
+            </>
+            ) : null}
           </div>
-          ) : null}
         </header>
 
         <main className="min-h-0 flex-1 overflow-hidden">
@@ -990,6 +1020,7 @@ export default function App() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </InstrumentProvider>
     </PrivacyProvider>
   )
 }

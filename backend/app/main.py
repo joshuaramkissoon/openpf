@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, attention, broker, charts, config, costs, health, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
+from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.services.claude_chat_runtime import claude_chat_runtime
@@ -90,3 +90,4 @@ app.include_router(costs.router, prefix=settings.api_prefix)
 app.include_router(research.router, prefix=settings.api_prefix)
 app.include_router(attention.router, prefix=settings.api_prefix)
 app.include_router(watchlist.router, prefix=settings.api_prefix)
+app.include_router(instruments.router, prefix=settings.api_prefix)
