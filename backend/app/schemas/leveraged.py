@@ -20,6 +20,7 @@ class LeveragedPolicy(BaseModel):
     max_daily_trades: int = Field(default=0, ge=0)
     close_time_uk: str
     allow_overnight: bool
+    max_hold_days: int = Field(default=3, ge=0)
     scan_symbols: list[str]
     instrument_priority: list[str]
 
@@ -37,6 +38,7 @@ class LeveragedPolicyPatch(BaseModel):
     max_daily_trades: int | None = Field(default=None, ge=0)
     close_time_uk: str | None = None
     allow_overnight: bool | None = None
+    max_hold_days: int | None = Field(default=None, ge=0)
     scan_symbols: list[str] | None = None
     instrument_priority: list[str] | None = None
 
@@ -135,3 +137,40 @@ class LeveragedActionResponse(BaseModel):
 
 class CloseTradeRequest(BaseModel):
     reason: str = Field(default="manual")
+
+
+class HeldPosition(BaseModel):
+    instrument_code: str
+    symbol: str
+    name: str
+    account_kind: str
+    underlying: str | None = None
+    direction: str | None = None
+    factor: float | int | None = None
+    quantity: float
+    avg_price: float
+    current_price: float | None = None
+    notional: float
+    unrealized_pnl_value: float
+    unrealized_pnl_pct: float
+    tracked: bool = False
+    trade_id: str | None = None
+    days_held: int | None = None
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
+
+
+class HeldPositionsResponse(BaseModel):
+    positions: list[HeldPosition]
+
+
+class ClosePositionRequest(BaseModel):
+    instrument_code: str
+    quantity: float | None = Field(default=None, gt=0)
+    reason: str = Field(default="manual")
+
+
+class AdoptPositionRequest(BaseModel):
+    instrument_code: str
+    stop_loss_pct: float | None = Field(default=None, ge=0)
+    take_profit_pct: float | None = Field(default=None, ge=0)
