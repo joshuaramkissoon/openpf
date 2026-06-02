@@ -195,28 +195,36 @@ def order_history(
     account: str = Query("all"),
     ticker: str | None = Query(None),
     limit: int = Query(50, ge=1, le=50),
+    cursor: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> OrdersResponse:
     store = ConfigStore(db)
     names = _name_map(db)
     orders: list[OrderItem] = []
     errors: list[AccountError] = []
+    next_cursors: dict[str, str | None] = {}
     seen: set[tuple[str, str]] = set()
+    filtering = bool(ticker and ticker.strip())
 
     # With a filter term: resolve it to instrument code(s) and use T212's
     # server-side `ticker` filter to pull that instrument's FULL history (cheap —
-    # one instrument has few orders). Without a term: the recent page.
-    codes = _resolve_instrument_codes(ticker, db) if (ticker and ticker.strip()) else []
+    # one instrument has few orders), so no cursor paging is needed. Without a
+    # term: one page, with a per-account cursor for "Load more". A `cursor` only
+    # applies when one account was requested (the frontend pages "all" by issuing
+    # one call per account).
+    codes = _resolve_instrument_codes(ticker, db) if filtering else []
+    requested = (account or "").strip().lower()
 
     for kind in _resolve_accounts(account, store):
         try:
             client = build_t212_client(store, account_kind=kind)  # read key
-            if ticker and ticker.strip():
+            if filtering:
                 items: list[dict] = []
                 for code in codes:
                     items.extend(client.get_orders_for_ticker(code))
             else:
-                items = client.get_orders_history_page(limit=limit)
+                acct_cursor = cursor if requested == kind else None
+                items, next_cursors[kind] = client.get_orders_history_page(limit=limit, cursor=acct_cursor)
             for item in items:
                 normalized = _normalize_history(kind, item, names)
                 key = (kind, normalized.order_id or "")
@@ -227,9 +235,10 @@ def order_history(
         except Exception as exc:  # noqa: BLE001
             c = classify_t212_error(exc, account_kind=kind)
             errors.append(AccountError(account_kind=kind, code=c.code, message=c.message))
+            next_cursors[kind] = None
     # Newest first across accounts (was grouped by account before this sort).
     orders.sort(key=lambda o: o.created_at or "", reverse=True)
-    return OrdersResponse(orders=orders, errors=errors)
+    return OrdersResponse(orders=orders, errors=errors, next_cursors=next_cursors)
 
 
 @router.delete("/{order_id}", response_model=CancelOrderResponse)

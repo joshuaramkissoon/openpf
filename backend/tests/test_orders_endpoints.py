@@ -57,23 +57,26 @@ def client(session_factory, monkeypatch):
 
 
 class FakeClient:
-    def __init__(self, *, pending=None, history=None, summary=None, error=None):
+    def __init__(self, *, pending=None, history=None, summary=None, error=None, next_cursor=None):
         self._pending = pending or []
         self._history = history or []
         self._summary = summary or {}
         self._error = error
+        self._next_cursor = next_cursor
         self.cancelled = []
         self.ticker_calls = []
+        self.cursor_calls = []
 
     def get_pending_orders(self):
         if self._error:
             raise self._error
         return self._pending
 
-    def get_orders_history_page(self, *, limit=50):
+    def get_orders_history_page(self, *, limit=50, cursor=None):
         if self._error:
             raise self._error
-        return self._history
+        self.cursor_calls.append(cursor)
+        return self._history, self._next_cursor
 
     def get_orders_for_ticker(self, ticker, **_kw):
         self.ticker_calls.append(ticker)
@@ -197,13 +200,34 @@ def test_execution_test_ip_restricted(client, session_factory, monkeypatch):
 
 def test_history_no_filter_uses_recent_page(client, session_factory, monkeypatch):
     _seed_invest(session_factory)
-    fake = FakeClient(history=[{"order": {"id": "r1", "ticker": "AAPL_US_EQ", "quantity": 1.0, "status": "FILLED"}, "fill": {"price": 50.0}}])
+    fake = FakeClient(
+        history=[{"order": {"id": "r1", "ticker": "AAPL_US_EQ", "quantity": 1.0, "status": "FILLED"}, "fill": {"price": 50.0}}],
+        next_cursor="CUR2",
+    )
     monkeypatch.setattr(orders_api, "build_t212_client", lambda *a, **k: fake)
 
     resp = client.get("/api/orders/history?account=invest")
     assert resp.status_code == 200
+    body = resp.json()
     assert fake.ticker_calls == []  # no server-side ticker filter without a term
-    assert len(resp.json()["orders"]) == 1
+    assert fake.cursor_calls == [None]  # first page
+    assert len(body["orders"]) == 1
+    assert body["next_cursors"] == {"invest": "CUR2"}  # exposes the next-page cursor
+
+
+def test_history_load_more_passes_cursor(client, session_factory, monkeypatch):
+    _seed_invest(session_factory)
+    fake = FakeClient(
+        history=[{"order": {"id": "older1", "ticker": "AAPL_US_EQ", "quantity": 1.0, "status": "FILLED"}, "fill": {"price": 40.0}}],
+        next_cursor=None,  # last page
+    )
+    monkeypatch.setattr(orders_api, "build_t212_client", lambda *a, **k: fake)
+
+    resp = client.get("/api/orders/history?account=invest&cursor=CUR2")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert fake.cursor_calls == ["CUR2"]  # cursor threaded through to the client
+    assert body["next_cursors"] == {"invest": None}  # exhausted
 
 
 def test_history_ticker_resolves_and_server_filters(client, session_factory, monkeypatch):

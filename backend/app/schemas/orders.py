@@ -34,6 +34,9 @@ class AccountError(BaseModel):
 class OrdersResponse(BaseModel):
     orders: list[OrderItem]
     errors: list[AccountError] = []
+    # Per-account opaque cursor for the next (older) history page; null when
+    # exhausted. Only populated by the unfiltered history endpoint.
+    next_cursors: dict[str, str | None] = {}
 
 
 class CancelOrderResponse(BaseModel):
