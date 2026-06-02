@@ -153,7 +153,7 @@ export function HelpGuide() {
             <Sparkles className="size-4" strokeWidth={2} />
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            MyPF connects your Trading 212 accounts to <span className="font-medium text-foreground">Archie</span>, an
+            OpenPF connects your Trading 212 accounts to <span className="font-medium text-foreground">Archie</span>, an
             agent that can read live market data, run quantitative analysis, forecast prices, and act on a schedule —
             all within risk rails you control. Use it to understand your portfolio, validate new ideas, and capture
             small, consistent alpha day to day. Analysis is always separated from execution: nothing trades unless you

@@ -12,12 +12,12 @@ import {
   Lightbulb,
   ListChecks,
   MessageSquare,
-  PanelLeft,
   PanelLeftClose,
   Settings,
   Shield,
   Star,
   Telescope,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react"
 
@@ -126,33 +126,41 @@ export function SidebarBody({
 
   return (
     <>
-      <div className={cn("flex items-center gap-2.5 px-2", collapsed && "flex-col gap-3 px-0")}>
-        {!collapsed ? (
-          <>
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/15 text-primary ring-1 ring-primary/25">
-              <span className="font-mono text-sm font-bold">M</span>
-            </div>
-            <div className="leading-tight">
-              <p className="text-sm font-semibold tracking-tight">MyPF</p>
-              <p className="text-[11px] text-muted-foreground">Portfolio Operator</p>
-            </div>
-          </>
-        ) : null}
-        {onToggleCollapsed ? (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn(
-              "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
-              !collapsed && "ml-auto",
-            )}
-          >
-            {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
-          </button>
-        ) : null}
-      </div>
+      {onToggleCollapsed ? (
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title={collapsed ? "Expand sidebar (press /)" : "Collapse sidebar (press /)"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={cn(
+            "group flex w-full items-center gap-2.5 rounded-lg py-1.5 text-left transition-colors hover:bg-sidebar-accent/50",
+            collapsed ? "justify-center px-0" : "px-2",
+          )}
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary ring-1 ring-primary/25">
+            <TrendingUp className="size-4" strokeWidth={2.5} />
+          </span>
+          {!collapsed ? (
+            <>
+              <span className="leading-tight">
+                <span className="block text-sm font-semibold tracking-tight text-foreground">OpenPF</span>
+                <span className="block text-[11px] text-muted-foreground">Portfolio Operator</span>
+              </span>
+              <PanelLeftClose className="ml-auto size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+            </>
+          ) : null}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2.5 px-2">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary ring-1 ring-primary/25">
+            <TrendingUp className="size-4" strokeWidth={2.5} />
+          </span>
+          <span className="leading-tight">
+            <span className="block text-sm font-semibold tracking-tight text-foreground">OpenPF</span>
+            <span className="block text-[11px] text-muted-foreground">Portfolio Operator</span>
+          </span>
+        </div>
+      )}
 
       <nav className="flex flex-1 flex-col gap-5 overflow-y-auto">
         {NAV.map((group, gi) => (
