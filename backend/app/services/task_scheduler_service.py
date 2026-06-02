@@ -314,9 +314,13 @@ def list_task_logs(db: Session, task_id: str, limit: int = 30) -> list[dict[str,
 
 
 def _build_sdk_env() -> dict[str, str]:
-    """T212 creds for the MCP subprocesses, DB-sourced (in sync with the
-    dashboard). Credentials live in subprocess memory only."""
-    return resolve_t212_env()
+    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the MCP
+    subprocesses. Without PYTHONPATH the t212 MCP server (which does `from app...`)
+    crashes on import and never registers, so every scheduled job loses T212 — match
+    the chat/analyst runtimes which set it. Credentials live in subprocess memory only."""
+    env = resolve_t212_env()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
+    return env
 
 
 def _extract_text_from_sdk_message(message: Any) -> str:
