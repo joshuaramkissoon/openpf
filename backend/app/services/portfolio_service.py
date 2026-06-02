@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from datetime import datetime
 from threading import Lock
 from typing import Any, Literal
@@ -27,6 +28,17 @@ settings = get_settings()
 _refresh_lock = Lock()
 _last_refresh_ts: datetime | None = None
 _refresh_cooldown_seconds = 6
+
+
+@contextmanager
+def _hold_acquired_lock():
+    """Release ``_refresh_lock`` on exit. The caller must already hold it, so the
+    acquisition policy (non-blocking on the request path, blocking for the
+    background daily snapshot) lives in ``refresh_portfolio`` rather than here."""
+    try:
+        yield
+    finally:
+        _refresh_lock.release()
 
 _SYMBOL_RE = re.compile(r"[^A-Z0-9_.-]+")
 _TICKER_FROM_DICT_STR_RE = re.compile(r"[\"']?TICKER[\"']?\s*:\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
@@ -280,20 +292,38 @@ def _parse_account_summary(account_payload: dict[str, Any], positions_payload: l
 def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
     global _last_refresh_ts
 
-    with _refresh_lock:
+    now = datetime.utcnow()
+    # `force` (explicit user click / background daily snapshot) bypasses the
+    # cooldown; auto-load + 60s polling leave it off so the short cooldown
+    # collapses bursts and protects the T212 rate limits. Checked BEFORE taking
+    # the lock so a burst never even contends on it.
+    if not force:
+        cooled = _cooldown_response(db, now)
+        if cooled is not None:
+            return cooled
+
+    # A request-path refresh must never queue behind an in-flight one (which may be
+    # mid slow T212 / cashflow I/O) — that is what hangs the dashboard. Serve the
+    # latest snapshot immediately instead. force=True (background daily snapshot)
+    # blocks for the lock, since its whole job is to record a fresh point.
+    if force:
+        _refresh_lock.acquire()
+    elif not _refresh_lock.acquire(blocking=False):
+        cached = _latest_snapshot_response(db, "refresh-in-progress", now=now)
+        if cached is not None:
+            return cached
+        _refresh_lock.acquire()  # cold start: nothing cached yet → wait it out
+
+    result: dict[str, Any] | None = None
+    did_full_refresh = False
+    with _hold_acquired_lock():
         now = datetime.utcnow()
-        # `force` (explicit user click) bypasses the cooldown; auto-load + polling
-        # leave it off so the short cooldown collapses bursts and protects the
-        # T212 rate limits.
-        if not force and _last_refresh_ts and (now - _last_refresh_ts).total_seconds() < _refresh_cooldown_seconds:
-            existing_accounts = _latest_accounts(db)
-            if existing_accounts:
-                existing_positions = _latest_positions(db)
-                return {
-                    "fetched_at": max((row.fetched_at for row in existing_accounts), default=now),
-                    "positions_count": len(existing_positions),
-                    "source": "cooldown-cache",
-                }
+        # Re-check the cooldown now we hold the lock: a concurrent refresh may have
+        # completed while we were waiting to acquire it.
+        if not force:
+            cooled = _cooldown_response(db, now)
+            if cooled is not None:
+                return cooled
 
         config = ConfigStore(db)
         enabled_accounts = config.enabled_account_kinds()
@@ -440,8 +470,18 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
         db.commit()
         _last_refresh_ts = fetched_at
 
-        # Keep external cashflows current (throttled, best-effort) so the return
-        # curve nets out new deposits/withdrawals without manual intervention.
+        result = {
+            "fetched_at": fetched_at,
+            "positions_count": len(position_rows),
+            "source": ",".join(source_parts) if source_parts else "unknown",
+        }
+        did_full_refresh = True
+
+    # Keep external cashflows current (throttled, best-effort) so the return curve
+    # nets out new deposits/withdrawals — OUTSIDE the refresh lock, because it can
+    # page the T212 transactions feed with rate-limit backoff and would otherwise
+    # stall every concurrent refresh while held.
+    if did_full_refresh:
         try:
             from app.services.cashflow_service import maybe_sync_all
 
@@ -449,11 +489,7 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
 
-        return {
-            "fetched_at": fetched_at,
-            "positions_count": len(position_rows),
-            "source": ",".join(source_parts) if source_parts else "unknown",
-        }
+    return result
 
 
 def _latest_accounts(db: Session) -> list[AccountSnapshot]:
@@ -468,6 +504,26 @@ def _latest_positions(db: Session) -> list[PositionSnapshot]:
     if latest_ts is None:
         return []
     return list(db.execute(select(PositionSnapshot).where(PositionSnapshot.fetched_at == latest_ts)).scalars().all())
+
+
+def _cooldown_response(db: Session, now: datetime) -> dict[str, Any] | None:
+    """Cached summary when still inside the refresh cooldown window (no lock held)."""
+    if not (_last_refresh_ts and (now - _last_refresh_ts).total_seconds() < _refresh_cooldown_seconds):
+        return None
+    return _latest_snapshot_response(db, "cooldown-cache", now=now)
+
+
+def _latest_snapshot_response(db: Session, source: str, *, now: datetime | None = None) -> dict[str, Any] | None:
+    """Summary of the latest stored snapshot, or None if nothing is recorded yet."""
+    accounts = _latest_accounts(db)
+    if not accounts:
+        return None
+    positions = _latest_positions(db)
+    return {
+        "fetched_at": max((row.fetched_at for row in accounts), default=now or datetime.utcnow()),
+        "positions_count": len(positions),
+        "source": source,
+    }
 
 
 _INSTRUMENT_NAME_TTL_SECONDS = 6 * 3600

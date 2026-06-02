@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { Loader2, Menu, Plus, RefreshCw, X } from 'lucide-react'
 
@@ -262,17 +262,41 @@ export default function App() {
   const [chatRailOpen, setChatRailOpen] = useState(false)
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
 
+  // Guards for the background (fire-and-forget) snapshot re-pull in loadAll: don't
+  // setState after unmount, and don't let a stale refresh clobber a newer load.
+  const mountedRef = useRef(true)
+  const loadIdRef = useRef(0)
+  useEffect(() => () => { mountedRef.current = false }, [])
+
   const loadAll = useCallback(async (
     withRefresh = false,
     selectedAccount: 'all' | 'invest' | 'stocks_isa' = accountView,
     selectedCurrency: 'GBP' | 'USD' = displayCurrency,
     force = false
   ) => {
+    const myLoadId = ++loadIdRef.current
     setBusy(true)
     setError(null)
     try {
       if (withRefresh) {
-        await refreshPortfolio(force)
+        // Kick the live refresh off WITHOUT blocking the dashboard render. The
+        // snapshot endpoint serves the last stored snapshot (and self-populates on
+        // a cold start), so the UI paints immediately; when the background refresh
+        // lands we re-pull the snapshot to show fresh numbers. Previously we
+        // awaited the refresh first, so a slow/queued refresh (e.g. stuck behind a
+        // scheduled job) hung the whole dashboard until the 30s client timeout.
+        void refreshPortfolio(force)
+          .then(async () => {
+            const fresh = await getSnapshot(selectedAccount, selectedCurrency)
+            // Bail if we unmounted or a newer load started, so a stale background
+            // refresh never clobbers the current account/currency selection.
+            if (!mountedRef.current || loadIdRef.current !== myLoadId) return
+            setSnapshot(fresh)
+            setLastUpdate(new Date().toISOString())
+          })
+          .catch(() => {
+            /* non-fatal — the 60s poll / next load will retry */
+          })
       }
 
       const [cfg, snap, runList, intentList, eventList, thesisList] = await Promise.all([

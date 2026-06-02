@@ -23,6 +23,13 @@ MAX_CACHE_ITEMS = 512
 _HISTORY_CACHE: dict[tuple[str, int], tuple[float, pd.DataFrame]] = {}
 _YF_THROTTLED_UNTIL = 0.0
 
+# Per-symbol negative cache: a ticker that returns no usable data (delisted /
+# illiquid / unpriceable, e.g. some T212 ETP codes like ALCC1/NUCGL) costs ~12.5s
+# of retries on EVERY call, because only successful frames are cached. Remember
+# the failure for a short window so repeated lookups fail fast instead.
+_NEG_CACHE: dict[str, float] = {}
+NEG_CACHE_TTL_SECONDS = 120
+
 # Avoid flooding logs when provider throttles.
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
@@ -125,6 +132,18 @@ def fetch_history(symbol: str, lookback_days: int = 420, *, auto_adjust: bool = 
             f"Market data provider throttled; no cached history for {ticker}"
         )
 
+    neg_ts = _NEG_CACHE.get(ticker)
+    if neg_ts is not None and (now - neg_ts) < NEG_CACHE_TTL_SECONDS:
+        # Recently returned no usable data — fail fast rather than re-pay the full
+        # retry cost. Still prefer a stale *real* quote if we somehow have one.
+        stale = _get_cached(cache_key, allow_stale=True)
+        if stale is not None:
+            return stale
+        raise MarketDataError(
+            f"No recent price history for {ticker} "
+            f"(negative-cached {NEG_CACHE_TTL_SECONDS}s; symbol may be delisted/illiquid)"
+        )
+
     end = date.today() + timedelta(days=1)
     start = date.today() - timedelta(days=lookback_days)
 
@@ -168,6 +187,7 @@ def fetch_history(symbol: str, lookback_days: int = 420, *, auto_adjust: bool = 
         # provider-wide throttle — do NOT poison the global throttle window, or
         # a single bad symbol breaks forecasts/signals for every other holding
         # for 5 minutes. Surface a per-symbol error (or stale cache) only.
+        _NEG_CACHE[ticker] = time.time()
         stale = _get_cached(cache_key, allow_stale=True)
         if stale is not None:
             return stale
@@ -190,10 +210,12 @@ def fetch_history(symbol: str, lookback_days: int = 420, *, auto_adjust: bool = 
     out = out.dropna(subset=["close"]).reset_index(drop=True)
     if out.empty:
         _YF_THROTTLED_UNTIL = time.time() + 300
+        _NEG_CACHE[ticker] = time.time()
         stale = _get_cached(cache_key, allow_stale=True)
         if stale is not None:
             return stale
         raise MarketDataError(
             f"No valid candles for {ticker} after cleaning (provider returned no usable rows)"
         )
+    _NEG_CACHE.pop(ticker, None)
     return _set_cache(cache_key, out)
