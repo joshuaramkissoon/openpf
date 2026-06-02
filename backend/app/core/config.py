@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         alias="CORS_ALLOW_ORIGIN_REGEX",
     )
 
-    t212_base_env: Literal["live", "demo"] = Field(default="demo", alias="T212_BASE_ENV")
+    t212_base_env: Literal["live", "demo"] = Field(default="live", alias="T212_BASE_ENV")
     t212_api_key: str = Field(default="", alias="T212_API_KEY")
     t212_api_secret: str = Field(default="", alias="T212_API_SECRET")
     t212_invest_api_key: str = Field(default="", alias="T212_INVEST_API_KEY")
@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     archie_t212_api_key_stocks_isa: str = Field(default="", alias="ARCHIE_T212_API_KEY_STOCKS_ISA")
     archie_t212_api_secret_stocks_isa: str = Field(default="", alias="ARCHIE_T212_API_SECRET_STOCKS_ISA")
 
-    broker_mode: Literal["paper", "live"] = Field(default="paper", alias="BROKER_MODE")
+    # Default to live: orders are placed for real (still gated by a configured,
+    # IP-allowed execution key — nothing reaches the market without it). The
+    # paper/live toggle remains in Settings → Broker.
+    broker_mode: Literal["paper", "live"] = Field(default="live", alias="BROKER_MODE")
     autopilot_enabled: bool = Field(default=False, alias="AUTOPILOT_ENABLED")
 
     max_single_order_notional: float = Field(default=500.0, alias="MAX_SINGLE_ORDER_NOTIONAL")

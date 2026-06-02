@@ -38,6 +38,9 @@ def db():
     )
     Base.metadata.create_all(engine)
     with Session(engine) as s:
+        # These tests exercise the engine's close/P&L logic, not live execution —
+        # pin paper mode (the app default is now 'live').
+        ls.ConfigStore(s).set_broker({"broker_mode": "paper"})
         yield s
 
 

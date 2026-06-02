@@ -199,15 +199,17 @@ def _make_intent(db, **overrides):
 
 
 def test_execute_intent_records_explicit_account(db, monkeypatch):
+    ConfigStore(db).set_broker({"broker_mode": "paper"})  # exercise the paper path explicitly
     monkeypatch.setattr(execution_service, "_paper_fill_price", lambda symbol: 123.0)
     intent = _make_intent(db)
     result = execute_intent(db, intent.id, account_kind="stocks_isa")
     assert result.status == "executed"
-    assert result.broker_mode == "paper"  # default broker mode → no live keys touched
+    assert result.broker_mode == "paper"
     assert (result.meta or {}).get("account_kind") == "stocks_isa"
 
 
 def test_execute_intent_uses_intent_meta_account_when_not_overridden(db, monkeypatch):
+    ConfigStore(db).set_broker({"broker_mode": "paper"})
     monkeypatch.setattr(execution_service, "_paper_fill_price", lambda symbol: 50.0)
     intent = _make_intent(db, meta={"account_kind": "stocks_isa"})
     result = execute_intent(db, intent.id)
