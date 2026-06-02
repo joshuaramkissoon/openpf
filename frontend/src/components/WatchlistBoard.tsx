@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import { SectionCard } from '@/components/kit'
+import { useInstrument, WATCHLIST_CHANGED_EVENT } from '@/components/instrument/instrument-provider'
 import { StockChart } from '@/components/StockChart'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -84,6 +85,7 @@ function changeClass(pct: number | null): string {
 }
 
 export function WatchlistBoard({ onError }: Props) {
+  const { openInstrument } = useInstrument()
   const [items, setItems] = useState<WatchlistItem[]>([])
   const [statusFilter, setStatusFilter] = useState<'watching' | 'acted' | 'archived' | 'all'>('watching')
   const [loading, setLoading] = useState(true)
@@ -111,6 +113,13 @@ export function WatchlistBoard({ onError }: Props) {
 
   useEffect(() => {
     void load()
+  }, [load])
+
+  // Refresh when the watchlist is mutated elsewhere (e.g. the Spotlight sheet).
+  useEffect(() => {
+    const onChanged = () => void load()
+    window.addEventListener(WATCHLIST_CHANGED_EVENT, onChanged)
+    return () => window.removeEventListener(WATCHLIST_CHANGED_EVENT, onChanged)
   }, [load])
 
   const totalFlags = useMemo(() => items.reduce((n, i) => n + (i.open_flags || 0), 0), [items])
@@ -253,7 +262,22 @@ export function WatchlistBoard({ onError }: Props) {
 
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                        <span className="font-semibold">{item.symbol}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openInstrument(item.symbol, {
+                              name: item.name,
+                              price: item.price,
+                              change_pct: item.change_pct,
+                              currency: item.currency,
+                            })
+                          }}
+                          className="font-semibold hover:underline"
+                          title={`Open ${item.symbol}`}
+                        >
+                          {item.symbol}
+                        </button>
                         {item.name ? (
                           <span className="truncate text-xs text-muted-foreground">{item.name}</span>
                         ) : null}

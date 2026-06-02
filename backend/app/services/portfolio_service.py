@@ -579,6 +579,56 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
     return mapping
 
 
+def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[str, Any]]:
+    """Typeahead search over T212 instrument metadata for the Spotlight palette.
+
+    Ranks exact symbol/code matches first, then symbol prefix, then substring on
+    symbol or name. Each row carries enough identity to open the detail view:
+    ``{instrument_code, ticker, name, currency}`` (the yfinance ticker is resolved
+    lazily by the detail endpoint, so we don't pay for it per candidate here).
+    Best-effort — returns ``[]`` when metadata is unavailable (so the palette
+    degrades to the user's typed term rather than erroring). Pure in-memory scan
+    over the cached metadata map; no network beyond the ~6h-cached bulk fetch.
+    """
+    q = (term or "").strip().upper()
+    if not q:
+        return []
+
+    meta = _instrument_meta_map(db)
+    exact: list[dict[str, Any]] = []
+    prefix: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    for code, info in meta.items():
+        symbol = code.split("_", 1)[0].upper()
+        name = str(info.get("name", ""))
+        row = {
+            "instrument_code": code,
+            "ticker": symbol,
+            "name": name,
+            "currency": info.get("currency") or None,
+        }
+        if symbol == q or code.upper() == q:
+            exact.append(row)
+        elif symbol.startswith(q):
+            prefix.append(row)
+        elif q in symbol or q in name.upper():
+            partial.append(row)
+
+    ranked = (
+        sorted(exact, key=lambda r: len(r["ticker"]))
+        + sorted(prefix, key=lambda r: len(r["ticker"]))
+        + sorted(partial, key=lambda r: len(r["ticker"]))
+    )
+    return ranked[: max(1, min(limit, 25))]
+
+
+def resolve_primary_instrument(term: str, db: Session) -> dict[str, Any] | None:
+    """Best single instrument-identity match for a typed term, or ``None`` when
+    metadata can't resolve it (the caller then falls back to the raw term)."""
+    rows = search_instruments(term, db, limit=1)
+    return rows[0] if rows else None
+
+
 def get_portfolio_snapshot(
     db: Session,
     account_kind: AccountViewKind = "all",
