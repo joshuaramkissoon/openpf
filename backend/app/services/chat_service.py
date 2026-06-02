@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.entities import ChatMessage, ChatSession
+from app.services.chat_title_service import retitle_in_request
 from app.services.claude_chat_runtime import claude_chat_runtime
 from app.services.claude_memory_service import schedule_memory_distillation
 from app.services.portfolio_service import get_portfolio_snapshot
@@ -237,6 +238,7 @@ async def send_message(
 
     assistant_row = append_assistant_message(db, session, assistant_text)
     schedule_memory_distillation(user_message=content, assistant_message=assistant_text)
+    await retitle_in_request(db, session)
     return session, user_row, assistant_row
 
 
