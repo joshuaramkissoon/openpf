@@ -27,6 +27,7 @@ import {
 import { RichMarkdown } from './RichMarkdown'
 import { TodayTimeline } from './scheduled-jobs/TodayTimeline'
 import { parseCronHuman } from './scheduled-jobs/cron'
+import { resolveArtifactRelativePath } from './scheduled-jobs/artifact'
 import { SectionCard } from '@/components/kit'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -159,20 +160,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     setSelectedLogId(log.id)
     setContentTab('output')
 
-    // Path resolution logic
-    let relativePath: string
-    const artIdx = log.output_path.indexOf('artifacts/')
-    if (artIdx >= 0) {
-      relativePath = log.output_path.slice(artIdx + 'artifacts/'.length)
-    } else {
-      const cronIdx = log.output_path.indexOf('cron_logs/')
-      if (cronIdx >= 0) {
-        relativePath = log.output_path.slice(cronIdx + 'cron_logs/'.length)
-      } else {
-        const runtimeIdx = log.output_path.indexOf('.claude/runtime/')
-        relativePath = runtimeIdx >= 0 ? log.output_path.slice(runtimeIdx + '.claude/runtime/'.length) : log.output_path
-      }
-    }
+    const relativePath = resolveArtifactRelativePath(log.output_path)
 
     setActiveArtifact({ loading: true, detail: null, error: null })
     try {
