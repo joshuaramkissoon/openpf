@@ -23,6 +23,16 @@ class WatchlistUpdate(BaseModel):
     monitor: bool | None = None
 
 
+class WatchlistFlagView(BaseModel):
+    id: str
+    title: str
+    detail: str = ""
+    severity: str = "info"
+    source: str = ""
+    created_at: str | None = None
+    url: str | None = None
+
+
 class WatchlistItemView(BaseModel):
     id: str
     created_at: str | None = None
@@ -45,3 +55,4 @@ class WatchlistItemView(BaseModel):
     open_flags: int = 0
     latest_flag: str | None = None
     latest_severity: str | None = None
+    flags: list[WatchlistFlagView] = []

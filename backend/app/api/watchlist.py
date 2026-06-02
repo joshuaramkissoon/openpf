@@ -42,16 +42,20 @@ def _quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return dict(zip(symbols, results))
 
 
-def _to_view(item, quote: dict[str, Any], flags: dict[str, Any]) -> WatchlistItemView:
+_MAX_FLAGS_SHOWN = 8
+
+
+def _to_view(item, quote: dict[str, Any], flags: list[dict[str, Any]]) -> WatchlistItemView:
     base = wl.serialize(item)
     return WatchlistItemView(
         **base,
         price=quote.get("price"),
         change_pct=quote.get("change_pct"),
         currency=quote.get("currency"),
-        open_flags=int(flags.get("open_flags", 0)),
-        latest_flag=flags.get("latest_flag"),
-        latest_severity=flags.get("latest_severity"),
+        open_flags=len(flags),
+        latest_flag=flags[0]["title"] if flags else None,
+        latest_severity=flags[0]["severity"] if flags else None,
+        flags=flags[:_MAX_FLAGS_SHOWN],
     )
 
 
@@ -64,8 +68,8 @@ def list_watchlist(
     items = wl.list_items(db, status=status)
     symbols = [i.symbol for i in items]
     quotes = _quotes(symbols) if enrich else {}
-    flag_map = wl.open_flag_counts(db, symbols)
-    views = [_to_view(i, quotes.get(i.symbol, {}), flag_map.get(i.symbol, {})) for i in items]
+    flag_map = wl.flags_by_symbol(db, symbols)
+    views = [_to_view(i, quotes.get(i.symbol, {}), flag_map.get(i.symbol, [])) for i in items]
     # Two stable passes: baseline newest-first, then float flagged (and, within
     # equal flag counts, more-severe) items to the top — so the board resurfaces
     # activity while keeping recent items above older ones in the unflagged tail.
@@ -88,7 +92,7 @@ def create_watchlist_item(payload: WatchlistCreate, db: Session = Depends(get_db
         source="manual",
     )
     quote = _fetch_quote(item.symbol)
-    flags = wl.open_flag_counts(db, [item.symbol]).get(item.symbol, {})
+    flags = wl.flags_by_symbol(db, [item.symbol]).get(item.symbol, [])
     return _to_view(item, quote, flags)
 
 
@@ -99,7 +103,7 @@ def update_watchlist_item(item_id: str, payload: WatchlistUpdate, db: Session = 
     if not item:
         raise HTTPException(status_code=404, detail="watchlist item not found")
     quote = _fetch_quote(item.symbol)
-    flags = wl.open_flag_counts(db, [item.symbol]).get(item.symbol, {})
+    flags = wl.flags_by_symbol(db, [item.symbol]).get(item.symbol, [])
     return _to_view(item, quote, flags)
 
 
