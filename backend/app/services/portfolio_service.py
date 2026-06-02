@@ -901,18 +901,20 @@ def portfolio_history(
         if anchor and anchor.get("total", 0.0) > 0 and recorded_first_total > 0:
             recon_scale = max(0.5, min(recorded_first_total / anchor["total"], 2.5))
 
-    # Unified daily series: reconstructed strictly before the first recorded
-    # snapshot (exact recorded data wins wherever it exists); source-tagged so
-    # the UI can distinguish estimated history from recorded.
-    series: list[tuple[Any, Any, dict[str, float], str]] = []
-    for day in sorted(recon_by_day):
-        if first_recorded_day is None or day < first_recorded_day:
-            raw = recon_by_day[day]
-            v = {k: raw[k] * recon_scale for k in ("total", "invested", "free_cash")}
-            ts = datetime.combine(day, datetime.min.time())
-            series.append((day, ts, v, "reconstructed"))
+    # Unified daily series: recorded snapshots win wherever they exist;
+    # reconstruction fills every OTHER day it covers — including gaps INSIDE the
+    # recorded range (e.g. a stretch where the recorder was down), so the curve
+    # never draws a straight line across missing weeks. Source-tagged so the UI
+    # can distinguish estimated history from recorded.
+    merged: dict[Any, tuple[Any, dict[str, float], str]] = {}
+    for day, raw in recon_by_day.items():
+        v = {k: raw[k] * recon_scale for k in ("total", "invested", "free_cash")}
+        merged[day] = (datetime.combine(day, datetime.min.time()), v, "reconstructed")
     for day, (ts, v) in recorded:
-        series.append((day, ts, v, "recorded"))
+        merged[day] = (ts, v, "recorded")  # exact data always overrides the estimate
+    series: list[tuple[Any, Any, dict[str, float], str]] = [
+        (day, ts, v, source) for day, (ts, v, source) in sorted(merged.items())
+    ]
 
     def _point(day: Any, ts: Any, v: dict[str, float], source: str, gain: float) -> dict[str, Any]:
         return {"date": day.isoformat(), "t": ts.isoformat(),

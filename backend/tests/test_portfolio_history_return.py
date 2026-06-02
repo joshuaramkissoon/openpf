@@ -138,3 +138,21 @@ def test_sub_window_reports_windowed_return(db):
     pts = h["points"]
     assert pts[0]["gain"] == pytest.approx(0.0)
     assert pts[-1]["gain"] == pytest.approx(3000.0)  # 5000 → 8000, no in-window flows
+
+
+def test_recorded_gaps_are_filled_with_reconstruction(db):
+    # Recorded snapshots exist only at the ends, with a multi-day gap in between
+    # (the recorder was down). Daily reconstruction must fill the gap so the curve
+    # doesn't draw a straight line across the missing days.
+    for d, t in [(1, 1000.0), (2, 1010.0), (3, 1020.0), (4, 1030.0), (5, 1040.0)]:
+        _recon(db, "invest", date(2026, 1, d), t)
+    _recorded(db, "invest", date(2026, 1, 1), 1000.0)
+    _recorded(db, "invest", date(2026, 1, 5), 1050.0)  # exact endpoints win
+    _flow(db, "invest", date(2026, 1, 1), "DEPOSIT", 1000.0, "d1")
+    db.commit()
+
+    h = portfolio_history(db, account_kind="invest", display_currency="GBP", days=ALL)
+    src = {p["date"]: p["source"] for p in h["points"]}
+    assert [p["date"] for p in h["points"]] == [f"2026-01-0{d}" for d in range(1, 6)]
+    assert src["2026-01-01"] == "recorded" and src["2026-01-05"] == "recorded"
+    assert src["2026-01-03"] == "reconstructed"  # gap filled, no straight-line jump
