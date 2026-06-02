@@ -323,11 +323,28 @@ export function AgentChatPanel({
   useEffect(() => {
     const el = threadRef.current
     if (!el) return
-    const handleScroll = () => {
-      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    // "Stick to bottom" while streaming, but let the user break it by scrolling
+    // up. Wheel/touch are unambiguously user-initiated — programmatic scrollTop
+    // changes never fire them — so we avoid the race where the auto-scroll below
+    // yanks the user back down before a plain 'scroll' handler can react.
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) isNearBottomRef.current = false
     }
-    el.addEventListener('scroll', handleScroll, { passive: true })
-    return () => el.removeEventListener('scroll', handleScroll)
+    const onTouchMove = () => {
+      isNearBottomRef.current = false
+    }
+    const onScroll = () => {
+      // Re-stick once the user returns to (near) the bottom.
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) isNearBottomRef.current = true
+    }
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('scroll', onScroll)
+    }
   }, [])
 
   useEffect(() => {
