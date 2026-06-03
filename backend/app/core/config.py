@@ -92,11 +92,15 @@ class Settings(BaseSettings):
     # naturally finishes (the Agent SDK omits --max-turns when this is None).
     # Set AGENT_CHAT_MAX_TURNS to a positive int only to re-impose a hard cap.
     agent_chat_max_turns: int | None = Field(default=None, alias="AGENT_CHAT_MAX_TURNS")
-    # Cost-based backstop for a single chat response (USD). Replaces the turn cap
-    # as the runaway guard: never interrupts a legitimate long task, only stops a
-    # pathological loop, returning an error_max_budget_usd result the UI surfaces.
-    # Set to None / 0 to disable.
-    agent_chat_max_budget_usd: float | None = Field(default=2.0, alias="AGENT_CHAT_MAX_BUDGET_USD")
+    # Cost-based backstop for a chat session (USD). The SDK client is created once
+    # per chat_session_id and reused across every message, so this budget is
+    # CUMULATIVE over the whole conversation, not per single response. A long,
+    # legitimate multi-turn chat (research, scans, proposing alpha-loop intents)
+    # can easily exceed a couple of dollars over its lifetime; too low a cap makes
+    # later responses error with error_max_budget_usd and silently drops their
+    # output (e.g. proposed leveraged intents never render). Keep it high enough to
+    # only stop a pathological loop, not normal long use. Set to None / 0 to disable.
+    agent_chat_max_budget_usd: float | None = Field(default=20.0, alias="AGENT_CHAT_MAX_BUDGET_USD")
     agent_allow_bash: bool = Field(default=False, alias="AGENT_ALLOW_BASH")
     inproc_scheduler_enabled: bool = Field(default=False, alias="INPROC_SCHEDULER_ENABLED")
 
