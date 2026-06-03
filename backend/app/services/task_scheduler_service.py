@@ -113,6 +113,124 @@ def _goal_action_summary(parsed: dict[str, Any] | None, output: str) -> str:
             return str(status)
     return "status-only"
 
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _persist_goal_proposals(
+    db: Session, task: ScheduledTask, parsed: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Turn an alpha-loop run's ``{"proposals": [...]}`` JSON into proposed
+    ``TradeIntent`` rows so they surface in the Execution queue.
+
+    ``claude_with_goal`` runs emit proposals as JSON in their artifact but used
+    to stop there — nothing wrote them to the DB, so the Execution queue / Leveraged
+    tab never showed them. This mirrors ``agent_service`` (supersede the prior batch,
+    then create one ``proposed`` intent per proposal). No-ops on a missing/empty list.
+    """
+    from app.models.entities import AgentRun, TradeIntent
+    from app.services.execution_service import supersede_open_proposals
+
+    proposals = parsed.get("proposals") if isinstance(parsed, dict) else None
+    if not isinstance(proposals, list):
+        return {"created": 0}
+    proposals = [p for p in proposals if isinstance(p, dict)]
+    if not proposals:
+        return {"created": 0}
+
+    broker_mode = str(ConfigStore(db).get_broker().get("broker_mode", "paper")).lower()
+
+    # Build intents in memory FIRST (no DB writes). We only supersede the existing
+    # queue once we know we have valid replacements — otherwise an all-invalid batch
+    # would wipe live proposals without putting anything back.
+    pending: list[TradeIntent] = []
+    for prop in proposals:
+        instrument_code = str(prop.get("instrument") or prop.get("instrument_code") or "").strip()
+        if not instrument_code:
+            continue
+        underlying = str(prop.get("underlying") or "").strip().upper()
+        symbol = (underlying or instrument_code.rsplit("_", 1)[0].upper()).strip()
+        if not symbol:
+            continue
+
+        action = str(prop.get("action") or "BUY").strip().lower()
+        side = "sell" if action.startswith("sell") else "buy"
+
+        notional = max(0.0, _coerce_float(prop.get("notional_gbp")) or 0.0)
+        entry_gbx = _coerce_float(prop.get("entry_price_gbx"))
+        quantity = _coerce_float(prop.get("approx_shares"))
+        if (quantity is None or quantity <= 0) and entry_gbx and entry_gbx > 0 and notional > 0:
+            # GBX → GBP for the per-share price when deriving share count.
+            quantity = notional / (entry_gbx / 100.0)
+        if not quantity or quantity <= 0:
+            logger.warning("alpha-loop proposal skipped (no usable quantity): %s", instrument_code)
+            continue
+
+        rationale = str(prop.get("rationale") or "").strip()
+        invalidation = str(prop.get("invalidation") or "").strip()
+        if invalidation:
+            rationale = f"{rationale}\n\nInvalidation: {invalidation}".strip()
+
+        pending.append(
+            TradeIntent(
+                status="proposed",
+                broker_mode=broker_mode,
+                symbol=symbol[:32],
+                instrument_code=instrument_code[:64],
+                side=side,
+                order_type="market",
+                quantity=quantity,
+                estimated_notional=notional,
+                confidence=_coerce_float(prop.get("confidence")) or 0.55,
+                rationale=rationale,
+                meta={
+                    "source": "alpha_loop",
+                    "task_name": task.name,
+                    "underlying": underlying or None,
+                    "direction": prop.get("direction"),
+                    "leveraged": True,
+                    "entry_price_gbx": entry_gbx,
+                    "take_profit_gbx": _coerce_float(prop.get("take_profit_gbx")),
+                    "stop_loss_gbx": _coerce_float(prop.get("stop_loss_gbx")),
+                    "tp_pct": _coerce_float(prop.get("tp_pct")),
+                    "sl_pct": _coerce_float(prop.get("sl_pct")),
+                    "risk_flags": prop.get("risk_flags") or [],
+                    "proposal": prop,
+                },
+            )
+        )
+
+    if not pending:
+        return {"created": 0}
+
+    regime = str((parsed or {}).get("regime") or (parsed or {}).get("market_regime") or "neutral")
+    run = AgentRun(
+        status="completed",
+        summary_markdown=f"Alpha loop `{task.name}` proposed {len(pending)} leveraged entr"
+        f"{'y' if len(pending) == 1 else 'ies'}.",
+        market_regime=regime,
+        meta={"source": "alpha_loop", "task_name": task.name, "proposal_count": len(pending)},
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    # A fresh batch supersedes the prior run's un-acted proposals, so the queue
+    # reflects the latest pass. Done here (after we have valid intents) so a
+    # no-op run never clears the queue.
+    supersede_open_proposals(db)
+    for intent in pending:
+        intent.run_id = run.id
+        db.add(intent)
+    db.commit()
+    return {"created": len(pending), "run_id": run.id}
+
 _DEFAULT_TASKS: list[dict[str, Any]] = [
     {
         "name": "morning_brief",
@@ -1174,6 +1292,16 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         payload["policy_updates_applied"] = policy_updates
 
     block_reason = _detect_block(output, parsed)
+
+    # Persist the agent's proposals as 'proposed' TradeIntents so they reach the
+    # Execution queue. Skipped on a blocked run (no actionable proposals there).
+    if kind == "claude_with_goal" and not block_reason:
+        try:
+            persisted = _persist_goal_proposals(db, task, parsed)
+            if persisted.get("created"):
+                payload["proposals_persisted"] = persisted
+        except Exception as exc:  # noqa: BLE001 — bookkeeping must never fail the run
+            logger.warning("alpha-loop proposal persistence failed: %s", exc)
 
     # A2 — deterministic continuity line for every goal pass (success OR blocked),
     # so the next pass opens with state regardless of what the agent wrote.
