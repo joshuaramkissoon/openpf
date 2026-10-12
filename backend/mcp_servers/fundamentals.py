@@ -24,7 +24,7 @@ try:
 except OSError:
     import tempfile
 
-    _LOG_DIR = Path(tempfile.gettempdir()) / "mypf-mcp-logs"
+    _LOG_DIR = Path(tempfile.gettempdir()) / "openpf-mcp-logs"
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("fundamentals-mcp")

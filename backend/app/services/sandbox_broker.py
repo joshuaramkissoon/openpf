@@ -63,6 +63,37 @@ UNIVERSE: list[tuple[str, str, float]] = [
     ("SPY", "SPDR S&P 500 ETF", 665.0), ("QQQ", "Invesco QQQ", 600.0),
 ]
 
+# Wider tradable universe (names only; prices come from market data). Keeps
+# agent-drafted baskets resolvable in the sandbox without a real instrument list.
+EXTRA_UNIVERSE: list[tuple[str, str]] = [
+    ("NXE", "NexGen Energy"), ("UEC", "Uranium Energy"), ("DNN", "Denison Mines"), ("BWXT", "BWX Technologies"),
+    ("GEV", "GE Vernova"), ("VRT", "Vertiv Holdings"), ("PWR", "Quanta Services"), ("SMCI", "Super Micro Computer"),
+    ("DELL", "Dell Technologies"), ("ORCL", "Oracle"), ("CRM", "Salesforce"), ("NOW", "ServiceNow"),
+    ("ADBE", "Adobe"), ("INTC", "Intel"), ("QCOM", "Qualcomm"), ("TXN", "Texas Instruments"),
+    ("LRCX", "Lam Research"), ("AMAT", "Applied Materials"), ("KLAC", "KLA"), ("MRVL", "Marvell Technology"),
+    ("CRWV", "CoreWeave"), ("IREN", "IREN"), ("NBIS", "Nebius Group"), ("APP", "AppLovin"),
+    ("DDOG", "Datadog"), ("ZS", "Zscaler"), ("PANW", "Palo Alto Networks"), ("FTNT", "Fortinet"),
+    ("MSTR", "Strategy"), ("PYPL", "PayPal"), ("SQ", "Block"), ("AFRM", "Affirm"),
+    ("ABNB", "Airbnb"), ("BKNG", "Booking Holdings"), ("SPOT", "Spotify"), ("RBLX", "Roblox"),
+    ("UNH", "UnitedHealth"), ("JNJ", "Johnson & Johnson"), ("PFE", "Pfizer"), ("MRK", "Merck"),
+    ("ABBV", "AbbVie"), ("VRTX", "Vertex Pharmaceuticals"), ("REGN", "Regeneron"), ("HIMS", "Hims & Hers Health"),
+    ("WMT", "Walmart"), ("PG", "Procter & Gamble"), ("PEP", "PepsiCo"), ("MCD", "McDonald's"),
+    ("NKE", "Nike"), ("SBUX", "Starbucks"), ("HD", "Home Depot"), ("LOW", "Lowe's"),
+    ("CAT", "Caterpillar"), ("DE", "Deere"), ("GE", "GE Aerospace"), ("RTX", "RTX"),
+    ("LMT", "Lockheed Martin"), ("NOC", "Northrop Grumman"), ("BA", "Boeing"), ("ASTS", "AST SpaceMobile"),
+    ("LUNR", "Intuitive Machines"), ("JOBY", "Joby Aviation"), ("ACHR", "Archer Aviation"), ("QBTS", "D-Wave Quantum"),
+    ("QUBT", "Quantum Computing"), ("FSLR", "First Solar"), ("ENPH", "Enphase Energy"), ("TLN", "Talen Energy"),
+    ("NRG", "NRG Energy"), ("FCX", "Freeport-McMoRan"), ("NEM", "Newmont"), ("GOLD", "Barrick Gold"),
+    ("MP", "MP Materials"), ("ALB", "Albemarle"), ("CVX", "Chevron"), ("OXY", "Occidental Petroleum"),
+    ("SHEL", "Shell (ADR)"), ("BP", "BP (ADR)"), ("AZN", "AstraZeneca (ADR)"), ("GSK", "GSK (ADR)"),
+    ("BABA", "Alibaba (ADR)"), ("PDD", "PDD Holdings (ADR)"), ("SE", "Sea Limited (ADR)"), ("MELI", "MercadoLibre"),
+    ("NU", "Nu Holdings"), ("SAP", "SAP (ADR)"), ("TM", "Toyota (ADR)"), ("SONY", "Sony (ADR)"),
+    ("BAC", "Bank of America"), ("GS", "Goldman Sachs"), ("MS", "Morgan Stanley"), ("SCHW", "Charles Schwab"),
+    ("BLK", "BlackRock"), ("AXP", "American Express"), ("T", "AT&T"), ("VZ", "Verizon"),
+    ("TMUS", "T-Mobile US"), ("CMCSA", "Comcast"), ("O", "Realty Income"), ("PLD", "Prologis"),
+    ("EQIX", "Equinix"), ("DLR", "Digital Realty"), ("AMT", "American Tower"), ("WELL", "Welltower"),
+]
+
 # The seeded book: (account, ticker, quantity, cost basis as a multiple of the price ~1y ago)
 SEED_POSITIONS: list[tuple[str, str, float]] = [
     ("stocks_isa", "NVDA", 62.0), ("stocks_isa", "MSFT", 14.0), ("stocks_isa", "GOOGL", 24.0),
@@ -91,6 +122,7 @@ def _ticker_for_code(code: str) -> str:
 
 
 _NAMES = {code_for(t): n for t, n, _ in UNIVERSE}
+_NAMES.update({code_for(t): n for t, n in EXTRA_UNIVERSE})
 _FALLBACK = {code_for(t): p for t, _, p in UNIVERSE}
 
 
@@ -137,10 +169,11 @@ def price(code: str) -> float:
 def _price_on(code: str, on: date) -> float:
     try:
         frame = _history(_ticker_for_code(code), 420)
-        idx = [d.date() if hasattr(d, "date") else d for d in frame.index]
+        dates = frame["date"] if "date" in frame.columns else frame.index
         best = None
-        for i, d in enumerate(idx):
-            if d <= on:
+        for i, d in enumerate(dates):
+            day = d.date() if hasattr(d, "date") else date.fromisoformat(str(d)[:10])
+            if day <= on:
                 best = i
         if best is not None:
             return float(frame["close"].iloc[best])
@@ -369,7 +402,7 @@ def instruments() -> list[dict[str, Any]]:
     return [
         {"ticker": code_for(t), "name": n, "shortName": t, "currencyCode": "USD", "type": "ETF" if t in {"SPY", "QQQ"} else "STOCK",
          "isin": "", "workingScheduleId": 1, "minTradeQuantity": 0.01, "maxOpenQuantity": 100000, "addedOn": "2018-01-01T00:00:00.000Z"}
-        for t, n, _ in UNIVERSE
+        for t, n in [(t, n) for t, n, _ in UNIVERSE] + EXTRA_UNIVERSE
     ]
 
 

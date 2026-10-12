@@ -5,14 +5,27 @@
  *   <PlaysPage route={route} />   — the whole `/plays` and `/plays/:id` area
  *   <PlaysHomeCard />             — compact summary card for the Home screen
  *
- * This file starts as a stub so the shell can compile before the feature lands.
+ * Routes handled here:
+ *   /plays                 list
+ *   /plays?tab=watchlist   watchlist tab
+ *   /plays?new=1[&idea=…]  new-play flow (`&job=…` while drafting)
+ *   /plays/:id             draft review (status=draft) or detail
  */
 import type { Route } from '@/lib/router'
+import { PlaysHomeSummary, PlaysList } from './list'
+import { NewPlay } from './new-play'
+import { PlayPage } from './play-page'
 
-export function PlaysPage(_props: { route: Route }) {
-  return <p className="text-sm text-muted-foreground">Plays are coming soon.</p>
+export function PlaysPage({ route }: { route: Route }) {
+  const id = route.segments[1]
+  if (id) return <PlayPage key={id} id={id} />
+  if (route.query.get('new')) {
+    const job = route.query.get('job')
+    return <NewPlay key={job ?? 'form'} initialIdea={route.query.get('idea') ?? undefined} jobId={job} />
+  }
+  return <PlaysList tab={route.query.get('tab') === 'watchlist' ? 'watchlist' : 'plays'} />
 }
 
 export function PlaysHomeCard() {
-  return null
+  return <PlaysHomeSummary />
 }

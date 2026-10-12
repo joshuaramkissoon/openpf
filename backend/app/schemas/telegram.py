@@ -22,7 +22,7 @@ class TelegramConfigUpdate(BaseModel):
 
 
 class TelegramTestRequest(BaseModel):
-    message: str = "MyPF test notification"
+    message: str = "OpenPF test notification"
 
 
 class TelegramTestResponse(BaseModel):

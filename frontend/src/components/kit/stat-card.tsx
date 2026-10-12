@@ -21,7 +21,7 @@ export function StatCard({
   className?: string
 }) {
   return (
-    <Card className={cn("flex flex-col gap-1 rounded-xl border p-4 shadow-none", className)}>
+    <Card className={cn("flex flex-col gap-1 rounded-xl border p-4 shadow-none ring-0", className)}>
       <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
       <span className="font-mono text-2xl font-semibold leading-tight tracking-tight tabular-nums">{value}</span>
       {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}

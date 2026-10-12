@@ -115,7 +115,8 @@ Fill missing months with 0 yourself when charting a calendar range.
 **`proposals`** `{limit?}` — Archie's trade proposals awaiting/after approval.
 `{proposals:[{id, created_at, status:'proposed'|'approved'|'executed'|'rejected'|…, ticker, side, quantity, notional, confidence, rationale, account, executed_at}]}`
 
-**`plays`** `{}` — theme bets. `{available: bool, plays: [...]}`; when `available` is false show a short note linking to `/plays`.
+**`plays`** `{status?: 'draft'|'active'|'paused'|'closed'}` — theme bets.
+`{available, plays:[{id, title, thesis, status, conviction, horizon_months, account_kind, budget_gbp, legs:[{ticker, target_weight, …}], kill_criteria:[…], review:{verdict, …}, created_at, activated_at}]}`. Link a play with `openpf.navigate('/plays/' + id)`. If `plays` is empty, say so and link to `/plays`.
 
 Any other source name is rejected.
 

@@ -1,4 +1,6 @@
 import axios from 'axios'
+
+import { withAuth, withWsToken } from './auth'
 import type {
   AgentRun,
   AgentRunDetail,
@@ -24,10 +26,12 @@ import type {
   WatchlistItem,
 } from '../types'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
-  timeout: 30000,
-})
+const api = withAuth(
+  axios.create({
+    baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+    timeout: 30000,
+  }),
+)
 
 export async function getConfig() {
   const { data } = await api.get<AppConfig>('/config')
@@ -168,9 +172,11 @@ export async function executeIntent(
   forceLive = false,
   accountKind?: 'invest' | 'stocks_isa',
 ) {
+  // The click is the human approval: approve-then-execute in one audited call.
   const { data } = await api.post(`/agent/intents/${id}/execute`, {
     force_live: forceLive,
     account_kind: accountKind,
+    approve: true,
   })
   return data
 }
@@ -320,7 +326,7 @@ export function streamChatMessage(
   const BASE_DELAY_MS = 500
 
   const done = new Promise<void>((resolve, reject) => {
-    const url = `${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`
+    const url = withWsToken(`${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`)
 
     const fail = (message: string) => {
       if (settled) return

@@ -58,3 +58,10 @@ sandbox_state.json
 
 # Views (agent-built pages; user data)
 backend/data/views/
+# Internal planning notes (kept locally, not published)
+docs/plans/
+docs/superpowers/
+docs/reviews/
+
+# Demo sandbox data
+.demo/

@@ -1,4 +1,4 @@
-.PHONY: up up-hot up-stable down down-hot down-stable logs logs-hot logs-stable restart restart-hot restart-stable clean clean-hot clean-stable build build-hot build-stable
+.PHONY: demo up up-hot up-stable down down-hot down-stable logs logs-hot logs-stable restart restart-hot restart-stable clean clean-hot clean-stable build build-hot build-stable
 
 COMPOSE_STABLE = docker compose -f docker-compose.yml
 COMPOSE_HOT = docker compose -f docker-compose.yml -f docker-compose.hot.yml
@@ -13,8 +13,13 @@ else
 $(error Invalid MODE '$(MODE)'. Use MODE=hot or MODE=stable)
 endif
 
+# SQLite file mounted into the containers. Prefers backend/openpf.db, falling back
+# to a pre-rename backend/mypf.db so existing installs keep their data.
+OPENPF_DB_FILE ?= $(if $(wildcard backend/openpf.db),./backend/openpf.db,$(if $(wildcard backend/mypf.db),./backend/mypf.db,./backend/openpf.db))
+export OPENPF_DB_FILE
+
 up:
-	@touch backend/mypf.db
+	@touch $(OPENPF_DB_FILE)
 	$(COMPOSE) up -d --build
 
 down:
@@ -69,3 +74,7 @@ build-hot:
 
 build-stable:
 	$(MAKE) build MODE=stable
+
+# Keyless sandbox demo (mock broker, no real money)
+demo:
+	./scripts/demo.sh

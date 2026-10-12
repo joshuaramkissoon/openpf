@@ -110,15 +110,20 @@ def ensure_history(db: Session, start: date, end: date) -> int:
     if not rates:
         return 0
 
-    inserted = 0
-    for d, rate in sorted(rates.items()):
-        if d in have:
-            continue
-        db.add(FxRateDaily(date=d, usd_per_gbp=rate, source=source))
-        inserted += 1
-    if inserted:
-        db.commit()
-    return inserted
+    # Two concurrent /history requests can both decide to fetch; insert-or-ignore
+    # keeps the second from tripping the UNIQUE(date) constraint.
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    rows = [
+        {"date": d, "usd_per_gbp": rate, "source": source, "fetched_at": datetime.utcnow()}
+        for d, rate in sorted(rates.items())
+        if d not in have
+    ]
+    if not rows:
+        return 0
+    result = db.execute(sqlite_insert(FxRateDaily).values(rows).on_conflict_do_nothing(index_elements=["date"]))
+    db.commit()
+    return int(result.rowcount or 0)
 
 
 # ── Lookup ──────────────────────────────────────────────────────────────────

@@ -164,7 +164,12 @@ def reject(intent_id: str, payload: IntentDecisionRequest, db: Session = Depends
 def execute(intent_id: str, payload: IntentExecuteRequest, db: Session = Depends(get_db)) -> IntentActionResponse:
     try:
         intent = execute_intent(
-            db, intent_id, force_live=payload.force_live, account_kind=payload.account_kind
+            db,
+            intent_id,
+            force_live=payload.force_live,
+            account_kind=payload.account_kind,
+            approve=payload.approve,
+            approved_via="ui",
         )
         return IntentActionResponse(intent_id=intent.id, status=intent.status, message="intent executed")
     except (ExecutionError, T212Error) as exc:

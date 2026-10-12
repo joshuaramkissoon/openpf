@@ -4,9 +4,7 @@ import json
 import logging
 import os
 import re
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -21,16 +19,17 @@ from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
-    parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS, _WATCHLIST_MCP_TOOLS,
+    parse_setting_sources, project_root, resolve_sdk_cwd,
 )
+from app.services import mcp_registry
 from app.services import costs_service
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import (
     _daily_entry_count,
     _daily_realized_pnl,
     append_daily_goal_line,
+    filter_agent_policy_patch,
+    get_policy,
     list_held_leveraged_positions,
     monitor_open_trades,
     read_recent_daily_goal_lines,
@@ -41,8 +40,6 @@ from app.services.leveraged_service import (
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
-_MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
 
 # A4 — blocked-run handling: a scheduled run can "succeed" (agent returns text)
 # yet be unable to act because a dependency (T212/MCP) was offline. Detect that,
@@ -243,7 +240,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "description": "Curated pre-open brief — what matters today across your holdings + macro",
         },
         "prompt": (
-            "Produce Josh's pre-open MARKET BRIEF as a tight markdown artifact. The goal: he has no time to "
+            "Produce the user's pre-open MARKET BRIEF as a tight markdown artifact. The goal: they have no time to "
             "follow news, so YOU read everything and surface only what matters. Steps:\n\n"
             "1. Pull current holdings via the T212 tools; focus on the top ~8 by value (both Invest + ISA).\n"
             "2. For those names, call `get_company_news` (since_days=1) and `get_earnings` — note any earnings "
@@ -290,7 +287,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "description": "Daily reasoned review of the watchlist → flags worth-noticing items into Attention",
         },
         "prompt": (
-            "Review Josh's WATCHLIST and resurface anything worth noticing — the watchlist must never "
+            "Review the user's WATCHLIST and resurface anything worth noticing — the watchlist must never "
             "become a graveyard. Steps:\n\n"
             "1. Call `list_watchlist` (status=watching). For EACH item, the `note` is the *reason* it's "
             "being watched — that note is your watch condition.\n"
@@ -645,16 +642,6 @@ def list_task_logs(db: Session, task_id: str, limit: int = 30) -> list[dict[str,
     ]
 
 
-def _build_sdk_env() -> dict[str, str]:
-    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the MCP
-    subprocesses. Without PYTHONPATH the t212 MCP server (which does `from app...`)
-    crashes on import and never registers, so every scheduled job loses T212 — match
-    the chat/analyst runtimes which set it. Credentials live in subprocess memory only."""
-    env = resolve_t212_env()
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
-    return env
-
-
 def _extract_text_from_sdk_message(message: Any) -> str:
     if message is None:
         return ""
@@ -708,94 +695,26 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
     if settings.agent_allow_bash:
         allowed_tools.append("Bash")
 
-    mcp_servers: dict[str, Any] = {}
-    t212_script = _MCP_SERVER_DIR / "t212.py"
-    yfinance_script = _MCP_SERVER_DIR / "marketdata.py"
-    scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
-    fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
-    intel_script = _MCP_SERVER_DIR / "intel.py"
-    if t212_script.is_file():
-        mcp_servers["trading212"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(t212_script)],
-            "env": _build_sdk_env(),
-        }
-        allowed_tools.extend(_T212_MCP_TOOLS)
-
-    # The marketdata + scheduler MCP servers import from the `app`
-    # package, so the backend root must be on PYTHONPATH when they
-    # are launched as stdio subprocesses by the SDK.
-    _backend_root = str(_MCP_SERVER_DIR.parent)
-
-    # The scheduler (and marketdata) MCP servers use the same SQLite
-    # database as the main app.  Because the default DATABASE_URL is a
-    # relative path (sqlite:///./mypf.db) and MCP subprocesses may run
-    # with a different CWD, we resolve it to an absolute path and pass
-    # it explicitly so every process opens the *same* database file.
-    _db_url = settings.database_url
-    if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
-        _rel = _db_url.replace("sqlite:///", "", 1)
-        _abs = str((Path(_backend_root) / _rel).resolve())
-        _db_url = f"sqlite:///{_abs}"
-    _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
-
-    if yfinance_script.is_file():
-        mcp_servers["marketdata"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(yfinance_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_MARKET_MCP_TOOLS)
-    if scheduler_script.is_file():
-        mcp_servers["scheduler"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(scheduler_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
-    if fundamentals_script.is_file():
-        mcp_servers["fundamentals"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(fundamentals_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
-    if intel_script.is_file():
-        mcp_servers["intel"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(intel_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_INTEL_MCP_TOOLS)
-    watchlist_script = _MCP_SERVER_DIR / "watchlist.py"
-    if watchlist_script.is_file():
-        mcp_servers["watchlist"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(watchlist_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_WATCHLIST_MCP_TOOLS)
+    mcp_servers, mcp_tools = mcp_registry.build_mcp_servers(mcp_registry.SCHEDULED)
+    allowed_tools.extend(mcp_tools)
 
     options = ClaudeAgentOptions(
         system_prompt={
             "type": "preset",
             "preset": "claude_code",
             "append": (
-                "You are Archie, Josh's portfolio copilot and leveraged strategy operator. "
+                f"You are Archie, {settings.user_possessive} portfolio copilot and leveraged strategy operator. "
                 "Always respect configured risk rails. "
+                "You cannot place, modify or cancel broker orders. To act on a trade idea, call "
+                "propose_trade (it checks the rails and queues it for human approval) or return it in "
+                "your JSON output as the task asks; never claim a trade was executed. "
                 f"Today is {datetime.now(tz=timezone.utc).strftime('%A %d %B %Y %H:%M UTC')}. "
                 "Tool routing: "
                 "Use mcp__marketdata__ tools (get_price_snapshot, get_price_history_rows, get_technical_snapshot) "
                 "for ALL price quotes, historical candles, and technical analysis — these are yfinance-backed "
                 "with no rate limits. "
-                "Use mcp__trading212__ tools ONLY for account-specific operations: positions, balances, "
-                "orders, execution, dividends, and transaction history. "
+                "Use mcp__trading212__ tools ONLY for account-specific reads: positions, balances, "
+                "pending/historical orders, dividends, and transaction history. "
                 "Never use T212 tools to look up prices or market data — T212 has strict API rate limits "
                 "(1 req/s for positions, 1 req/50s for instrument search)."
             ),
@@ -810,6 +729,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         # file edits; the PreToolUse security hooks still block secrets and
         # dangerous bash regardless of this mode.
         permission_mode="acceptEdits",
+        env=mcp_registry.sdk_env(),
         mcp_servers=mcp_servers,
         max_turns=settings.agent_max_turns,
         hooks=build_security_hooks(),
@@ -1281,15 +1201,23 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
     path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
 
     policy_updates = None
+    rejected_updates: dict[str, str] = {}
     parsed = meta.get("json") if isinstance(meta.get("json"), dict) else None
     if isinstance(parsed, dict):
         maybe_updates = parsed.get("policy_updates")
         if isinstance(maybe_updates, dict):
-            policy_updates = update_policy(db, maybe_updates, actor="archie")
+            # Agent output may only tighten rails; auto-execute & loosening are human-only.
+            allowed_updates, rejected_updates = filter_agent_policy_patch(get_policy(db), maybe_updates)
+            if allowed_updates:
+                policy_updates = update_policy(db, allowed_updates, actor="archie")
+            if rejected_updates:
+                logger.warning("ignored agent policy updates for %s: %s", task.name, rejected_updates)
 
     payload: dict[str, Any] = {"meta": meta}
     if policy_updates is not None:
         payload["policy_updates_applied"] = policy_updates
+    if rejected_updates:
+        payload["policy_updates_rejected"] = rejected_updates
 
     block_reason = _detect_block(output, parsed)
 

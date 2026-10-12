@@ -596,7 +596,7 @@ def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool
         ).scalars().all()
         for intent in intents[:3]:
             try:
-                approve_intent(db, intent.id, note="autopilot approved")
+                approve_intent(db, intent.id, note="autopilot approved", actor="autopilot")
                 execute_intent(db, intent.id)
             except Exception:
                 continue

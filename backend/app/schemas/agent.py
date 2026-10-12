@@ -59,6 +59,10 @@ class IntentExecuteRequest(BaseModel):
     # Explicit destination account ('invest' | 'stocks_isa'). When omitted, the
     # account the intent was proposed for is used (then 'invest' as a last resort).
     account_kind: str | None = None
+    # Human-UI convenience: approve a 'proposed' intent and execute it in one
+    # call (audited as a human approval). Without it the intent must already be
+    # 'approved'.
+    approve: bool = False
 
 
 class IntentActionResponse(BaseModel):
