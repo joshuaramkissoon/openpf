@@ -23,7 +23,7 @@ def _message_for_status(db: Session) -> str:
     metrics = snapshot["metrics"]
 
     return (
-        "*MyPF Status*\n"
+        "*OpenPF Status*\n"
         f"- Equity: `{account['currency']} {account['total']:,.2f}`\n"
         f"- Cash: `{account['currency']} {account['free_cash']:,.2f}` ({metrics['cash_ratio']:.1%})\n"
         f"- P/L: `{account['currency']} {account['ppl']:,.2f}`\n"
@@ -65,7 +65,7 @@ def _resolve_intent_by_token(db: Session, token: str) -> TradeIntent | None:
 
 def _help_text() -> str:
     return (
-        "*MyPF Telegram Commands*\n"
+        "*OpenPF Telegram Commands*\n"
         "- `/status` portfolio snapshot\n"
         "- `/accounts` account breakdown\n"
         "- `/run` refresh + run agent\n"

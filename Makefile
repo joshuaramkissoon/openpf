@@ -13,8 +13,13 @@ else
 $(error Invalid MODE '$(MODE)'. Use MODE=hot or MODE=stable)
 endif
 
+# SQLite file mounted into the containers. Prefers backend/openpf.db, falling back
+# to a pre-rename backend/mypf.db so existing installs keep their data.
+OPENPF_DB_FILE ?= $(if $(wildcard backend/openpf.db),./backend/openpf.db,$(if $(wildcard backend/mypf.db),./backend/mypf.db,./backend/openpf.db))
+export OPENPF_DB_FILE
+
 up:
-	@touch backend/mypf.db
+	@touch $(OPENPF_DB_FILE)
 	$(COMPOSE) up -d --build
 
 down:

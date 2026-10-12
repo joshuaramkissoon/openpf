@@ -735,7 +735,7 @@ export function AgentChatPanel({
               <Sparkles className="size-5" />
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">Hey Josh! I'm Archie, your portfolio copilot.</p>
+              <p className="text-sm font-medium text-foreground">Hey! I'm Archie, your portfolio copilot.</p>
               <p className="text-xs text-muted-foreground">Ask about performance, positions, allocation or risk.</p>
             </div>
             <div className="flex max-w-md flex-wrap justify-center gap-2">

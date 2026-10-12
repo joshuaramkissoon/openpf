@@ -3,7 +3,7 @@ full Thesis.
 
 Single source of truth for what's on the watchlist (it replaced the old
 ``app_config['watchlist']`` symbol list). Items carry the *reason* they're watched
-(``note``) plus the knobs the watch service uses to resurface them. CRUD'd by Josh
+(``note``) plus the knobs the watch service uses to resurface them. CRUD'd by the user
 (REST API) or Archie (watchlist MCP server). ``active_symbols`` is consumed by the
 agent run + leveraged scan.
 """
