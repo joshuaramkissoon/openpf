@@ -82,6 +82,17 @@ def test_sizing_never_exceeds_play_ceiling_but_user_override_is_flagged():
     assert any("ceiling" in w for w in o["warnings"])
 
 
+def test_overlap_only_counts_up_to_each_legs_slice():
+    legs = [{"ticker": "CCJ", "target_weight": 0.25}, {"ticker": "LEU", "target_weight": 0.75}]
+    s = ps.compute_sizing(book_gbp=80_000, conviction="medium", basket_vol=None, free_cash_gbp=50_000,
+                          risk=RISK, legs=legs, held_by_leg={"CCJ": 2600})
+    # target 3200: CCJ slice 800 fully covered by the 2600 held; LEU needs 2400.
+    assert s["overlap_gbp"] == pytest.approx(800)
+    assert s["budget_gbp"] == pytest.approx(2400)
+    alloc = {a["ticker"]: a["pct_of_budget"] for a in s["allocations"]}
+    assert alloc == {"CCJ": 0.0, "LEU": 1.0}
+
+
 def test_tranches_fit_daily_rail():
     small = ps.build_tranches(3000, RISK)
     assert [t["pct_of_budget"] for t in small] == [0.4, 0.3, 0.3]
@@ -156,13 +167,14 @@ def test_stage_refuses_closed_play(db):
 # ── Kill rules ──────────────────────────────────────────────────────────────
 
 def test_evaluate_rules():
-    ctx = {"prices": {"CCJ": 41.0}, "drawdown_pct": 20.0, "weights_of_book": {"__play__": 0.11, "CCJ": 0.02},
+    ctx = {"prices": {"CCJ": 41.0}, "drawdown_pct": 20.0, "weights": {"__play__": 0.11, "CCJ": 0.02},
            "today": date(2026, 10, 12)}
     assert ps.evaluate_rule({"type": "price_below", "ticker": "CCJ", "value": 42}, ctx)["state"] == "tripped"
     assert ps.evaluate_rule({"type": "price_below", "ticker": "CCJ", "value": 40}, ctx)["state"] == "near"
     assert ps.evaluate_rule({"type": "price_below", "ticker": "CCJ", "value": 30}, ctx)["state"] == "intact"
     assert ps.evaluate_rule({"type": "drawdown_pct", "value": 25}, ctx)["state"] == "near"
     assert ps.evaluate_rule({"type": "drawdown_pct", "value": 15}, ctx)["state"] == "tripped"
+    assert ps.evaluate_rule({"type": "drawdown_pct", "value": 0.15}, ctx)["state"] == "tripped"
     assert ps.evaluate_rule({"type": "weight_above", "ticker": None, "value": 0.10}, ctx)["state"] == "tripped"
     assert ps.evaluate_rule({"type": "weight_above", "ticker": "CCJ", "value": 5}, ctx)["state"] == "intact"
     assert ps.evaluate_rule({"type": "date_after", "value": "2026-10-01"}, ctx)["state"] == "tripped"

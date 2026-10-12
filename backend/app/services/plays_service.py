@@ -234,19 +234,22 @@ def compute_sizing(
     book_gbp: float,
     conviction: str,
     basket_vol: float | None,
-    overlap_gbp: float,
+    overlap_gbp: float = 0.0,
     free_cash_gbp: float,
     risk: dict[str, Any],
     budget_override_gbp: float | None = None,
     max_play_pct: float = MAX_PLAY_PCT,
     horizon_months: int = 12,
     max_leg_weight: float | None = None,
+    legs: list[dict[str, Any]] | None = None,
+    held_by_leg: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Deterministic, explainable play size + staged entry.
 
     target exposure = book × conviction% × vol factor, capped at ``max_play_pct``;
-    new money = target − what's already held in these names; then capped by the
-    account's free cash. A user-supplied budget wins but is flagged when above the cap.
+    new money = target − what's already held in these names (per leg, a holding
+    only counts up to that leg's slice); then capped by the account's free cash.
+    A user-supplied budget wins but is flagged when above the cap.
     """
     conviction = conviction if conviction in CONVICTION_PCT else "medium"
     base_pct = CONVICTION_PCT[conviction]
@@ -267,9 +270,33 @@ def compute_sizing(
     else:
         steps.append("Basket volatility unavailable — no volatility adjustment applied.")
 
-    suggested = max(target_gbp - overlap_gbp, 0.0)
-    if overlap_gbp > 0:
-        steps.append(f"You already hold {_fmt_gbp(overlap_gbp)} in these names, so new money is {_fmt_gbp(suggested)}.")
+    allocations: list[dict[str, Any]] = []
+    if legs:
+        held_by_leg = held_by_leg or {}
+        wsum = sum(float(l.get("target_weight") or 0.0) for l in legs) or 1.0
+        for l in legs:
+            w = float(l.get("target_weight") or 0.0) / wsum
+            slice_gbp = target_gbp * w
+            held = float(held_by_leg.get(l["ticker"], 0.0))
+            allocations.append({"ticker": l["ticker"], "target_gbp": round(slice_gbp, 2), "held_gbp": round(held, 2),
+                                "new_gbp": round(max(slice_gbp - held, 0.0), 2), "weight": w})
+        overlap_gbp = sum(min(a["held_gbp"], a["target_gbp"]) for a in allocations)
+        suggested = sum(a["new_gbp"] for a in allocations)
+        need = suggested or 1.0
+        for a in allocations:
+            a["pct_of_budget"] = round(a["new_gbp"] / need, 4) if suggested else round(a["weight"], 4)
+        covered = [a for a in allocations if a["held_gbp"] > 0]
+        if covered:
+            names = ", ".join(f"{a['ticker']} ({_fmt_gbp(a['held_gbp'])})" for a in covered)
+            steps.append(
+                f"You already hold {names}; counted up to each leg's slice, that covers {_fmt_gbp(overlap_gbp)}, "
+                f"so new money is {_fmt_gbp(suggested)}, weighted to the legs you don't own yet."
+            )
+        max_leg_weight = max((a["pct_of_budget"] for a in allocations), default=max_leg_weight)
+    else:
+        suggested = max(target_gbp - overlap_gbp, 0.0)
+        if overlap_gbp > 0:
+            steps.append(f"You already hold {_fmt_gbp(overlap_gbp)} in these names, so new money is {_fmt_gbp(suggested)}.")
 
     if budget_override_gbp is not None and budget_override_gbp > 0:
         budget = float(budget_override_gbp)
@@ -317,6 +344,7 @@ def compute_sizing(
         "max_play_pct": max_play_pct,
         "max_loss_gbp": max_loss,
         "tranches": tranches,
+        "allocations": allocations,
         "rationale": " ".join(s for s in steps if s),
         "steps": [s for s in steps if s],
         "warnings": warnings,
@@ -366,8 +394,8 @@ def evaluate_rule(rule: dict[str, Any] | None, ctx: dict[str, Any]) -> dict[str,
     """Return ``{state: intact|near|tripped|unknown, detail}`` for one rule.
 
     ctx keys: ``prices`` {ticker: price}, ``drawdown_pct`` (basket drawdown from
-    its peak since activation, as a positive %), ``weights_of_book``
-    {ticker|'__play__': fraction}, ``today`` (date).
+    its peak since activation, as a positive %), ``weights`` {ticker: share of
+    the play, '__play__': play's share of the book}, ``today`` (date).
     """
     if not rule:
         return {"state": "manual", "detail": "Judgement call — checked in reviews"}
@@ -390,24 +418,27 @@ def evaluate_rule(rule: dict[str, Any] | None, ctx: dict[str, Any]) -> dict[str,
             if dd is None:
                 return {"state": "unknown", "detail": "No basket history yet"}
             v = abs(float(value))
+            v = v * 100 if v <= 1 else v  # accept 0.3 or 30
             if dd >= v:
                 return {"state": "tripped", "detail": f"Basket down {dd:.1f}% from peak (limit {v:.0f}%)"}
             if dd >= 0.75 * v:
                 return {"state": "near", "detail": f"Basket down {dd:.1f}% from peak (limit {v:.0f}%)"}
             return {"state": "intact", "detail": f"Basket down {dd:.1f}% from peak (limit {v:.0f}%)"}
         if rtype == "weight_above":
+            # ticker → that leg's share of the play; no ticker → the play's share of the book.
             key = ticker or "__play__"
-            w = (ctx.get("weights_of_book") or {}).get(key)
+            w = (ctx.get("weights") or {}).get(key)
             if w is None:
                 return {"state": "unknown", "detail": "Not held yet"}
             v = float(value)
             v = v / 100 if v > 1 else v
-            label = ticker or "Play"
+            label, of = (f"{ticker}", "of the play") if ticker else ("Play", "of book")
+            msg = f"{label} is {w:.1%} {of} (max {v:.0%})"
             if w > v:
-                return {"state": "tripped", "detail": f"{label} is {w:.1%} of book (max {v:.0%})"}
+                return {"state": "tripped", "detail": msg}
             if w > 0.9 * v:
-                return {"state": "near", "detail": f"{label} is {w:.1%} of book (max {v:.0%})"}
-            return {"state": "intact", "detail": f"{label} is {w:.1%} of book (max {v:.0%})"}
+                return {"state": "near", "detail": msg}
+            return {"state": "intact", "detail": msg}
         if rtype == "date_after":
             deadline = date.fromisoformat(str(value)[:10])
             today = ctx.get("today") or date.today()
@@ -431,8 +462,9 @@ def verdict_from_states(states: list[str], drift: bool = False) -> str:
 
 # ── Instruments ──────────────────────────────────────────────────────────────
 
-def resolve_instrument(db: Session, ticker: str) -> str:
-    """Best-effort T212 instrument code for a Yahoo-style ticker."""
+def resolve_instrument(db: Session, ticker: str) -> tuple[str, bool]:
+    """Best-effort T212 instrument code for a Yahoo-style ticker, plus whether it
+    was found in the broker's instrument list (False → a guessed code)."""
     t = (ticker or "").strip().upper()
     base = t.split(".")[0]
     is_lse = t.endswith(".L")
@@ -445,12 +477,18 @@ def resolve_instrument(db: Session, ticker: str) -> str:
             if r.get("ticker", "").upper() != base and str(r.get("display_ticker") or "").upper() != base:
                 continue
             if is_lse and code.lower().endswith("l_eq"):
-                return code
+                return code, True
             if not is_lse and code.upper().endswith("_US_EQ"):
-                return code
+                return code, True
     except Exception as exc:  # noqa: BLE001
         logger.debug("instrument search failed for %s: %s", ticker, exc)
-    return f"{base}l_EQ" if is_lse else f"{base}_US_EQ"
+    return (f"{base}l_EQ" if is_lse else f"{base}_US_EQ"), False
+
+
+def _attach_instruments(db: Session, legs: list[dict[str, Any]]) -> None:
+    for l in legs:
+        if not l.get("instrument_code"):
+            l["instrument_code"], l["instrument_verified"] = resolve_instrument(db, l["ticker"])
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -484,9 +522,7 @@ def update_play(db: Session, play: Play, patch: dict[str, Any], *, risk: dict[st
             setattr(play, key, patch[key])
     if patch.get("legs") is not None:
         legs = _normalise_legs([dict(l) for l in patch["legs"]])
-        for l in legs:
-            if not l.get("instrument_code"):
-                l["instrument_code"] = resolve_instrument(db, l["ticker"])
+        _attach_instruments(db, legs)
         play.legs = legs
     if patch.get("kill_criteria") is not None:
         play.kill_criteria = [dict(c) for c in patch["kill_criteria"]]
@@ -519,18 +555,19 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
 
     risk = risk or ConfigStore(db).get_risk()
     book = book or book_context(db)
-    overlap = overlap_with_book(play.legs or [], book["positions"])
+    overlap = overlap_with_book(play.legs or [], book["positions"], account_kind=play.account_kind)
+    overlap_any = overlap_with_book(play.legs or [], book["positions"])
     override = play.budget_gbp if (play.sizing or {}).get("budget_override") else None
     sizing = compute_sizing(
         book_gbp=book["total_gbp"],
         conviction=play.conviction,
         basket_vol=basket_volatility(play.legs or []),
-        overlap_gbp=sum(o["value_gbp"] for o in overlap),
+        legs=play.legs or [],
+        held_by_leg={o["ticker"]: o["value_gbp"] for o in overlap},
         free_cash_gbp=book["free_cash_gbp"].get(play.account_kind, 0.0),
         risk=risk,
         budget_override_gbp=override,
         horizon_months=play.horizon_months,
-        max_leg_weight=max((float(l.get("target_weight") or 0) for l in play.legs or []), default=None),
     )
     sizing["budget_override"] = bool(override)
     sizing["staged"] = (play.sizing or {}).get("staged", [])
@@ -538,7 +575,7 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
     play.budget_gbp = sizing["budget_gbp"]
     play.budget_pct_of_book = sizing["budget_pct_of_book"]
     meta = dict(play.meta or {})
-    meta["overlap"] = overlap
+    meta["overlap"] = overlap_any
     play.meta = meta
 
 
@@ -556,9 +593,7 @@ def create_play(db: Session, data: dict[str, Any]) -> Play:
         meta={},
     )
     legs = _normalise_legs([dict(l) for l in data.get("legs") or []])
-    for l in legs:
-        if not l.get("instrument_code"):
-            l["instrument_code"] = resolve_instrument(db, l["ticker"])
+    _attach_instruments(db, legs)
     play.legs = legs
     if data.get("budget_gbp"):
         play.budget_gbp = float(data["budget_gbp"])
@@ -672,10 +707,12 @@ def stage_tranche(
     skipped: list[dict[str, Any]] = []
     breaches_all: list[dict[str, Any]] = []
     running = 0.0
+    alloc = {a["ticker"]: float(a["pct_of_budget"]) for a in sizing.get("allocations") or []}
     for leg in play.legs or []:
-        notional = tranche_gbp * float(leg.get("target_weight") or 0.0)
+        notional = tranche_gbp * alloc.get(leg["ticker"], float(leg.get("target_weight") or 0.0))
         if notional < MIN_LEG_NOTIONAL_GBP:
-            skipped.append({"ticker": leg["ticker"], "reason": "below minimum order size"})
+            reason = "already held" if leg["ticker"] in alloc and alloc[leg["ticker"]] == 0 else "below minimum order size"
+            skipped.append({"ticker": leg["ticker"], "reason": reason})
             continue
         price = price_fn(leg["ticker"])
         if not price or price <= 0:
@@ -800,10 +837,10 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
     prices = {l["ticker"]: price_fn(l["ticker"]) for l in play.legs or [] if any(
         (c.get("rule") or {}).get("type") == "price_below" and (c.get("rule") or {}).get("ticker", "").upper() == l["ticker"]
         for c in play.kill_criteria or [])}
-    weights = {l["ticker"]: l["weight_of_book"] for l in legs_out if l["value_gbp"] > 0}
+    weights = {l["ticker"]: l["actual_weight"] for l in legs_out} if held_total > 0 else {}
     if held_total > 0 and book["total_gbp"]:
         weights["__play__"] = held_total / book["total_gbp"]
-    ctx = {"prices": prices, "drawdown_pct": series.get("drawdown_pct"), "weights_of_book": weights, "today": date.today()}
+    ctx = {"prices": prices, "drawdown_pct": series.get("drawdown_pct"), "weights": weights, "today": date.today()}
     kill_status = [{**c, **evaluate_rule(c.get("rule"), ctx)} for c in play.kill_criteria or []]
 
     return {
@@ -916,8 +953,9 @@ Rules:
   a handful of tool calls, not dozens.
 - Mind the user's existing holdings: avoid doubling up on names they already hold heavily; mention overlap.
 - Kill criteria: 2-4 items. At least 2 must have a machine-checkable `rule`:
-  price_below {ticker, value in the listing currency}, drawdown_pct {value: % basket drawdown from peak},
-  weight_above {ticker or null for whole play, value: fraction of the total book e.g. 0.12},
+  price_below {ticker, value in the listing currency}, drawdown_pct {value: % basket drawdown from peak, e.g. 30},
+  weight_above {ticker: that leg's share of the play, e.g. 0.35; or ticker null: the whole play's share of
+  the user's total book, e.g. 0.12},
   date_after {value: ISO date by which the thesis must have shown progress}.
 - Do NOT size the position — the app sizes it deterministically against the user's book.
 - "what_would_change_my_mind": one or two sentences, concrete and falsifiable.
@@ -1016,10 +1054,11 @@ async def _run_structured(prompt: str, *, system: str, schema: dict[str, Any], m
         model=model,
         cwd=str(resolve_sdk_cwd()),
         setting_sources=[],
+        tools=[t for t in tools if not t.startswith("mcp__")],
         allowed_tools=tools,
         mcp_servers=mcp,
         max_turns=max_turns,
-        permission_mode="bypassPermissions" if tools else None,
+        permission_mode="dontAsk",
         output_format={"type": "json_schema", "schema": schema},
     )
     text_chunks: list[str] = []
@@ -1027,7 +1066,7 @@ async def _run_structured(prompt: str, *, system: str, schema: dict[str, Any], m
     async for message in query(prompt=prompt, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
-                if isinstance(block, ToolUseBlock) and on_progress and block.name != "StructuredOutput":
+                if isinstance(block, ToolUseBlock) and on_progress and block.name not in {"StructuredOutput", "ToolSearch"}:
                     on_progress(_tool_line(block.name, block.input or {}))
                 elif hasattr(block, "text"):
                     text_chunks.append(block.text)
@@ -1084,8 +1123,7 @@ def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: di
          "rationale": l.rationale, "currency": listing_currency(l.ticker, l.currency)}
         for l in out.legs
     ])
-    for l in legs:
-        l["instrument_code"] = resolve_instrument(db, l["ticker"])
+    _attach_instruments(db, legs)
     conviction = req.get("conviction") or out.suggested_conviction
     play = Play(
         title=out.title.strip(),
