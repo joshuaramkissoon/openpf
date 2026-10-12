@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         alias="CORS_ALLOW_ORIGIN_REGEX",
     )
 
-    t212_base_env: Literal["live", "demo"] = Field(default="live", alias="T212_BASE_ENV")
+    t212_base_env: Literal["live", "demo", "sandbox"] = Field(default="live", alias="T212_BASE_ENV")
     t212_api_key: str = Field(default="", alias="T212_API_KEY")
     t212_api_secret: str = Field(default="", alias="T212_API_SECRET")
     t212_invest_api_key: str = Field(default="", alias="T212_INVEST_API_KEY")

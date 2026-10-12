@@ -35,6 +35,12 @@ def _scheduler_should_run() -> bool:
         return False
 
 
+def _sandbox_enabled() -> bool:
+    from app.services.sandbox_broker import is_sandbox_enabled_env
+
+    return is_sandbox_enabled_env() or settings.t212_base_env == "sandbox"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -49,6 +55,16 @@ async def lifespan(app: FastAPI):
                 logging.getLogger(__name__).info("Seeded %d watchlist items from config", seeded)
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).warning("Watchlist seed skipped", exc_info=True)
+    if _sandbox_enabled():
+        try:
+            from app.core.database import SessionLocal
+            from app.services import sandbox_broker
+
+            with SessionLocal() as db:
+                if sandbox_broker.seed_config_if_fresh(db):
+                    logging.getLogger(__name__).info("Sandbox broker enabled (no real money): %s", sandbox_broker.sandbox_base_url())
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning("Sandbox seed skipped", exc_info=True)
     if _scheduler_should_run():
         start_scheduler()
     yield
@@ -91,3 +107,8 @@ app.include_router(research.router, prefix=settings.api_prefix)
 app.include_router(attention.router, prefix=settings.api_prefix)
 app.include_router(watchlist.router, prefix=settings.api_prefix)
 app.include_router(instruments.router, prefix=settings.api_prefix)
+
+if _sandbox_enabled():
+    from app.api import sandbox_t212
+
+    app.include_router(sandbox_t212.router)

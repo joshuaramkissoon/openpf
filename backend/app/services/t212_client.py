@@ -40,6 +40,10 @@ class T212Client:
 
     @property
     def base_url(self) -> str:
+        if self.base_env == "sandbox":
+            from app.services.sandbox_broker import sandbox_base_url
+
+            return sandbox_base_url()
         if self.base_env == "live":
             return "https://live.trading212.com/api/v0"
         return "https://demo.trading212.com/api/v0"

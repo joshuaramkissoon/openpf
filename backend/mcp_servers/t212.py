@@ -173,9 +173,12 @@ def _resolve_credentials(account: AccountKind, scope: str = "read") -> tuple[str
 
 def _base_url() -> str:
     env = os.environ.get("T212_BASE_ENV", "live").strip().lower()
+    if env == "sandbox":
+        # Local mock broker served by the OpenPF backend (no real money).
+        return os.environ.get("T212_SANDBOX_URL", "").strip() or f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/sandbox-t212/api/v0"
     url = _BASE_URLS.get(env)
     if not url:
-        raise ValueError(f"Invalid T212_BASE_ENV '{env}'. Must be 'demo' or 'live'.")
+        raise ValueError(f"Invalid T212_BASE_ENV '{env}'. Must be 'demo', 'live' or 'sandbox'.")
     return url
 
 

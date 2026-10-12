@@ -15,7 +15,7 @@ class RiskConfig(BaseModel):
 class BrokerConfig(BaseModel):
     broker_mode: Literal["paper", "live"]
     autopilot_enabled: bool
-    t212_base_env: Literal["live", "demo"]
+    t212_base_env: Literal["live", "demo", "sandbox"]
     scheduler_enabled: bool = False
 
 
