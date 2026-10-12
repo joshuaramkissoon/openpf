@@ -40,6 +40,26 @@ def _scheduler_should_run() -> bool:
         return False
 
 
+def _warm_sandbox_history() -> None:
+    """First sandbox boot: pull the mock deposits and rebuild the equity curve from
+    the mock order history, so the demo opens with a full chart, not an empty one."""
+    import threading
+
+    def _run() -> None:
+        from app.core.database import SessionLocal
+        from app.services.cashflow_service import sync_all
+        from app.services.equity_backfill import backfill_all
+
+        try:
+            with SessionLocal() as db:
+                sync_all(db)
+                backfill_all(db)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning("Sandbox history warm-up failed", exc_info=True)
+
+    threading.Thread(target=_run, name="sandbox-warmup", daemon=True).start()
+
+
 def _sandbox_enabled() -> bool:
     from app.services.sandbox_broker import is_sandbox_enabled_env
 
@@ -91,6 +111,7 @@ async def lifespan(app: FastAPI):
             with SessionLocal() as db:
                 if sandbox_broker.seed_config_if_fresh(db):
                     logging.getLogger(__name__).info("Sandbox broker enabled (no real money): %s", sandbox_broker.sandbox_base_url())
+                    _warm_sandbox_history()
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).warning("Sandbox seed skipped", exc_info=True)
     if _scheduler_should_run():
