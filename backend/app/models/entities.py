@@ -363,3 +363,38 @@ class ScheduledTaskLog(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     output_path: Mapped[str | None] = mapped_column(String(360), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class Play(Base):
+    """A theme bet: a plain-English thesis turned into a sized, staged, monitored
+    basket. Orders are never placed from here — staging a tranche creates
+    ``proposed`` TradeIntents that still need human approval."""
+
+    __tablename__ = "plays"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    title: Mapped[str] = mapped_column(String(240), default="")
+    thesis: Mapped[str] = mapped_column(Text, default="")  # markdown
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)  # draft | active | paused | closed
+    conviction: Mapped[str] = mapped_column(String(12), default="medium")  # low | medium | high
+    horizon_months: Mapped[int] = mapped_column(Integer, default=12)
+    account_kind: Mapped[str] = mapped_column(String(24), default="stocks_isa")  # invest | stocks_isa
+    budget_gbp: Mapped[float] = mapped_column(Float, default=0.0)
+    budget_pct_of_book: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # [{ticker, instrument_code, name, role, target_weight, rationale, currency?}]
+    legs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # {rationale, tranches: [{label, pct_of_budget, trigger}], max_loss_gbp, ...}
+    sizing: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # [{text, rule?: {type, ticker?, value}}]
+    kill_criteria: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    what_would_change_my_mind: Mapped[str] = mapped_column(Text, default="")
+    # {last_reviewed_at, verdict, notes, history: [...]}
+    review: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    source_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)

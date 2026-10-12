@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     claude_chat_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_CHAT_MODEL")
     claude_agent_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_AGENT_MODEL")
     claude_memory_model: str = Field(default="claude-haiku-4-5", alias="CLAUDE_MEMORY_MODEL")
+    claude_plays_model: str = Field(default="claude-sonnet-4-6", alias="CLAUDE_PLAYS_MODEL")
+    claude_plays_review_model: str = Field(default="claude-haiku-4-5", alias="CLAUDE_PLAYS_REVIEW_MODEL")
     claude_setting_sources: str = Field(default="project", alias="CLAUDE_SETTING_SOURCES")
     claude_project_cwd: str = Field(default=".claude/runtime", alias="CLAUDE_PROJECT_CWD")
     claude_chat_allow_writes: bool = Field(default=True, alias="CLAUDE_CHAT_ALLOW_WRITES")
