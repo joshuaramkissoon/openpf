@@ -137,6 +137,66 @@ def start_job(job: Job) -> None:
     task.add_done_callback(_tasks.discard)
 
 
+# ── cross-process queue ─────────────────────────────────────────────────
+# Archie asks for views from its MCP subprocess. Running a whole builder session
+# inside that tool call blocks the chat turn (and nests one agent inside
+# another), so the MCP server only *enqueues*: it creates the view shell and
+# drops a request file; the API process's worker picks it up and builds it like
+# any UI request. The sidebar shows the view as soon as the build lands.
+
+def _queue_dir() -> Path:
+    path = store.data_dir() / "_queue"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def enqueue(prompt: str, *, view_id: str | None = None) -> dict[str, Any]:
+    """Queue a build from another process. Returns the target view id/path."""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required")
+    if len(prompt) > 4000:
+        raise ValueError("prompt is too long (4000 characters max)")
+    if view_id:
+        store.get_view(view_id)  # raises ViewNotFound
+        kind = "edit"
+    else:
+        meta = store.create_view(title="New view", prompt=prompt, slug=store.prompt_slug(prompt))
+        view_id = meta["id"]
+        kind = "create"
+    req = {"prompt": prompt, "view_id": view_id, "kind": kind, "queued_at": time.time()}
+    tmp = _queue_dir() / f".{uuid.uuid4().hex}.tmp"
+    tmp.write_text(json.dumps(req))
+    tmp.replace(tmp.with_name(tmp.name[1:].replace(".tmp", ".json")))
+    return {"view_id": view_id, "kind": kind, "path": f"/views/{view_id}"}
+
+
+def _job_for_request(req: dict[str, Any]) -> Job:
+    if req.get("kind") == "create":
+        job = Job(id=uuid.uuid4().hex[:12], view_id=req["view_id"], kind="create", prompt=req["prompt"], created_view=True)
+        _jobs[job.id] = job
+        return job
+    return prepare_job(req["prompt"], view_id=req["view_id"])
+
+
+async def queue_worker(poll_seconds: float = 2.0) -> None:
+    """Run in the API process: start builds that other processes queued."""
+    while True:
+        try:
+            for path in sorted(_queue_dir().glob("*.json")):
+                try:
+                    req = json.loads(path.read_text())
+                finally:
+                    path.unlink(missing_ok=True)
+                try:
+                    start_job(_job_for_request(req))
+                except Exception:  # noqa: BLE001 — a bad request must not kill the worker
+                    logger.warning("queued view build failed to start", exc_info=True)
+        except Exception:  # noqa: BLE001
+            logger.warning("view queue poll failed", exc_info=True)
+        await asyncio.sleep(poll_seconds)
+
+
 # ── prompt ──────────────────────────────────────────────────────────────
 _SYSTEM = """You are the OpenPF view builder. You turn a user's request into one polished, self-contained HTML view that runs inside OpenPF's sandbox, on the user's live portfolio data. Speed matters: aim to finish in a few turns.
 

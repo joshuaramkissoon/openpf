@@ -59,20 +59,17 @@ def _fmt(payload: Any) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
 
-async def _build(prompt: str, view_id: str | None) -> dict[str, Any]:
-    job = builder.prepare_job(prompt, view_id=view_id)
-    await builder.run_job(job)
-    if job.status != "done":
-        return {"ok": False, "error": job.error, "progress": [p["text"] for p in job.progress]}
-    meta = store.get_view(job.view_id)
+def _queue(prompt: str, view_id: str | None) -> dict[str, Any]:
+    queued = builder.enqueue(prompt, view_id=view_id)
     return {
         "ok": True,
-        "view_id": meta["id"],
-        "title": meta["title"],
-        "description": meta["description"],
-        "version": job.version,
-        "path": f"/views/{meta['id']}",
-        "seconds": job.public()["elapsed_s"],
+        "status": "building",
+        "view_id": queued["view_id"],
+        "path": queued["path"],
+        "message": (
+            "The view is being built now (usually under a minute). It appears in the "
+            "sidebar under Views when ready; tell the user where to find it."
+        ),
     }
 
 
@@ -84,7 +81,7 @@ def list_views() -> str:
 
 
 @mcp.tool()
-async def create_view(prompt: str, title: str = "") -> str:
+def create_view(prompt: str, title: str = "") -> str:
     """Build a new view from a description of what the user wants to see.
 
     Args:
@@ -95,13 +92,13 @@ async def create_view(prompt: str, title: str = "") -> str:
     logger.info("create_view prompt=%r", prompt[:200])
     full = f"{prompt}\n\n(Title suggestion: {title})" if title.strip() else prompt
     try:
-        return _fmt(await _build(full, None))
+        return _fmt(_queue(full, None))
     except ValueError as exc:
         return _fmt({"ok": False, "error": str(exc)})
 
 
 @mcp.tool()
-async def update_view(view_id: str, instruction: str) -> str:
+def update_view(view_id: str, instruction: str) -> str:
     """Change an existing view (creates a new version; the user can revert).
 
     Args:
@@ -110,7 +107,7 @@ async def update_view(view_id: str, instruction: str) -> str:
     """
     logger.info("update_view id=%s instruction=%r", view_id, instruction[:200])
     try:
-        return _fmt(await _build(instruction, view_id))
+        return _fmt(_queue(instruction, view_id))
     except store.ViewNotFound:
         return _fmt({"ok": False, "error": f"no view with id '{view_id}'"})
     except (ValueError, builder.BuildConflict) as exc:

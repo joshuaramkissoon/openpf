@@ -13,10 +13,12 @@ export function ViewsNav({ collapsed, onNavigate }: { collapsed?: boolean; onNav
   const pinned = views.filter((v) => v.pinned)
   const building = views.some((v) => v.current_version === 0)
 
-  // A view mid-build has no title yet — poll until it lands.
+  // A view mid-build has no title yet — poll quickly until it lands. Archie can
+  // also queue views from chat at any time, so check back periodically too.
   useEffect(() => {
-    if (!building) return
-    const t = window.setInterval(() => void refreshViews(), 3000)
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshViews()
+    }, building ? 3000 : 15000)
     return () => window.clearInterval(t)
   }, [building])
 

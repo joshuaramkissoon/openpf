@@ -116,7 +116,14 @@ async def lifespan(app: FastAPI):
             logging.getLogger(__name__).warning("Sandbox seed skipped", exc_info=True)
     if _scheduler_should_run():
         start_scheduler()
+    # Builds Archie queues for agent-built Views (see views_builder.enqueue).
+    import asyncio
+
+    from app.services import views_builder
+
+    views_queue = asyncio.create_task(views_builder.queue_worker())
     yield
+    views_queue.cancel()
     await claude_chat_runtime.shutdown()
     stop_scheduler()
     from app.services.forecast_pool import shutdown as shutdown_forecast_pool

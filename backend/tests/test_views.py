@@ -200,3 +200,22 @@ def test_api_html_revalidates_tampered_file(views_dir):
     store.save_version(vid, OK + "<script>fetch('https://evil.example')</script>")
     doc = client.get(f"/api/views/{vid}/html").json()
     assert doc["html"] == "" and doc["problems"]
+
+
+def test_enqueue_creates_view_shell_and_request(views_dir):
+    import json
+
+    queued = builder.enqueue("dividend income by month")
+    assert queued["kind"] == "create" and queued["path"] == f"/views/{queued['view_id']}"
+    files = list((views_dir / "_queue").glob("*.json"))
+    assert len(files) == 1
+    req = json.loads(files[0].read_text())
+    job = builder._job_for_request(req)
+    assert job.view_id == queued["view_id"] and job.kind == "create" and job.created_view
+    # The queue folder is never mistaken for a view.
+    assert [v["id"] for v in store.list_views()] == [queued["view_id"]]
+
+
+def test_enqueue_edit_requires_existing_view(views_dir):
+    with pytest.raises(store.ViewNotFound):
+        builder.enqueue("make it blue", view_id="nope")
