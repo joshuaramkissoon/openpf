@@ -868,7 +868,10 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
     # Leg weights/drift only mean something once the basket is mostly built —
     # mid-entry (or with a pre-existing holding) one leg naturally dominates.
     target_exposure = float(play.budget_gbp or 0.0) + float((play.sizing or {}).get("overlap_gbp") or 0.0)
-    built = bool(held_total > 0 and target_exposure > 0 and held_total >= BUILT_THRESHOLD * target_exposure)
+    sz = play.sizing or {}
+    fully_staged = len(sz.get("staged") or []) >= len(sz.get("tranches") or [])
+    built = bool(fully_staged and held_total > 0 and target_exposure > 0
+                 and held_total >= BUILT_THRESHOLD * target_exposure)
     weights = {l["ticker"]: l["actual_weight"] for l in legs_out} if built else {}
     if held_total > 0 and book["total_gbp"]:
         weights["__play__"] = held_total / book["total_gbp"]
@@ -1257,8 +1260,10 @@ def run_llm_review(db: Session, play: Play) -> dict[str, Any]:
             "title", "thesis", "conviction", "horizon_months", "activated_at", "legs", "kill_criteria",
             "what_would_change_my_mind", "budget_gbp"}},
         "performance": {k: perf.get(k) for k in (
-            "held_gbp", "basket_return", "benchmark", "benchmark_return", "drawdown_pct", "tranches_staged",
-            "tranches_total", "kill_status")},
+            "held_gbp", "target_exposure_gbp", "basket_return", "benchmark", "benchmark_return", "drawdown_pct",
+            "tranches_staged", "tranches_total", "kill_status")},
+        "note": "Staged tranches are buy proposals awaiting the user's approval; held values only reflect filled orders "
+                "and may include holdings that pre-date the play.",
         "legs": [{k: l.get(k) for k in ("ticker", "target_weight", "actual_weight", "value_gbp", "ppl_gbp")} for l in perf["legs"]],
         "today": date.today().isoformat(),
     }

@@ -67,13 +67,13 @@ const SOURCE: Record<string, { label: string; Icon: typeof User }> = {
 
 const CONVICTION_DOT: Record<string, string> = {
   high: 'bg-positive',
-  medium: 'bg-[#dcb45c]',
+  medium: 'bg-warning',
   low: 'bg-muted-foreground',
 }
 
 const SEVERITY_CLASS: Record<string, string> = {
   critical: 'bg-negative/15 text-negative',
-  warning: 'bg-[#dcb45c]/15 text-[#dcb45c]',
+  warning: 'bg-warning/15 text-warning',
   info: 'bg-primary/15 text-primary',
 }
 
@@ -337,7 +337,7 @@ export function WatchlistBoard({ onError }: Props) {
                         onClick={() => void patch(item.id, { monitor: !item.monitor })}
                         title={item.monitor ? 'Monitoring on — click to mute' : 'Monitoring muted — click to resume'}
                         aria-label={item.monitor ? 'Mute monitoring' : 'Resume monitoring'}
-                        className={`inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-accent ${item.monitor ? 'text-muted-foreground hover:text-foreground' : 'text-[#dcb45c]'}`}
+                        className={`inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-accent ${item.monitor ? 'text-muted-foreground hover:text-foreground' : 'text-warning'}`}
                       >
                         {item.monitor ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
                       </button>
@@ -384,7 +384,7 @@ export function WatchlistBoard({ onError }: Props) {
                           {item.flags.map((f) => (
                             <div key={f.id} className="flex items-start gap-2 rounded-lg border border-border/60 bg-card/40 p-2.5">
                               <AlertTriangle
-                                className={`mt-0.5 size-3.5 shrink-0 ${f.severity === 'critical' ? 'text-negative' : f.severity === 'warning' ? 'text-[#dcb45c]' : 'text-primary'}`}
+                                className={`mt-0.5 size-3.5 shrink-0 ${f.severity === 'critical' ? 'text-negative' : f.severity === 'warning' ? 'text-warning' : 'text-primary'}`}
                               />
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-start justify-between gap-2">

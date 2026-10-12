@@ -237,6 +237,8 @@ def test_drift_only_flagged_once_basket_is_built(db):
     assert perf["basket_built"] is False
     ps.review_active_plays(db, book=pos(300.0), history_fn=hist, price_fn=lambda t: 10.0)
     assert not db.execute(select(Alert).where(Alert.dedupe_key.like("%drift"))).scalars().all()
-    # Fully built but all in one leg → drift alert.
+    # Fully staged + built but all in one leg → drift alert.
+    play.sizing = {**play.sizing, "staged": [{"index": i} for i in range(len(play.sizing["tranches"]))]}
+    db.commit()
     ps.review_active_plays(db, book=pos(1000.0), history_fn=hist, price_fn=lambda t: 10.0)
     assert db.execute(select(Alert).where(Alert.dedupe_key.like("%drift"))).scalars().all()

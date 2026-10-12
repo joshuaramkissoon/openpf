@@ -113,7 +113,7 @@ export function LegsTable({ legs, built }: { legs: LegPerformance[]; built: bool
             <TableHead className="text-xs text-muted-foreground">Instrument</TableHead>
             <TableHead className="text-right text-xs text-muted-foreground">Target</TableHead>
             <TableHead className="text-right text-xs text-muted-foreground">Actual</TableHead>
-            <TableHead className="text-right text-xs text-muted-foreground">Value</TableHead>
+            <TableHead className="hidden text-right text-xs text-muted-foreground sm:table-cell">Value</TableHead>
             <TableHead className="text-right text-xs text-muted-foreground">P/L</TableHead>
           </TableRow>
         </TableHeader>
@@ -140,7 +140,7 @@ export function LegsTable({ legs, built }: { legs: LegPerformance[]; built: bool
                   <Minus className="ml-auto size-3.5 text-muted-foreground" />
                 )}
               </TableCell>
-              <TableCell className="text-right">
+              <TableCell className="hidden text-right sm:table-cell">
                 {l.value_gbp > 0 ? <Money value={l.value_gbp} decimals={0} className="text-sm" /> : <span className="text-sm text-muted-foreground">—</span>}
               </TableCell>
               <TableCell className="text-right">
