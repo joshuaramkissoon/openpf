@@ -1,11 +1,15 @@
 import axios from 'axios'
 
+import { withAuth } from '@/api/auth'
+
 import type { DraftJob, DraftRequest, Play, PlayPatch, PlayPerformance, StageResult } from './types'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
-  timeout: 30000,
-})
+const api = withAuth(
+  axios.create({
+    baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+    timeout: 30000,
+  }),
+)
 
 export async function listPlays(status = 'all') {
   const { data } = await api.get<Play[]>('/plays', { params: { status } })

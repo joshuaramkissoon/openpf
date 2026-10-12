@@ -51,6 +51,13 @@ def _latest_account_cash(db: Session) -> float:
 _INTENT_TTL_HOURS = 24
 
 
+_PLAY_INTENT_TTL_HOURS = 72
+
+
+def _is_play_intent(intent: TradeIntent) -> bool:
+    return (intent.meta or {}).get("source") == "play"
+
+
 def expire_stale_intents(db: Session, ttl_hours: int = _INTENT_TTL_HOURS) -> int:
     """Mark un-acted 'proposed' intents older than the TTL as 'expired'.
 
@@ -68,6 +75,9 @@ def expire_stale_intents(db: Session, ttl_hours: int = _INTENT_TTL_HOURS) -> int
         .scalars()
         .all()
     )
+    # Play tranches are deliberate, staged plans — give them longer to be acted on.
+    play_cutoff = datetime.utcnow() - timedelta(hours=_PLAY_INTENT_TTL_HOURS)
+    stale = [i for i in stale if not _is_play_intent(i) or i.created_at < play_cutoff]
     if not stale:
         return 0
     for intent in stale:
@@ -87,6 +97,9 @@ def supersede_open_proposals(db: Session) -> int:
     open_proposals = (
         db.execute(select(TradeIntent).where(TradeIntent.status == "proposed")).scalars().all()
     )
+    # A new analyst run only replaces the previous run's batch — never a play's
+    # staged tranche, which the user asked for explicitly.
+    open_proposals = [i for i in open_proposals if not _is_play_intent(i)]
     for intent in open_proposals:
         intent.status = "expired"
         if not intent.failure_reason:

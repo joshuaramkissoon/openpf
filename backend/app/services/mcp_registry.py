@@ -156,6 +156,13 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
         tools=("propose_trade", "list_proposals"),
         contexts=frozenset({CHAT, SCHEDULED}),
     ),
+    # Theme bets. Staging a tranche only creates 'proposed' intents.
+    McpServerSpec(
+        name="plays",
+        script="plays.py",
+        tools=("list_plays", "get_play", "draft_play", "update_play", "stage_play_tranche"),
+        contexts=frozenset({CHAT, SCHEDULED}),
+    ),
 )
 
 

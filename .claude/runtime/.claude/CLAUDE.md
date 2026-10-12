@@ -130,6 +130,15 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
   `quantity` or `notional_gbp`, order type, rationale incl. invalidation; optional `play_id`)
 - `list_proposals` — recent intents and their status
 
+### Plays MCP — theme bets ("I want exposure to X but don't know how to size it")
+- When the user wants to bet on a theme/thesis, draft a **play** instead of loose one-off trades:
+  `draft_play` with a clear thesis, 3–8 legs (ticker, role core/satellite/hedge, weight,
+  rationale) and at least two machine-checkable kill rules. The app sizes it against the
+  book (conviction × volatility, capped) and splits it into tranches.
+- `list_plays` / `get_play` to see existing plays and their review verdicts before suggesting
+  overlapping trades; `update_play` to refine; `stage_play_tranche` only when the user asks —
+  it creates proposals for them to approve, nothing executes.
+
 ### Scheduler MCP
 - List, create, pause, resume, delete, and run scheduled tasks
 - Inspect task logs
