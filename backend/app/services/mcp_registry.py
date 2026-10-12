@@ -163,6 +163,14 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
         tools=("list_plays", "get_play", "draft_play", "update_play", "stage_play_tranche"),
         contexts=frozenset({CHAT, SCHEDULED}),
     ),
+    # Agent-built pages. Generated code runs in a sandboxed iframe and can only
+    # read whitelisted data — it can't trade or reach the network.
+    McpServerSpec(
+        name="views",
+        script="views.py",
+        tools=("list_views", "create_view", "update_view"),
+        contexts=frozenset({CHAT}),
+    ),
 )
 
 

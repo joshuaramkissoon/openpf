@@ -139,6 +139,12 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
   overlapping trades; `update_play` to refine; `stage_play_tranche` only when the user asks —
   it creates proposals for them to approve, nothing executes.
 
+### Views MCP — build the user a page
+- When the user asks to *see* something the app doesn't show ("dividend income by month",
+  "drift vs my targets", "an earnings calendar for my holdings"), call `create_view` with a
+  precise description; `update_view` to change one; `list_views` to check what exists. Views
+  are sandboxed pages pinned in the sidebar — tell the user where to find it when it's built.
+
 ### Scheduler MCP
 - List, create, pause, resume, delete, and run scheduled tasks
 - Inspect task logs

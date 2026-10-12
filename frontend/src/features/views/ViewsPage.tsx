@@ -27,6 +27,7 @@ import {
   patchView,
   revertView,
 } from '@/api/views'
+import { useDisplayPrefs } from '@/lib/display-prefs'
 import { PageHeader } from '@/components/kit'
 import {
   AlertDialog,
@@ -68,10 +69,9 @@ const EXAMPLES = [
   'What I bought and sold each month',
 ]
 
-/** Display currency for views. The shell owns the toggle; until it exposes a
- *  context this follows the app default. */
+/** Display currency for views — follows the shell's currency switch. */
 function useDisplayCurrency(): 'GBP' | 'USD' {
-  return 'GBP'
+  return useDisplayPrefs().currency
 }
 
 function ago(iso: string | null | undefined): string {
