@@ -1,4 +1,4 @@
-.PHONY: up up-hot up-stable down down-hot down-stable logs logs-hot logs-stable restart restart-hot restart-stable clean clean-hot clean-stable build build-hot build-stable
+.PHONY: demo up up-hot up-stable down down-hot down-stable logs logs-hot logs-stable restart restart-hot restart-stable clean clean-hot clean-stable build build-hot build-stable
 
 COMPOSE_STABLE = docker compose -f docker-compose.yml
 COMPOSE_HOT = docker compose -f docker-compose.yml -f docker-compose.hot.yml
@@ -74,3 +74,7 @@ build-hot:
 
 build-stable:
 	$(MAKE) build MODE=stable
+
+# Keyless sandbox demo (mock broker, no real money)
+demo:
+	./scripts/demo.sh
