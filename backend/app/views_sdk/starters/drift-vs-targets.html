@@ -1,0 +1,178 @@
+<!-- openpf-view {"title": "Drift vs targets", "description": "Set target weights once; see how far each holding has drifted and what it would take to rebalance", "icon": "target"} -->
+<div class="op-stack">
+  <div class="op-grid op-grid-3" id="stats">
+    <div class="op-card op-skeleton" style="height: 104px"></div>
+    <div class="op-card op-skeleton" style="height: 104px"></div>
+    <div class="op-card op-skeleton" style="height: 104px"></div>
+  </div>
+
+  <section class="op-card">
+    <div class="op-card-header">
+      <div>
+        <div class="op-card-title">Drift from target</div>
+        <div class="op-card-desc">Current weight minus target. Holdings outside the band are highlighted.</div>
+      </div>
+      <label class="op-row op-small op-muted">Band ±
+        <input class="op-input" id="band" type="number" min="0.5" max="20" step="0.5" style="width: 72px" />%
+      </label>
+    </div>
+    <div id="drift-chart"><div class="op-skeleton" style="height: 220px"></div></div>
+  </section>
+
+  <section class="op-card op-card-flush">
+    <div class="op-card-header">
+      <div>
+        <div class="op-card-title">Targets</div>
+        <div class="op-card-desc" id="target-sum">Type a target % for each holding — saved automatically.</div>
+      </div>
+      <div class="op-row">
+        <button class="op-btn op-btn-sm op-btn-ghost" id="use-current">Use current weights</button>
+        <button class="op-btn op-btn-sm op-btn-primary" id="ask">Ask Archie to rebalance</button>
+      </div>
+    </div>
+    <div class="op-table-wrap">
+      <table class="op-table">
+        <thead>
+          <tr>
+            <th>Holding</th>
+            <th class="num">Value</th>
+            <th class="num">Current</th>
+            <th class="num">Target</th>
+            <th class="num">Drift</th>
+            <th class="num">To rebalance</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+openpf.ready(async () => {
+  const pf = await openpf.data('portfolio')
+  const total = pf.account.total || 0
+  const holdings = pf.positions.map((p) => ({ ticker: p.ticker, name: p.name, value: p.value, weight: p.weight || 0 }))
+  holdings.push({ ticker: 'CASH', name: 'Cash', value: pf.account.free_cash || 0, weight: total ? (pf.account.free_cash || 0) / total : 0 })
+
+  let targets = openpf.state.get('targets', null)
+  let band = openpf.state.get('band', 0.02)
+  if (!targets) {
+    // First run: seed with today's weights rounded to 0.5% so drift starts at ~0.
+    targets = Object.fromEntries(holdings.map((h) => [h.ticker, Math.round(h.weight * 200) / 200]))
+  }
+
+  const bandInput = document.getElementById('band')
+  bandInput.value = (band * 100).toFixed(1)
+  bandInput.addEventListener('change', () => {
+    band = Math.max(0.005, Number(bandInput.value) / 100 || 0.02)
+    openpf.state.set('band', band)
+    renderDerived()
+  })
+
+  // ── rows (inputs are built once; derived cells update in place) ──
+  const tbody = document.getElementById('rows')
+  const cells = {}
+  for (const h of holdings) {
+    const input = openpf.h('input', { class: 'op-input', type: 'number', min: '0', max: '100', step: '0.5', style: { width: '76px' }, value: ((targets[h.ticker] || 0) * 100).toFixed(1) })
+    input.addEventListener('input', () => {
+      targets[h.ticker] = Math.max(0, Number(input.value) || 0) / 100
+      openpf.state.set('targets', targets)
+      renderDerived()
+    })
+    const drift = openpf.h('span')
+    const trade = openpf.h('span')
+    const name =
+      h.ticker === 'CASH'
+        ? openpf.h('span', { class: 'op-muted' }, 'Cash')
+        : openpf.h('button', { class: 'op-ticker', onclick: () => openpf.openTicker(h.ticker) }, h.ticker)
+    const row = openpf.h(
+      'tr',
+      null,
+      openpf.h('td', null, name, openpf.h('div', { class: 'op-small op-muted' }, h.ticker === 'CASH' ? 'Uninvested' : h.name)),
+      openpf.h('td', { class: 'num' }, openpf.money(h.value)),
+      openpf.h('td', { class: 'num' }, openpf.pct(h.weight, { decimals: 1 })),
+      openpf.h('td', { class: 'num' }, input),
+      openpf.h('td', { class: 'num' }, drift),
+      openpf.h('td', { class: 'num' }, trade),
+    )
+    cells[h.ticker] = { drift, trade }
+    tbody.appendChild(row)
+  }
+
+  document.getElementById('use-current').addEventListener('click', () => {
+    targets = Object.fromEntries(holdings.map((h) => [h.ticker, Math.round(h.weight * 1000) / 1000]))
+    openpf.state.set('targets', targets)
+    tbody.querySelectorAll('input').forEach((inp, i) => (inp.value = ((targets[holdings[i].ticker] || 0) * 100).toFixed(1)))
+    renderDerived()
+  })
+
+  function compute() {
+    return holdings.map((h) => {
+      const target = targets[h.ticker] || 0
+      const drift = h.weight - target
+      return { ...h, target, drift, trade: target * total - h.value, outside: Math.abs(drift) > band }
+    })
+  }
+
+  function renderDerived() {
+    const rows = compute()
+    const sum = rows.reduce((a, r) => a + r.target, 0)
+    const outside = rows.filter((r) => r.outside)
+    const maxDrift = rows.reduce((m, r) => (Math.abs(r.drift) > Math.abs(m.drift) ? r : m), rows[0])
+    const turnover = rows.filter((r) => r.ticker !== 'CASH').reduce((a, r) => a + Math.abs(r.trade), 0) / 2
+
+    const sumEl = document.getElementById('target-sum')
+    const off = Math.abs(sum - 1) > 0.001
+    sumEl.innerHTML = off
+      ? `<span class="op-warning">Targets add up to ${openpf.pct(sum, { decimals: 1 })} — adjust to 100%.</span>`
+      : 'Targets add up to 100% · saved automatically.'
+
+    for (const r of rows) {
+      const c = cells[r.ticker]
+      c.drift.className = r.outside ? (r.drift > 0 ? 'op-warning' : 'op-negative') : 'op-muted'
+      c.drift.textContent = openpf.signedPct(r.drift, { decimals: 1 })
+      c.trade.className = r.outside ? '' : 'op-muted'
+      c.trade.textContent = Math.abs(r.trade) < 1 ? '—' : `${r.trade > 0 ? 'Buy' : 'Sell'} ${openpf.money(Math.abs(r.trade))}`
+    }
+
+    const stat = (label, value, hint, cls = '') => `
+      <div class="op-card op-stat">
+        <div class="op-stat-label">${label}</div>
+        <div class="op-stat-value ${cls}">${openpf.esc(value)}</div>
+        <div class="op-stat-hint">${hint}</div>
+      </div>`
+    document.getElementById('stats').innerHTML =
+      stat('Outside band', `${outside.length} of ${rows.length}`, `Band ±${openpf.pct(band, { decimals: 1 })}`, outside.length ? 'op-warning' : 'op-positive') +
+      stat('Largest drift', openpf.signedPct(maxDrift.drift, { decimals: 1 }), `${openpf.esc(maxDrift.ticker === 'CASH' ? 'Cash' : maxDrift.ticker)} · target ${openpf.pct(maxDrift.target, { decimals: 1 })}`) +
+      stat('To rebalance', openpf.money(turnover), 'One-way turnover to hit every target')
+
+    const sorted = rows.slice().sort((a, b) => b.drift - a.drift)
+    openpf.charts.bar('#drift-chart', {
+      data: sorted.map((r) => ({
+        label: r.ticker === 'CASH' ? 'Cash' : r.ticker,
+        value: r.drift,
+        color: !r.outside ? 'var(--muted-foreground)' : r.drift > 0 ? 'var(--warning)' : 'var(--negative)',
+        muted: !r.outside,
+        note: `Now ${openpf.pct(r.weight, { decimals: 1 })} · target ${openpf.pct(r.target, { decimals: 1 })}`,
+      })),
+      format: (v) => openpf.signedPct(v, { decimals: 1 }),
+      height: 220,
+      onClick: (d) => d.label !== 'Cash' && openpf.openTicker(d.label),
+    })
+  }
+
+  document.getElementById('ask').addEventListener('click', () => {
+    const trades = compute()
+      .filter((r) => r.outside && r.ticker !== 'CASH' && Math.abs(r.trade) >= 1)
+      .map((r) => `${r.trade > 0 ? 'buy' : 'sell'} ~${openpf.money(Math.abs(r.trade), { decimals: 0 })} of ${r.ticker} (now ${openpf.pct(r.weight, { decimals: 1 })}, target ${openpf.pct(r.target, { decimals: 1 })})`)
+    openpf.ask(
+      trades.length
+        ? `My portfolio has drifted from my target weights (band ±${openpf.pct(band, { decimals: 1 })}). Rough trades to rebalance: ${trades.join('; ')}. Sanity-check this, prefer the ISA where it makes sense, and propose the trades.`
+        : 'All my holdings are within my drift band. Anything worth adjusting in my target weights?',
+    )
+  })
+
+  renderDerived()
+})
+</script>

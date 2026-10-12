@@ -63,3 +63,6 @@ docs/reviews/
 
 # Demo sandbox data
 .demo/
+
+# Views (agent-built pages; user data)
+backend/data/views/

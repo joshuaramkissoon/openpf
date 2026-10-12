@@ -789,3 +789,6 @@ export async function runResearch(payload: ResearchRunRequest) {
   const { data } = await api.post<ResearchRunResult>('/research/run', payload, { timeout: 280000 })
   return data
 }
+
+// Shared instance for feature API modules (keeps auth/interceptors in one place).
+export { api as apiClient }

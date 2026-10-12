@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     # future switch to the Financial Datasets API needs no schema change.
     financial_datasets_api_key: str = Field(default="", alias="FINANCIAL_DATASETS_API_KEY")
 
+    # Views — agent-built, sandboxed pages. The builder favours speed (Sonnet).
+    views_model: str = Field(default="claude-sonnet-4-6", alias="VIEWS_MODEL")
+    # Where view HTML/versions/state live. Relative paths resolve from backend/.
+    views_data_dir: str = Field(default="data/views", alias="VIEWS_DATA_DIR")
+
     @model_validator(mode="after")
     def _legacy_sqlite_fallback(self) -> "Settings":
         self.database_url = resolve_legacy_sqlite_url(self.database_url)
