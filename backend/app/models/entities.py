@@ -224,7 +224,7 @@ class WatchlistItem(Base):
     """A tracked idea on the watchlist — the layer between a passing mention and a
     full Thesis. Holds *why* a symbol is being watched (``note``, which doubles as
     the natural-language watch condition) plus the knobs that let the watch service
-    resurface it (``target_price``/``target_direction``, ``monitor``). CRUD'd by Josh
+    resurface it (``target_price``/``target_direction``, ``monitor``). CRUD'd by the user
     (UI) or Archie (watchlist MCP). ``active_symbols`` (status='watching') is what the
     agent run + leveraged scan consume — this table replaced the old config symbol list.
     """

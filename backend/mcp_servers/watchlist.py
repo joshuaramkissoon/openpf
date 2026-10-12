@@ -26,7 +26,7 @@ try:
 except OSError:
     import tempfile
 
-    _LOG_DIR = Path(tempfile.gettempdir()) / "mypf-mcp-logs"
+    _LOG_DIR = Path(tempfile.gettempdir()) / "openpf-mcp-logs"
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("watchlist-mcp")
@@ -40,7 +40,7 @@ mcp = FastMCP(
     "watchlist",
     instructions=(
         "Watchlist tools for Archie. Use these to list/add/update/remove tracked ideas, "
-        "and to flag an item into Josh's Attention feed when something material happens. "
+        "and to flag an item into the user's Attention feed when something material happens. "
         "When you recommend a name, add_to_watchlist it with a concise note of *why*."
     ),
 )
@@ -172,7 +172,7 @@ def flag_watchlist_item(
     consider: str = "",
     severity: str = "info",
 ) -> str:
-    """Flag a watchlist item into Josh's Attention feed — use ONLY when something
+    """Flag a watchlist item into the user's Attention feed — use ONLY when something
     material has happened relative to why the item is on the list. Deduped, so a
     repeat of the same flag is a no-op.
 

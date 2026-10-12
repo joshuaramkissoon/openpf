@@ -41,7 +41,7 @@ try:
 except OSError:
     import tempfile
 
-    _LOG_DIR = Path(tempfile.gettempdir()) / "mypf-mcp-logs"
+    _LOG_DIR = Path(tempfile.gettempdir()) / "openpf-mcp-logs"
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("t212-mcp")
@@ -112,32 +112,16 @@ def _auth_header(api_key: str, api_secret: str) -> str:
     return f"Basic {base64.b64encode(raw).decode('utf-8')}"
 
 
-def _resolve_credentials(account: AccountKind, scope: str = "read") -> tuple[str, str]:
-    """Resolve API key + secret for the given account from env vars.
+def _resolve_credentials(account: AccountKind) -> tuple[str, str]:
+    """Resolve the read-only API key + secret for the given account from env vars.
 
-    ``scope="read"`` (default) returns the IP-unrestricted read key used for every
-    read-only call. ``scope="execute"`` returns the dedicated IP-restricted
-    execution (write) key — required for placing/cancelling orders — so an IP
-    rotation only ever breaks writes, never Archie's analysis/reads.
+    This server is deliberately READ-ONLY: it never sees execution (write) keys
+    and exposes no order placement/cancel tools. Live orders only go through the
+    app's approval-gated ``execution_service.execute_intent``.
 
     Tries multiple naming conventions used across the project.
     Raises ValueError with a clear message if credentials are missing.
     """
-    if scope == "execute":
-        if account == "invest":
-            key = (os.environ.get("T212_EXEC_API_KEY_INVEST") or "").strip()
-            secret = (os.environ.get("T212_EXEC_API_SECRET_INVEST") or "").strip()
-        else:
-            key = (os.environ.get("T212_EXEC_API_KEY_STOCKS_ISA") or "").strip()
-            secret = (os.environ.get("T212_EXEC_API_SECRET_STOCKS_ISA") or "").strip()
-        if not key or not secret:
-            raise ValueError(
-                f"Missing T212 EXECUTION credentials for '{account}'. Set the execution (write) "
-                f"key for {account} in Settings → Credentials (or env "
-                f"T212_EXEC_API_KEY_{account.upper()} / T212_EXEC_API_SECRET_{account.upper()})."
-            )
-        return key, secret
-
     if account == "invest":
         key = (
             os.environ.get("T212_API_KEY_INVEST")
@@ -182,22 +166,26 @@ def _base_url() -> str:
     return url
 
 
+# The only non-GET call this server may make (CSV export is a report request).
+_ALLOWED_POSTS = {"/equity/history/exports"}
+
+
 async def _request(
     method: str,
     path: str,
     account: AccountKind,
     *,
-    scope: str = "read",
     rate_group: str | None = None,
     params: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
 ) -> dict[str, Any] | list[Any]:
     """Make an authenticated request to the T212 API with rate limiting and retries.
 
-    ``scope="execute"`` uses the IP-restricted execution key (for order writes);
-    everything else uses the read key.
+    Read-only: any write other than requesting a CSV export is refused.
     """
-    api_key, api_secret = _resolve_credentials(account, scope)
+    if method.upper() != "GET" and not (method.upper() == "POST" and path in _ALLOWED_POSTS):
+        raise ValueError(f"trading212 MCP is read-only: {method} {path} is not allowed")
+    api_key, api_secret = _resolve_credentials(account)
     url = f"{_base_url()}{path}"
     group = rate_group or path
     headers = {
@@ -401,158 +389,6 @@ async def get_pending_orders(account: str = "invest") -> str:
     data = await _request("GET", "/equity/orders", acct, rate_group="orders")
     if isinstance(data, list):
         return _fmt({"count": len(data), "orders": data})
-    return _fmt(data)
-
-
-# ── Trading ──
-
-
-@mcp.tool()
-async def place_market_order(
-    account: str,
-    ticker: str,
-    quantity: float,
-) -> str:
-    """Place a market order (buy or sell).
-
-    Args:
-        account: 'invest' or 'stocks_isa'
-        ticker: Instrument code (e.g. 'AAPL_US_EQ', 'TSLA_US_EQ')
-        quantity: Positive to buy, negative to sell
-    """
-    acct = _validate_account(account)
-    data = await _request(
-        "POST",
-        "/equity/orders/market",
-        acct,
-        scope="execute",
-        rate_group="place_order",
-        json_body={"ticker": ticker.strip(), "quantity": quantity},
-    )
-    return _fmt(data)
-
-
-@mcp.tool()
-async def place_limit_order(
-    account: str,
-    ticker: str,
-    quantity: float,
-    limit_price: float,
-    time_validity: str = "Day",
-) -> str:
-    """Place a limit order.
-
-    Args:
-        account: 'invest' or 'stocks_isa'
-        ticker: Instrument code
-        quantity: Positive to buy, negative to sell
-        limit_price: The limit price
-        time_validity: 'Day' or 'GTC' (good till cancelled)
-    """
-    acct = _validate_account(account)
-    data = await _request(
-        "POST",
-        "/equity/orders/limit",
-        acct,
-        scope="execute",
-        rate_group="place_order",
-        json_body={
-            "ticker": ticker.strip(),
-            "quantity": quantity,
-            "limitPrice": limit_price,
-            "timeValidity": time_validity,
-        },
-    )
-    return _fmt(data)
-
-
-@mcp.tool()
-async def place_stop_order(
-    account: str,
-    ticker: str,
-    quantity: float,
-    stop_price: float,
-    time_validity: str = "Day",
-) -> str:
-    """Place a stop order.
-
-    Args:
-        account: 'invest' or 'stocks_isa'
-        ticker: Instrument code
-        quantity: Positive to buy, negative to sell
-        stop_price: The stop trigger price
-        time_validity: 'Day' or 'GTC' (good till cancelled)
-    """
-    acct = _validate_account(account)
-    data = await _request(
-        "POST",
-        "/equity/orders/stop",
-        acct,
-        scope="execute",
-        rate_group="place_order",
-        json_body={
-            "ticker": ticker.strip(),
-            "quantity": quantity,
-            "stopPrice": stop_price,
-            "timeValidity": time_validity,
-        },
-    )
-    return _fmt(data)
-
-
-@mcp.tool()
-async def place_stop_limit_order(
-    account: str,
-    ticker: str,
-    quantity: float,
-    stop_price: float,
-    limit_price: float,
-    time_validity: str = "Day",
-) -> str:
-    """Place a stop-limit order.
-
-    Args:
-        account: 'invest' or 'stocks_isa'
-        ticker: Instrument code
-        quantity: Positive to buy, negative to sell
-        stop_price: The stop trigger price
-        limit_price: The limit price (after stop triggers)
-        time_validity: 'Day' or 'GTC' (good till cancelled)
-    """
-    acct = _validate_account(account)
-    data = await _request(
-        "POST",
-        "/equity/orders/stop_limit",
-        acct,
-        scope="execute",
-        rate_group="place_order",
-        json_body={
-            "ticker": ticker.strip(),
-            "quantity": quantity,
-            "stopPrice": stop_price,
-            "limitPrice": limit_price,
-            "timeValidity": time_validity,
-        },
-    )
-    return _fmt(data)
-
-
-@mcp.tool()
-async def cancel_order(account: str, order_id: str) -> str:
-    """Cancel a pending order by its ID.
-
-    Args:
-        account: 'invest' or 'stocks_isa'
-        order_id: The order ID to cancel (from get_pending_orders)
-    """
-    acct = _validate_account(account)
-    data = await _request(
-        "DELETE",
-        f"/equity/orders/{order_id.strip()}",
-        acct,
-        scope="execute",
-        rate_group="cancel_order",
-    )
     return _fmt(data)
 
 

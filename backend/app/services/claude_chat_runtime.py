@@ -4,10 +4,8 @@ import asyncio
 import json
 import os
 import re
-import sys
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from pathlib import Path
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
@@ -16,11 +14,9 @@ from claude_agent_sdk import CanUseTool, PermissionResultAllow, PermissionResult
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd,
-    resolve_t212_env,
     runtime_info as sdk_runtime_info,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS, _WATCHLIST_MCP_TOOLS,
 )
+from app.services import mcp_registry
 
 settings = get_settings()
 
@@ -39,11 +35,6 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__trading212__get_account_summary": "Checking account summary",
     "mcp__trading212__get_positions": "Fetching positions",
     "mcp__trading212__get_pending_orders": "Checking pending orders",
-    "mcp__trading212__place_market_order": "Placing market order",
-    "mcp__trading212__place_limit_order": "Placing limit order",
-    "mcp__trading212__place_stop_order": "Placing stop order",
-    "mcp__trading212__place_stop_limit_order": "Placing stop-limit order",
-    "mcp__trading212__cancel_order": "Cancelling order",
     "mcp__trading212__search_instruments": "Searching instruments",
     "mcp__trading212__get_exchanges": "Checking exchanges",
     "mcp__trading212__get_order_history": "Fetching order history",
@@ -83,22 +74,14 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__watchlist__update_watchlist_item": "Updating a watchlist item",
     "mcp__watchlist__remove_from_watchlist": "Removing from the watchlist",
     "mcp__watchlist__flag_watchlist_item": "Flagging a watchlist item",
+    # Proposals MCP tools
+    "mcp__proposals__propose_trade": "Proposing a trade",
+    "mcp__proposals__list_proposals": "Checking trade proposals",
 }
-
-
-_MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
 
 
 def _friendly_tool_name(raw: str) -> str:
     return _TOOL_LABELS.get(raw, raw)
-
-
-def _build_sdk_env() -> dict[str, str]:
-    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the
-    MCP subprocesses. Credentials live in subprocess memory only."""
-    env = resolve_t212_env()
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
-    return env
 
 
 def _extract_text_from_sdk_message(message: Any) -> str:
@@ -311,101 +294,11 @@ class ClaudeChatRuntime:
         if settings.agent_allow_bash:
             allowed_tools.append("Bash")
 
-        # MCP server config — T212 runs locally so HTTP calls use the
-        # user's IP, bypassing Cloudflare datacenter-IP blocks.
-        mcp_servers: dict[str, Any] = {}
-        t212_script = _MCP_SERVER_DIR / "t212.py"
-        market_script = _MCP_SERVER_DIR / "marketdata.py"
-        scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
-        forecast_script = _MCP_SERVER_DIR / "forecast.py"
-        fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
-        intel_script = _MCP_SERVER_DIR / "intel.py"
-        if t212_script.is_file():
-            mcp_servers["trading212"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(t212_script)],
-                "env": _build_sdk_env(),
-            }
-            allowed_tools.extend(_T212_MCP_TOOLS)
-
-        # The marketdata + scheduler MCP servers import from the `app`
-        # package, so the backend root must be on PYTHONPATH when they
-        # are launched as stdio subprocesses by the SDK.
-        _backend_root = str(_MCP_SERVER_DIR.parent)
-
-        # Resolve a possibly-relative SQLite DATABASE_URL to an absolute
-        # path so MCP subprocesses (which may run with a different CWD)
-        # open the *same* database file as the main app.
-        _db_url = settings.database_url
-        if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
-            _rel = _db_url.replace("sqlite:///", "", 1)
-            _abs = str((Path(_backend_root) / _rel).resolve())
-            _db_url = f"sqlite:///{_abs}"
-        _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
-
-        if market_script.is_file():
-            mcp_servers["marketdata"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(market_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_MARKET_MCP_TOOLS)
-
-        if scheduler_script.is_file():
-            mcp_servers["scheduler"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(scheduler_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
-
-        # Forecast MCP server (Kronos). Uses the same env so `app` and
-        # `vendor` are importable; torch loads lazily inside the subprocess
-        # only when a forecast is actually requested.
-        if forecast_script.is_file():
-            mcp_servers["forecast"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(forecast_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_FORECAST_MCP_TOOLS)
-
-        # Fundamentals MCP server (yfinance). Uses the same env so `app` is
-        # importable as a stdio subprocess.
-        if fundamentals_script.is_file():
-            mcp_servers["fundamentals"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(fundamentals_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
-
-        # Intel MCP (Finnhub news + FRED macro). Reads provider keys from the DB
-        # (ConfigStore data_providers) via DATABASE_URL in _mcp_env.
-        if intel_script.is_file():
-            mcp_servers["intel"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(intel_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_INTEL_MCP_TOOLS)
-
-        # Watchlist MCP — Archie CRUDs the tracked-ideas board + flags into Attention.
-        watchlist_script = _MCP_SERVER_DIR / "watchlist.py"
-        if watchlist_script.is_file():
-            mcp_servers["watchlist"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(watchlist_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_WATCHLIST_MCP_TOOLS)
+        # MCP servers come from the shared registry (read-only broker tools +
+        # propose_trade; no order placement). T212 runs locally so HTTP calls
+        # use the user's IP, bypassing Cloudflare datacenter-IP blocks.
+        mcp_servers, mcp_tools = mcp_registry.build_mcp_servers(mcp_registry.CHAT)
+        allowed_tools.extend(mcp_tools)
 
         self._info = {
             **runtime,
@@ -420,14 +313,14 @@ class ClaudeChatRuntime:
                 "type": "preset",
                 "preset": "claude_code",
                 "append": (
-                    "You are Archie, Josh's portfolio copilot on the MyPF dashboard. "
+                    f"You are Archie, {settings.user_possessive} portfolio copilot on the OpenPF dashboard. "
                     "Explain clearly, highlight risk, and give actionable next steps. "
                     "Your identity and memory guidelines are in your project CLAUDE.md. "
                     "You have MCP market data tools for spot/historical/technical data, "
                     "fundamentals tools (get_fundamentals, get_valuation, get_financial_statements, "
                     "get_earnings_calendar) for company facts, valuation ratios, statements, and earnings, "
                     "scheduler tools for cron task management, watchlist tools "
-                    "(list/add/update/remove + flag) for Josh's tracked-ideas board, and a Kronos forecasting "
+                    f"(list/add/update/remove + flag) for {settings.user_possessive} tracked-ideas board, and a Kronos forecasting "
                     "tool (forecast_prices) that projects a holding's close price over a "
                     "future horizon with p10/p50/p90 uncertainty bands. Treat forecasts as "
                     "probabilistic analysis with clear uncertainty, never as certainties or "
@@ -448,6 +341,11 @@ class ClaudeChatRuntime:
                     "When you recommend a name worth tracking (not an immediate trade), add it to the watchlist "
                     "with add_to_watchlist and a concise note of WHY — that note is the condition the watch "
                     "service later checks, so the idea resurfaces instead of being forgotten. "
+                    "TRADES: you cannot place, modify or cancel broker orders — no tool for that exists. "
+                    "To suggest a trade, call propose_trade (proposals tools) with an explicit account, "
+                    "size and rationale: it checks the risk rails and queues the trade for the user to "
+                    "approve in the app. If it reports violations, resize within the caps. Never say a "
+                    "trade was placed; say it was proposed and awaits approval. "
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },
@@ -459,7 +357,7 @@ class ClaudeChatRuntime:
             setting_sources=setting_sources,
             include_partial_messages=True,
             permission_mode="acceptEdits" if settings.claude_chat_allow_writes else None,
-            env=_build_sdk_env(),
+            env=mcp_registry.sdk_env(),
             mcp_servers=mcp_servers if mcp_servers else {},
             hooks=build_security_hooks(),
             agents=build_subagents(),

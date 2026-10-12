@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Stop the long-running MyPF servers started by scripts/serve.sh.
+# Stop the long-running OpenPF servers started by scripts/serve.sh.
 #
 set -euo pipefail
 

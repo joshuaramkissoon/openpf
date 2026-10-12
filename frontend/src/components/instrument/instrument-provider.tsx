@@ -24,7 +24,7 @@ const RECENT_LIMIT = 8
 
 /** Fired when the watchlist is mutated from the Spotlight sheet, so independently
  *  data-fetching surfaces (e.g. the Watchlist board) can refresh. */
-export const WATCHLIST_CHANGED_EVENT = "mypf:watchlist-changed"
+export const WATCHLIST_CHANGED_EVENT = "openpf:watchlist-changed"
 
 function loadRecent(): RecentInstrument[] {
   try {

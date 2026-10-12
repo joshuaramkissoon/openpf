@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 
 import { LeveragedWorkspace } from "@/components/LeveragedWorkspace"
+import { TokenGate } from "@/components/auth/token-gate"
 import { InstrumentProvider, useInstrument } from "@/components/instrument/instrument-provider"
 import type { SpotlightCommand } from "@/components/instrument/instrument-spotlight"
 import { Button } from "@/components/ui/button"
@@ -33,6 +34,7 @@ import { PlaysPage } from "@/features/plays"
 import { SettingsPage } from "@/features/settings"
 import { ViewsPage } from "@/features/views"
 import { AppActionsProvider, type AppActions } from "@/lib/app-actions"
+import { DisplayPrefsProvider } from "@/lib/display-prefs"
 import { PrivacyProvider, loadPrivacyMode, nextPrivacyMode, savePrivacyMode, type PrivacyMode } from "@/lib/privacy"
 import { navigate, useRoute, type Route } from "@/lib/router"
 import { useTheme } from "@/lib/theme"
@@ -130,10 +132,15 @@ export function AppShell() {
   )
 
   const cyclePrivacy = useCallback(() => setPrivacyMode((m) => nextPrivacyMode(m)), [])
+  const displayPrefs = useMemo(
+    () => ({ currency: portfolio.currency, accountView: portfolio.accountView }),
+    [portfolio.currency, portfolio.accountView],
+  )
   const commands = useCommands(actions, cyclePrivacy, portfolio.reload)
 
   return (
     <PrivacyProvider mode={privacyMode}>
+      <DisplayPrefsProvider value={displayPrefs}>
       <InstrumentProvider
         positions={portfolio.positions}
         currency={portfolio.currency}
@@ -168,6 +175,8 @@ export function AppShell() {
           />
         </ShellActions>
       </InstrumentProvider>
+      <TokenGate />
+      </DisplayPrefsProvider>
     </PrivacyProvider>
   )
 }

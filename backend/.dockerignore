@@ -2,6 +2,7 @@ __pycache__
 *.pyc
 .env
 mypf.db
+openpf.db
 venv
 .venv
 tests

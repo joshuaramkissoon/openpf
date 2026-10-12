@@ -1,9 +1,13 @@
 import axios from 'axios'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
-  timeout: 30000,
-})
+import { withAuth } from './auth'
+
+const api = withAuth(
+  axios.create({
+    baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+    timeout: 30000,
+  }),
+)
 
 export type OrderAccount = 'invest' | 'stocks_isa'
 export type OrderScope = 'all' | OrderAccount

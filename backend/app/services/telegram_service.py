@@ -23,7 +23,7 @@ def _message_for_status(db: Session) -> str:
     metrics = snapshot["metrics"]
 
     return (
-        "*MyPF Status*\n"
+        "*OpenPF Status*\n"
         f"- Equity: `{account['currency']} {account['total']:,.2f}`\n"
         f"- Cash: `{account['currency']} {account['free_cash']:,.2f}` ({metrics['cash_ratio']:.1%})\n"
         f"- P/L: `{account['currency']} {account['ppl']:,.2f}`\n"
@@ -65,7 +65,7 @@ def _resolve_intent_by_token(db: Session, token: str) -> TradeIntent | None:
 
 def _help_text() -> str:
     return (
-        "*MyPF Telegram Commands*\n"
+        "*OpenPF Telegram Commands*\n"
         "- `/status` portfolio snapshot\n"
         "- `/accounts` account breakdown\n"
         "- `/run` refresh + run agent\n"
@@ -164,8 +164,10 @@ def _answer_question(db: Session, question: str) -> str:
 
 def _is_authorized(user_id: int | None, cfg: dict) -> bool:
     allowed = [int(x) for x in cfg.get("allowed_user_ids", [])]
+    # Deny-all until an allowlist is configured: the bot can approve and
+    # execute trades, so an empty list must never mean "anyone".
     if not allowed:
-        return True
+        return False
     if user_id is None:
         return False
     return int(user_id) in allowed
@@ -356,7 +358,7 @@ def handle_telegram_text(db: Session, text: str) -> str:
             return "Intent not found. Use /intents to list IDs."
         try:
             if cmd == "/approve":
-                approve_intent(db, target.id, note="telegram approval")
+                approve_intent(db, target.id, note="telegram approval", actor="human")
                 return f"Approved `{target.id[:8]}` {target.side.upper()} {target.symbol}."
             if cmd == "/reject":
                 reject_intent(db, target.id, note="telegram rejection")
@@ -491,17 +493,24 @@ def process_telegram_updates(db: Session) -> int:
         from_user = message.get("from", {})
         user_id = from_user.get("id")
 
-        if not cfg.get("chat_id") and chat_id:
-            cfg = cfg_store.set_telegram({"chat_id": chat_id})
-
         if not _is_authorized(user_id if isinstance(user_id, int) else None, cfg):
             if chat_id:
                 try:
-                    send_message(token, chat_id, "Unauthorized user for this bot.")
+                    send_message(
+                        token,
+                        chat_id,
+                        f"Unauthorized user for this bot. Add your user id ({user_id}) to "
+                        "Telegram → allowed user ids in Settings to enable it.",
+                    )
                 except TelegramError:
                     pass
             processed += 1
             continue
+
+        # Bind the notification chat only for an allowlisted user, so a stranger
+        # messaging the bot first can't capture the owner's alerts.
+        if not cfg.get("chat_id") and chat_id:
+            cfg = cfg_store.set_telegram({"chat_id": chat_id})
 
         reply = handle_telegram_text(db, text)
         if chat_id:

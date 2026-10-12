@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 #
-# Install + load the MyPF backend as a self-healing launchd user agent.
+# Install + load the OpenPF backend as a self-healing launchd user agent.
 #
 # launchd's KeepAlive restarts the backend on crash (the original incident was
 # a torch/MPS SIGSEGV that left the app dead with no recovery). RunAtLoad
 # starts it immediately, so running this also brings a down backend back up.
 #
 # Repo root defaults to two levels up from this script. Override with
-# MYPF_REPO_ROOT to point the agent at a specific checkout (e.g. the main repo
+# OPENPF_REPO_ROOT to point the agent at a specific checkout (e.g. the main repo
 # rather than a git worktree).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${MYPF_REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+REPO_ROOT="${OPENPF_REPO_ROOT:-${MYPF_REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}}"
 
 VENV="$REPO_ROOT/.venv"
 UVICORN="$VENV/bin/uvicorn"
 WORKDIR="$REPO_ROOT/backend"
 LOG="$REPO_ROOT/.run/backend.log"
-LABEL="com.mypf.backend"
+LABEL="com.openpf.backend"
+LEGACY_LABEL="com.mypf.backend"  # pre-rename agent: unloaded below so they don't collide on :8000
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 [ -x "$UVICORN" ] || { echo "ERROR: uvicorn not found at $UVICORN — create the venv + install backend/requirements.txt first." >&2; exit 1; }
@@ -39,9 +40,13 @@ sed \
   -e "s|@WORKDIR@|$WORKDIR|g" \
   -e "s|@PATH@|$PATH_VALUE|g" \
   -e "s|@LOG@|$LOG|g" \
-  "$SCRIPT_DIR/com.mypf.backend.plist.template" > "$PLIST"
+  "$SCRIPT_DIR/com.openpf.backend.plist.template" > "$PLIST"
 
 DOMAIN="gui/$(id -u)"
+if launchctl print "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
+  launchctl bootout "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || true
+  echo "Unloaded legacy $LEGACY_LABEL (its plist is left in ~/Library/LaunchAgents)."
+fi
 # Reload idempotently.
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 launchctl bootstrap "$DOMAIN" "$PLIST"
