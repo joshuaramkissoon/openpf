@@ -142,12 +142,37 @@ async def generate_title(current_title: str, transcript: str) -> str | None:
     return new_title
 
 
+def _fallback_title(text: str, limit: int = 48) -> str:
+    words = " ".join((text or "").split())
+    if len(words) <= limit:
+        return words
+    cut = words[:limit].rsplit(" ", 1)[0]
+    return f"{cut}…"
+
+
 async def maybe_retitle_session(db: Session, session: ChatSession) -> bool:
     """(Re)title `session` if it is due, persisting and mutating `session.title`
     in place so the caller's response payload reflects the new title. Returns
     True if the title changed."""
     if not settings.gemini_api_key:
-        return False
+        # No title model configured: name a placeholder chat after its first
+        # message so the conversation list stays scannable.
+        if not is_placeholder_title(session.title or ""):
+            return False
+        first = db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session.id, ChatMessage.role == "user")
+            .order_by(ChatMessage.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        title = _fallback_title(first.content if first else "")
+        if not title:
+            return False
+        session.title = title
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return True
     if not _is_due(_assistant_turn_count(db, session.id)):
         return False
     new_title = await generate_title(session.title or "", build_transcript(db, session.id))
