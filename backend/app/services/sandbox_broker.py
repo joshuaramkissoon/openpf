@@ -105,7 +105,6 @@ SEED_POSITIONS: list[tuple[str, str, float]] = [
     ("invest", "OKLO", 14.0), ("invest", "COIN", 4.0),
 ]
 SEED_CASH_GBP = {"invest": 1840.0, "stocks_isa": 3215.0}
-SEED_DEPOSITS_GBP = {"invest": 16000.0, "stocks_isa": 40000.0}
 
 _lock = threading.RLock()
 _price_cache: dict[str, tuple[float, float]] = {}
@@ -220,13 +219,6 @@ def _seed_state() -> dict[str, Any]:
             "dividends": [],
             "transactions": [],
         }
-    for account in ACCOUNTS:
-        acct = state["accounts"][account]
-        opened = datetime.combine(today - timedelta(days=400), datetime.min.time()) + timedelta(hours=9)
-        acct["transactions"].append({
-            "type": "DEPOSIT", "amount": SEED_DEPOSITS_GBP[account], "currency": "GBP",
-            "dateTime": _iso(opened), "reference": f"sbx-dep-{account}",
-        })
     for account, ticker, qty in SEED_POSITIONS:
         code = code_for(ticker)
         acct = state["accounts"][account]
@@ -242,7 +234,18 @@ def _seed_state() -> dict[str, Any]:
             acct["orders"].append(_order_record(code, "BUY", q, px, fx, filled_at, "MARKET"))
         acct["positions"][code] = {"quantity": qty, "avg_price": total_cost_usd / qty, "opened_at": _iso(datetime.combine(d1, datetime.min.time()))}
     for account in ACCOUNTS:
-        state["accounts"][account]["orders"].sort(key=lambda o: o["order"]["createdAt"], reverse=True)
+        acct = state["accounts"][account]
+        acct["orders"].sort(key=lambda o: o["order"]["createdAt"], reverse=True)
+        # Fund each account the day before its first buy with exactly what the buys
+        # cost plus the cash left over, so the reconstructed equity curve and the
+        # contribution-netted return line up (no phantom gains from unfunded fills).
+        if acct["orders"]:
+            first = min(datetime.fromisoformat(o["order"]["createdAt"].rstrip("Z")) for o in acct["orders"])
+            spent = sum(float(o["fill"]["walletImpact"]["netValue"]) for o in acct["orders"])
+            acct["transactions"].append({
+                "type": "DEPOSIT", "amount": round(spent + acct["cash"], 2), "currency": "GBP",
+                "dateTime": _iso(first - timedelta(days=1)), "reference": f"sbx-dep-{account}",
+            })
     # A couple of dividends so income views have something to show.
     for account, ticker, amount, days_ago in (("stocks_isa", "MSFT", 9.12, 34), ("stocks_isa", "AAPL", 2.31, 58), ("stocks_isa", "V", 3.88, 75), ("stocks_isa", "COST", 2.02, 101), ("stocks_isa", "MSFT", 8.95, 125)):
         paid = datetime.combine(today - timedelta(days=days_ago), datetime.min.time()) + timedelta(hours=12)

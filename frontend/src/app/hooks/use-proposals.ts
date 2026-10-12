@@ -36,8 +36,21 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
     }
   }, [])
 
+  // Archie (chat, plays, scheduled runs) creates proposals out-of-band, so keep the
+  // queue fresh: re-pull on navigation, on tab focus, and every 20s while visible.
   useEffect(() => {
     void reload()
+    const tick = () => {
+      if (document.visibilityState === 'visible') void reload()
+    }
+    const id = window.setInterval(tick, 20_000)
+    window.addEventListener('hashchange', tick)
+    document.addEventListener('visibilitychange', tick)
+    return () => {
+      window.clearInterval(id)
+      window.removeEventListener('hashchange', tick)
+      document.removeEventListener('visibilitychange', tick)
+    }
   }, [reload])
 
   const pending = useMemo(
