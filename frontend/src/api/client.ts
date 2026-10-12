@@ -168,9 +168,11 @@ export async function executeIntent(
   forceLive = false,
   accountKind?: 'invest' | 'stocks_isa',
 ) {
+  // The click is the human approval: approve-then-execute in one audited call.
   const { data } = await api.post(`/agent/intents/${id}/execute`, {
     force_live: forceLive,
     account_kind: accountKind,
+    approve: true,
   })
   return data
 }

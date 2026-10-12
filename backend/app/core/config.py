@@ -1,17 +1,47 @@
+import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+_logger = logging.getLogger(__name__)
+
+
+def resolve_legacy_sqlite_url(url: str) -> str:
+    """``sqlite:///…/openpf.db`` → the legacy ``mypf.db`` in the same directory when
+    openpf.db doesn't exist but mypf.db does (pre-rename installs). Never renames
+    anything on disk."""
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return url
+    path = Path(url[len(prefix):])
+    if path.name != "openpf.db" or path.exists():
+        return url
+    legacy = path.with_name("mypf.db")
+    if not legacy.exists():
+        return url
+    _logger.warning("Using legacy database %s (openpf.db not found); rename it to openpf.db when convenient.", legacy)
+    return url[: -len("openpf.db")] + "mypf.db"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: str = Field(default="dev", alias="APP_ENV")
-    app_name: str = Field(default="MyPF Agent", alias="APP_NAME")
+    app_name: str = Field(default="OpenPF", alias="APP_NAME")
     api_prefix: str = Field(default="/api", alias="API_PREFIX")
-    database_url: str = Field(default="sqlite:///./mypf.db", alias="DATABASE_URL")
+    # Falls back to a legacy ./mypf.db next to it when openpf.db doesn't exist
+    # yet (see _legacy_sqlite_fallback) — existing installs keep their data.
+    database_url: str = Field(default="sqlite:///./openpf.db", alias="DATABASE_URL")
+
+    # Optional shared-secret auth. When set, every /api route and websocket
+    # (except /api/health) requires `Authorization: Bearer <token>` (WS: ?token=).
+    openpf_api_token: str = Field(default="", alias="OPENPF_API_TOKEN")
+    # How Archie addresses the owner in prompts/UI. Empty → "the user".
+    openpf_user_name: str = Field(default="", alias="OPENPF_USER_NAME")
     cors_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
         alias="CORS_ORIGINS",
@@ -21,7 +51,9 @@ class Settings(BaseSettings):
         alias="CORS_ALLOW_ORIGIN_REGEX",
     )
 
-    t212_base_env: Literal["live", "demo"] = Field(default="live", alias="T212_BASE_ENV")
+    # Safe default for new installs: the T212 practice (demo) environment. An
+    # existing broker_config row in the DB (Settings → Broker) takes precedence.
+    t212_base_env: Literal["live", "demo", "sandbox"] = Field(default="demo", alias="T212_BASE_ENV")
     t212_api_key: str = Field(default="", alias="T212_API_KEY")
     t212_api_secret: str = Field(default="", alias="T212_API_SECRET")
     t212_invest_api_key: str = Field(default="", alias="T212_INVEST_API_KEY")
@@ -51,10 +83,10 @@ class Settings(BaseSettings):
     archie_t212_api_key_stocks_isa: str = Field(default="", alias="ARCHIE_T212_API_KEY_STOCKS_ISA")
     archie_t212_api_secret_stocks_isa: str = Field(default="", alias="ARCHIE_T212_API_SECRET_STOCKS_ISA")
 
-    # Default to live: orders are placed for real (still gated by a configured,
-    # IP-allowed execution key — nothing reaches the market without it). The
-    # paper/live toggle remains in Settings → Broker.
-    broker_mode: Literal["paper", "live"] = Field(default="live", alias="BROKER_MODE")
+    # Default to paper: nothing reaches the market until the owner switches to
+    # live in Settings → Broker (a saved broker_config row overrides this) and
+    # configures an IP-allowed execution key.
+    broker_mode: Literal["paper", "live"] = Field(default="paper", alias="BROKER_MODE")
     autopilot_enabled: bool = Field(default=False, alias="AUTOPILOT_ENABLED")
 
     max_single_order_notional: float = Field(default=500.0, alias="MAX_SINGLE_ORDER_NOTIONAL")
@@ -111,6 +143,21 @@ class Settings(BaseSettings):
     # fundamentals MCP server currently runs on keyless yfinance. Present so a
     # future switch to the Financial Datasets API needs no schema change.
     financial_datasets_api_key: str = Field(default="", alias="FINANCIAL_DATASETS_API_KEY")
+
+    @model_validator(mode="after")
+    def _legacy_sqlite_fallback(self) -> "Settings":
+        self.database_url = resolve_legacy_sqlite_url(self.database_url)
+        return self
+
+    @property
+    def user_name(self) -> str:
+        """The owner's name for prompts, or "the user" when unset."""
+        return self.openpf_user_name.strip() or "the user"
+
+    @property
+    def user_possessive(self) -> str:
+        name = self.openpf_user_name.strip()
+        return f"{name}'s" if name else "the user's"
 
     @property
     def cors_origins_list(self) -> list[str]:
