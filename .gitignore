@@ -51,3 +51,8 @@ backend/kronos_forecast_*.png
 
 # Also ignore a node_modules symlink (the trailing-slash pattern above only matches directories)
 node_modules
+
+# Internal planning notes (kept locally, not published)
+docs/plans/
+docs/superpowers/
+docs/reviews/
