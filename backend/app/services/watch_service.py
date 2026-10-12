@@ -33,8 +33,10 @@ def _today() -> str:
 
 
 def _open_dedupe_keys(db: Session) -> set[str]:
+    # Superseded keys count as seen: a condition that was replaced by a newer
+    # alert of the same kind must not re-fire and bounce the two back and forth.
     rows = db.execute(
-        select(Alert.dedupe_key).where(Alert.status.in_(["new", "seen"]))
+        select(Alert.dedupe_key).where(Alert.status.in_(["new", "seen", "superseded"]))
     ).scalars().all()
     return set(rows)
 
@@ -332,6 +334,8 @@ def run_watches(db: Session) -> dict[str, Any]:
             errors.append(f"{name}: {exc}")
     for a in out:
         db.add(a)
+    db.flush()
+    supersede_duplicates(db)
     db.commit()
     return {"created": len(out), "errors": errors,
             "by_category": _counts([a.category for a in out])}
@@ -344,15 +348,82 @@ def _counts(items: list[str]) -> dict[str, int]:
     return d
 
 
+# ── Dedupe + severity hygiene ────────────────────────────────────────────────
+# One open alert per (ticker, kind): when a newer alert lands for the same
+# ticker and kind (category + source), the older one is marked "superseded".
+# Severity is also capped at read time so the feed can't inflate into a wall
+# of red: stale alerts decay by age, and only the newest few stay critical.
+
+MAX_CRITICAL = 3
+_DECAY_DAYS = {"critical": 3, "warning": 7}  # older than this → one level down
+_DOWNGRADE = {"critical": "warning", "warning": "info"}
+
+
+def _kind_key(a: Alert) -> tuple[str, str, str] | None:
+    if not a.ticker:
+        return None
+    return (a.ticker.strip().upper(), a.category or "", a.source or "")
+
+
+def supersede_duplicates(db: Session) -> int:
+    """Mark all but the newest open alert per (ticker, kind) as superseded.
+
+    Idempotent and cheap; returns how many alerts were superseded. Caller commits.
+    """
+    rows = db.execute(
+        select(Alert).where(Alert.status.in_(["new", "seen"])).order_by(Alert.created_at.desc())
+    ).scalars().all()
+    kept: set[tuple[str, str, str]] = set()
+    changed = 0
+    for a in rows:
+        key = _kind_key(a)
+        if key is None:
+            continue
+        if key in kept:
+            a.status = "superseded"
+            db.add(a)
+            changed += 1
+        else:
+            kept.add(key)
+    return changed
+
+
+def _age_days(a: Alert, now: datetime) -> float:
+    if not a.created_at:
+        return 0.0
+    created = a.created_at if a.created_at.tzinfo else a.created_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - created).total_seconds() / 86400)
+
+
+def effective_severities(rows: list[Alert], now: datetime | None = None) -> dict[str, str]:
+    """Severity to present for each alert: decayed by age, criticals capped."""
+    now = now or datetime.now(timezone.utc)
+    out: dict[str, str] = {}
+    for a in rows:
+        sev = a.severity if a.severity in _SEV_RANK else "info"
+        limit = _DECAY_DAYS.get(sev)
+        if limit is not None and _age_days(a, now) > limit:
+            sev = _DOWNGRADE[sev]
+        out[a.id] = sev
+    criticals = sorted(
+        (a for a in rows if out[a.id] == "critical"),
+        key=lambda a: a.created_at.timestamp() if a.created_at else 0,
+        reverse=True,
+    )
+    for a in criticals[MAX_CRITICAL:]:
+        out[a.id] = "warning"
+    return out
+
+
 # ── Read / mutate (API layer) ────────────────────────────────────────────────
 
 _SEV_RANK = {"critical": 0, "warning": 1, "info": 2}
 
 
-def serialize_alert(a: Alert) -> dict[str, Any]:
+def serialize_alert(a: Alert, severity: str | None = None) -> dict[str, Any]:
     return {
         "id": a.id, "created_at": a.created_at.isoformat() if a.created_at else None,
-        "category": a.category, "severity": a.severity, "title": a.title,
+        "category": a.category, "severity": severity or a.severity, "title": a.title,
         "detail": a.detail, "consider": a.consider, "ticker": a.ticker,
         "status": a.status, "source": a.source, "meta": a.meta or {},
     }
@@ -365,8 +436,9 @@ def list_alerts(db: Session, status: str | None = "open", limit: int = 100) -> l
     elif status and status != "all":
         q = q.where(Alert.status == status)
     rows = db.execute(q.order_by(Alert.created_at.desc())).scalars().all()
-    rows.sort(key=lambda a: (_SEV_RANK.get(a.severity, 3), -(a.created_at.timestamp() if a.created_at else 0)))
-    return [serialize_alert(a) for a in rows[:limit]]
+    sev = effective_severities(rows)
+    rows.sort(key=lambda a: (_SEV_RANK.get(sev[a.id], 3), -(a.created_at.timestamp() if a.created_at else 0)))
+    return [serialize_alert(a, sev[a.id]) for a in rows[:limit]]
 
 
 def set_alert_status(db: Session, alert_id: str, status: str) -> dict[str, Any] | None:
@@ -390,6 +462,10 @@ def mark_all_seen(db: Session) -> int:
 
 def attention_summary(db: Session) -> dict[str, Any]:
     """The unified 'what needs my attention' payload for the inbox."""
+    # Alerts can also arrive outside run_watches (e.g. watchlist flags), and
+    # older databases predate superseding — consolidate before reading.
+    if supersede_duplicates(db):
+        db.commit()
     alerts = list_alerts(db, status="open", limit=100)
     new_alerts = sum(1 for a in alerts if a["status"] == "new")
     pending_intents = db.execute(
