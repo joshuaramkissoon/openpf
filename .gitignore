@@ -55,3 +55,6 @@ node_modules
 # Sandbox broker state (local mock T212)
 backend/sandbox_state.json
 sandbox_state.json
+
+# Views (agent-built pages; user data)
+backend/data/views/

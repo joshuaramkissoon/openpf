@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     # future switch to the Financial Datasets API needs no schema change.
     financial_datasets_api_key: str = Field(default="", alias="FINANCIAL_DATASETS_API_KEY")
 
+    # Views — agent-built, sandboxed pages. The builder favours speed (Sonnet).
+    views_model: str = Field(default="claude-sonnet-4-6", alias="VIEWS_MODEL")
+    # Where view HTML/versions/state live. Relative paths resolve from backend/.
+    views_data_dir: str = Field(default="data/views", alias="VIEWS_DATA_DIR")
+
     @property
     def cors_origins_list(self) -> list[str]:
         raw = self.cors_origins.strip()
