@@ -52,6 +52,8 @@ VOL_FACTOR_BOUNDS = (0.5, 1.25)
 # Planning assumption for "max loss": a thematic basket can plausibly halve.
 STRESS_DRAWDOWN = 0.40
 DEFAULT_TRANCHES = 3
+# Share of target exposure held before leg weights/drift are evaluated.
+BUILT_THRESHOLD = 0.75
 MAX_TRANCHES = 6
 MIN_LEG_NOTIONAL_GBP = 1.0
 
@@ -169,6 +171,31 @@ def listing_currency(ticker: str, hint: str | None = None) -> str:
     if t.endswith((".AS", ".PA", ".DE", ".MI")):
         return "EUR"
     return (hint or "USD").upper()
+
+
+_CCY_CACHE: dict[str, str] = {}
+
+
+def quote_currency(ticker: str, hint: str | None = None) -> str:
+    """The currency yfinance quotes ``ticker`` in (``GBp`` → ``GBX``). London
+    listings are not always pence (e.g. KAP.L GDRs trade in USD), so ask the
+    provider; fall back to suffix inference."""
+    t = (ticker or "").upper()
+    if t in _CCY_CACHE:
+        return _CCY_CACHE[t]
+    ccy = None
+    try:
+        import yfinance as yf
+
+        raw = yf.Ticker(t).fast_info.get("currency")
+        if raw:
+            ccy = "GBX" if raw in {"GBp", "GBX"} else str(raw).upper()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("currency lookup failed for %s: %s", t, exc)
+    if not ccy:
+        return listing_currency(t, hint)
+    _CCY_CACHE[t] = ccy
+    return ccy
 
 
 def _history_closes(ticker: str, lookback_days: int) -> list[tuple[date, float]]:
@@ -429,7 +456,7 @@ def evaluate_rule(rule: dict[str, Any] | None, ctx: dict[str, Any]) -> dict[str,
             key = ticker or "__play__"
             w = (ctx.get("weights") or {}).get(key)
             if w is None:
-                return {"state": "unknown", "detail": "Not held yet"}
+                return {"state": "unknown", "detail": "Checked once the basket is built"}
             v = float(value)
             v = v / 100 if v > 1 else v
             label, of = (f"{ticker}", "of the play") if ticker else ("Play", "of book")
@@ -667,6 +694,7 @@ def stage_tranche(
     *,
     price_fn: Callable[[str], float | None] = last_price,
     fx_fn: Callable[[str], float] = gbp_to,
+    currency_fn: Callable[[str, str | None], str] = quote_currency,
     risk: dict[str, Any] | None = None,
     free_cash_gbp: float | None = None,
 ) -> dict[str, Any]:
@@ -718,7 +746,7 @@ def stage_tranche(
         if not price or price <= 0:
             skipped.append({"ticker": leg["ticker"], "reason": "no live price"})
             continue
-        ccy = listing_currency(leg["ticker"], leg.get("currency"))
+        ccy = currency_fn(leg["ticker"], leg.get("currency"))
         quantity = round(notional * fx_fn(ccy) / price, 4)
         if quantity <= 0:
             skipped.append({"ticker": leg["ticker"], "reason": "quantity rounds to zero"})
@@ -837,7 +865,11 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
     prices = {l["ticker"]: price_fn(l["ticker"]) for l in play.legs or [] if any(
         (c.get("rule") or {}).get("type") == "price_below" and (c.get("rule") or {}).get("ticker", "").upper() == l["ticker"]
         for c in play.kill_criteria or [])}
-    weights = {l["ticker"]: l["actual_weight"] for l in legs_out} if held_total > 0 else {}
+    # Leg weights/drift only mean something once the basket is mostly built —
+    # mid-entry (or with a pre-existing holding) one leg naturally dominates.
+    target_exposure = float(play.budget_gbp or 0.0) + float((play.sizing or {}).get("overlap_gbp") or 0.0)
+    built = bool(held_total > 0 and target_exposure > 0 and held_total >= BUILT_THRESHOLD * target_exposure)
+    weights = {l["ticker"]: l["actual_weight"] for l in legs_out} if built else {}
     if held_total > 0 and book["total_gbp"]:
         weights["__play__"] = held_total / book["total_gbp"]
     ctx = {"prices": prices, "drawdown_pct": series.get("drawdown_pct"), "weights": weights, "today": date.today()}
@@ -846,6 +878,8 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
     return {
         "play_id": play.id,
         "held_gbp": round(held_total, 2),
+        "target_exposure_gbp": round(target_exposure, 2),
+        "basket_built": built,
         "budget_gbp": play.budget_gbp,
         "exposure_pct_of_budget": (held_total / play.budget_gbp) if play.budget_gbp else None,
         "legs": legs_out,
@@ -888,7 +922,7 @@ def review_active_plays(db: Session, **perf_kwargs: Any) -> dict[str, Any]:
             logger.warning("play review failed for %s: %s", play.id, exc)
             continue
         states = [k["state"] for k in perf["kill_status"]]
-        drifted = [l for l in perf["legs"] if perf["held_gbp"] > 0 and abs(l["drift"]) > DRIFT_THRESHOLD]
+        drifted = [l for l in perf["legs"] if perf["basket_built"] and abs(l["drift"]) > DRIFT_THRESHOLD]
         verdict = verdict_from_states(states, drift=bool(drifted))
         notes_parts = []
         for i, k in enumerate(perf["kill_status"]):

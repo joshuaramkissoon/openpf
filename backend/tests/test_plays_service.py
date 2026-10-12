@@ -124,7 +124,7 @@ def test_stage_creates_proposed_intents_with_quantities(db):
     play = _play(db)
     prices = {"CCJ": 50.0, "NUCG.L": 2500.0, "SMR": 20.0}
     fx = {"USD": 1.25, "GBX": 100.0}
-    res = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=fx.get, risk=RISK, free_cash_gbp=10_000)
+    res = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=fx.get, currency_fn=ps.listing_currency, risk=RISK, free_cash_gbp=10_000)
     assert res["tranche_index"] == 0
     assert res["notional_gbp"] == pytest.approx(750)  # 4 tranches of 25% (rails) of 3000
     rows = db.execute(select(TradeIntent)).scalars().all()
@@ -139,10 +139,10 @@ def test_stage_creates_proposed_intents_with_quantities(db):
     assert by["CCJ"].meta["account_kind"] == "stocks_isa"
     assert res["rail_breaches"] == [] and res["warnings"] == []
     # Next call stages the following tranche, never the same one twice.
-    res2 = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=fx.get, risk=RISK, free_cash_gbp=10_000)
+    res2 = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=fx.get, currency_fn=ps.listing_currency, risk=RISK, free_cash_gbp=10_000)
     assert res2["tranche_index"] == 1
     with pytest.raises(ValueError):
-        ps.stage_tranche(db, play, 0, price_fn=prices.get, fx_fn=fx.get, risk=RISK)
+        ps.stage_tranche(db, play, 0, price_fn=prices.get, fx_fn=fx.get, currency_fn=ps.listing_currency, risk=RISK)
 
 
 def test_stage_reports_rail_breaches_and_skips_unpriced(db):
@@ -150,7 +150,7 @@ def test_stage_reports_rail_breaches_and_skips_unpriced(db):
     play.sizing = {"tranches": [{"label": "Starter", "pct_of_budget": 0.5, "trigger": "now"}]}
     db.commit()
     prices = {"CCJ": 50.0, "NUCG.L": None, "SMR": 20.0}
-    res = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=lambda c: 1.0, risk=RISK, free_cash_gbp=1000)
+    res = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=lambda c: 1.0, currency_fn=ps.listing_currency, risk=RISK, free_cash_gbp=1000)
     tickers = {b["ticker"] for b in res["rail_breaches"]}
     assert "CCJ" in tickers  # 2500 > 500 single-order cap
     assert any("max single order" in b for b in res["rail_breaches"][0]["breaches"])
@@ -161,7 +161,7 @@ def test_stage_reports_rail_breaches_and_skips_unpriced(db):
 def test_stage_refuses_closed_play(db):
     play = _play(db, status="closed")
     with pytest.raises(ValueError):
-        ps.stage_tranche(db, play, price_fn=lambda t: 10.0, fx_fn=lambda c: 1.0, risk=RISK)
+        ps.stage_tranche(db, play, price_fn=lambda t: 10.0, fx_fn=lambda c: 1.0, currency_fn=ps.listing_currency, risk=RISK)
 
 
 # ── Kill rules ──────────────────────────────────────────────────────────────
@@ -224,3 +224,19 @@ def test_draft_schema_requires_machine_checkable_rules():
         PlayDraftOut.model_validate(base)
     base["kill_criteria"][0]["rule"] = {"type": "price_below", "ticker": "VST", "value": 100}
     assert PlayDraftOut.model_validate(base).legs[0].ticker == "VST"
+
+
+def test_drift_only_flagged_once_basket_is_built(db):
+    play = _play(db, budget=1000.0)
+    hist = lambda t, n: [(date.today() - timedelta(days=1), 10.0), (date.today(), 10.0)]  # noqa: E731
+    pos = lambda v: {"total_gbp": 80_000, "free_cash_gbp": {}, "positions": [  # noqa: E731
+        {"ticker": "CCJ", "raw_ticker": "CCJ", "instrument_code": "CCJ_US_EQ", "yfinance_ticker": "CCJ",
+         "account_kind": "stocks_isa", "value": v, "ppl": 0.0, "weight": v / 80_000}]}
+    # Mid-entry: only CCJ held (100% of the play vs 50% target) — not drift yet.
+    perf = ps.play_performance(db, play, book=pos(300.0), history_fn=hist, price_fn=lambda t: 10.0)
+    assert perf["basket_built"] is False
+    ps.review_active_plays(db, book=pos(300.0), history_fn=hist, price_fn=lambda t: 10.0)
+    assert not db.execute(select(Alert).where(Alert.dedupe_key.like("%drift"))).scalars().all()
+    # Fully built but all in one leg → drift alert.
+    ps.review_active_plays(db, book=pos(1000.0), history_fn=hist, price_fn=lambda t: 10.0)
+    assert db.execute(select(Alert).where(Alert.dedupe_key.like("%drift"))).scalars().all()
