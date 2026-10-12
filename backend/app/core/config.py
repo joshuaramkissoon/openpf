@@ -1,4 +1,5 @@
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -171,4 +172,12 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if os.environ.get("OPENPF_SANDBOX", "").strip().lower() in {"1", "true", "yes", "on"}:
+        # Sandbox runs must never pick up real broker keys from .env — blank every
+        # T212 credential so only the mock broker's keys exist in this process.
+        for name in type(settings).model_fields:
+            if name.startswith(("t212_", "archie_t212_")) and ("_key" in name or "_secret" in name):
+                setattr(settings, name, "")
+        settings.t212_base_env = "sandbox"
+    return settings

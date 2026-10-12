@@ -60,3 +60,6 @@ sandbox_state.json
 docs/plans/
 docs/superpowers/
 docs/reviews/
+
+# Demo sandbox data
+.demo/
