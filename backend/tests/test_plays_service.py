@@ -120,48 +120,76 @@ def test_basket_volatility_from_history():
 
 # ── Staging ─────────────────────────────────────────────────────────────────
 
-def test_stage_creates_proposed_intents_with_quantities(db):
+@pytest.fixture()
+def priced(monkeypatch):
+    """Stub instrument metadata + prices for propose_trade (no network)."""
+    from app.services import proposal_service
+
+    book = {
+        "CCJ_US_EQ": ("CCJ", 50.0, "USD"),
+        "NUCGl_EQ": ("NUCG", 25.0, "GBP"),
+        "SMR_US_EQ": ("SMR", 20.0, "USD"),
+    }
+    fx = {"USD": 0.8, "GBP": 1.0}
+
+    def resolve(db, symbol, instrument_code):
+        if instrument_code not in book:
+            return None
+        t, _, ccy = book[instrument_code]
+        return {"instrument_code": instrument_code, "ticker": t, "currency": ccy, "name": t, "short_name": t,
+                "verified": True}
+
+    monkeypatch.setattr(proposal_service, "_resolve_instrument", resolve)
+    monkeypatch.setattr(proposal_service, "_reference_price",
+                        lambda inst: (book[inst["instrument_code"]][1], book[inst["instrument_code"]][2]))
+    monkeypatch.setattr(proposal_service, "_to_gbp", lambda amount, ccy: amount * fx[ccy])
+    return book
+
+
+def test_stage_creates_proposed_intents_with_quantities(db, priced):
     play = _play(db)
-    prices = {"CCJ": 50.0, "NUCG.L": 2500.0, "SMR": 20.0}
-    fx = {"USD": 1.25, "GBX": 100.0}
-    res = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=fx.get, currency_fn=ps.listing_currency, risk=RISK, free_cash_gbp=10_000)
+    res = ps.stage_tranche(db, play, risk=RISK, free_cash_gbp=10_000)
     assert res["tranche_index"] == 0
-    assert res["notional_gbp"] == pytest.approx(750)  # 4 tranches of 25% (rails) of 3000
+    assert res["notional_gbp"] == pytest.approx(750, abs=0.05)  # 4 tranches of 25% (rails) of 3000
     rows = db.execute(select(TradeIntent)).scalars().all()
     assert len(rows) == 3
     assert {r.status for r in rows} == {"proposed"}
     by = {r.symbol: r for r in rows}
-    # CCJ: 375 GBP → 468.75 USD / 50 = 9.375 shares
+    # CCJ: £375 at $50 × 0.8 = £40/share → 9.375 shares
     assert by["CCJ"].quantity == pytest.approx(9.375)
-    # NUCG.L: 225 GBP → 22500p / 2500p = 9
-    assert by["NUCG.L"].quantity == pytest.approx(9.0)
-    assert by["CCJ"].meta["play_id"] == play.id and by["CCJ"].meta["source"] == "play"
-    assert by["CCJ"].meta["account_kind"] == "stocks_isa"
-    assert res["rail_breaches"] == [] and res["warnings"] == []
+    # NUCG: £225 at £25 → 9 shares
+    assert by["NUCG"].quantity == pytest.approx(9.0)
+    m = by["CCJ"].meta
+    assert m["play_id"] == play.id and m["source"] == "play" and m["account_kind"] == "stocks_isa"
+    assert m["tranche_index"] == 0
+    assert res["rail_breaches"] == []
     # Next call stages the following tranche, never the same one twice.
-    res2 = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=fx.get, currency_fn=ps.listing_currency, risk=RISK, free_cash_gbp=10_000)
-    assert res2["tranche_index"] == 1
+    assert ps.stage_tranche(db, play, risk=RISK, free_cash_gbp=10_000)["tranche_index"] == 1
     with pytest.raises(ValueError):
-        ps.stage_tranche(db, play, 0, price_fn=prices.get, fx_fn=fx.get, currency_fn=ps.listing_currency, risk=RISK)
+        ps.stage_tranche(db, play, 0, risk=RISK)
 
 
-def test_stage_reports_rail_breaches_and_skips_unpriced(db):
-    play = _play(db, budget=10_000.0)
+def test_stage_reports_rail_breaches_and_skips_unknown(db, priced):
+    play = _play(db, budget=10_000.0, legs=[
+        {"ticker": "CCJ", "instrument_code": "CCJ_US_EQ", "role": "core", "target_weight": 0.5},
+        {"ticker": "SMR", "instrument_code": "SMR_US_EQ", "role": "satellite", "target_weight": 0.1},
+        {"ticker": "XYZ", "instrument_code": "XYZ_US_EQ", "role": "satellite", "target_weight": 0.4},
+    ])
     play.sizing = {"tranches": [{"label": "Starter", "pct_of_budget": 0.5, "trigger": "now"}]}
     db.commit()
-    prices = {"CCJ": 50.0, "NUCG.L": None, "SMR": 20.0}
-    res = ps.stage_tranche(db, play, price_fn=prices.get, fx_fn=lambda c: 1.0, currency_fn=ps.listing_currency, risk=RISK, free_cash_gbp=1000)
-    tickers = {b["ticker"] for b in res["rail_breaches"]}
-    assert "CCJ" in tickers  # 2500 > 500 single-order cap
-    assert any("max single order" in b for b in res["rail_breaches"][0]["breaches"])
-    assert res["skipped"] == [{"ticker": "NUCG.L", "reason": "no live price"}]
+    res = ps.stage_tranche(db, play, risk=RISK, free_cash_gbp=100)
+    # CCJ £2,500 > £500 single-order rail → reported, not proposed.
+    assert [b["ticker"] for b in res["rail_breaches"]] == ["CCJ"]
+    assert [s["ticker"] for s in res["skipped"]] == ["XYZ"]
+    assert [i["ticker"] for i in res["intents"]] == ["SMR"]
     assert res["warnings"]  # not enough cash
+    assert db.execute(select(TradeIntent)).scalars().all()[0].symbol == "SMR"
 
 
 def test_stage_refuses_closed_play(db):
     play = _play(db, status="closed")
     with pytest.raises(ValueError):
-        ps.stage_tranche(db, play, price_fn=lambda t: 10.0, fx_fn=lambda c: 1.0, currency_fn=ps.listing_currency, risk=RISK)
+        ps.stage_tranche(db, play, risk=RISK)
 
 
 # ── Kill rules ──────────────────────────────────────────────────────────────

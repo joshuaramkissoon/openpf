@@ -170,9 +170,9 @@ export interface StageResult {
   tranche_index: number
   tranche: Tranche
   notional_gbp: number
-  intents: { intent_id: string; ticker: string; quantity: number; notional_gbp: number; price: number; currency: string; breaches: string[] }[]
+  intents: { intent_id: string; ticker: string; quantity: number; notional_gbp: number; warnings: string[] }[]
   skipped: { ticker: string; reason: string }[]
-  rail_breaches: { ticker: string; breaches: string[] }[]
+  rail_breaches: { ticker: string; breaches: string[]; notional_gbp: number }[]
   warnings: string[]
 }
 

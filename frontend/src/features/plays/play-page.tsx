@@ -38,11 +38,16 @@ export function playContextPrompt(play: Play): string {
 
 function stageToast(res: StageResult, navigate: (p: string) => void) {
   const n = res.intents.length
+  if (n === 0) {
+    const why = [...res.rail_breaches.map((b) => `${b.ticker}: ${b.breaches[0]}`), ...res.skipped.map((x) => `${x.ticker}: ${x.reason}`)]
+    toast.warning('Nothing was staged', { description: why.slice(0, 3).join(' · ') || undefined, duration: 8000 })
+    return
+  }
   const breaches = res.rail_breaches.length
   toast.success(`${n} proposal${n === 1 ? '' : 's'} ready for approval`, {
     description:
       `${res.tranche.label} tranche · £${Math.round(res.notional_gbp).toLocaleString()}` +
-      (breaches ? ` · ${breaches} would breach a risk rail` : '') +
+      (breaches ? ` · ${res.rail_breaches.map((b) => b.ticker).join(', ')} held back by risk rails` : '') +
       (res.skipped.length ? ` · skipped ${res.skipped.map((s) => s.ticker).join(', ')}` : ''),
     action: { label: 'Review on Home', onClick: () => navigate('/home') },
     duration: 8000,

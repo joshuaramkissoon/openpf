@@ -26,7 +26,6 @@ import sys
 import threading
 import uuid
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any, Callable
 
 from pydantic import ValidationError
@@ -173,31 +172,6 @@ def listing_currency(ticker: str, hint: str | None = None) -> str:
     return (hint or "USD").upper()
 
 
-_CCY_CACHE: dict[str, str] = {}
-
-
-def quote_currency(ticker: str, hint: str | None = None) -> str:
-    """The currency yfinance quotes ``ticker`` in (``GBp`` → ``GBX``). London
-    listings are not always pence (e.g. KAP.L GDRs trade in USD), so ask the
-    provider; fall back to suffix inference."""
-    t = (ticker or "").upper()
-    if t in _CCY_CACHE:
-        return _CCY_CACHE[t]
-    ccy = None
-    try:
-        import yfinance as yf
-
-        raw = yf.Ticker(t).fast_info.get("currency")
-        if raw:
-            ccy = "GBX" if raw in {"GBp", "GBX"} else str(raw).upper()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("currency lookup failed for %s: %s", t, exc)
-    if not ccy:
-        return listing_currency(t, hint)
-    _CCY_CACHE[t] = ccy
-    return ccy
-
-
 def _history_closes(ticker: str, lookback_days: int) -> list[tuple[date, float]]:
     from app.services.market_data import fetch_history
 
@@ -216,15 +190,6 @@ def last_price(ticker: str) -> float | None:
     except Exception as exc:  # noqa: BLE001
         logger.info("price lookup failed for %s: %s", ticker, exc)
         return None
-
-
-def gbp_to(currency: str) -> float:
-    """Units of ``currency`` per 1 GBP."""
-    from app.services.fx import get_fx_rate
-
-    if currency.upper() in {"GBP"}:
-        return 1.0
-    return float(get_fx_rate("GBP", currency))
 
 
 # ── Sizing (pure) ────────────────────────────────────────────────────────────
@@ -643,41 +608,6 @@ def delete_play(db: Session, play: Play) -> None:
 
 # ── Staging (proposals only — never executes) ────────────────────────────────
 
-def _create_intent(db: Session, *, play: Play, leg: dict[str, Any], quantity: float, notional_gbp: float,
-                   tranche_index: int, tranche_label: str, broker_mode: str, breaches: list[str]) -> TradeIntent:
-    intent = TradeIntent(
-        status="proposed",
-        broker_mode=broker_mode,
-        symbol=leg["ticker"],
-        instrument_code=leg.get("instrument_code") or leg["ticker"],
-        side="buy",
-        order_type="market",
-        quantity=quantity,
-        estimated_notional=round(notional_gbp, 2),
-        expected_edge=0.0,
-        confidence={"low": 0.5, "medium": 0.65, "high": 0.8}.get(play.conviction, 0.65),
-        risk_score=0.4,
-        rationale=(
-            f"[play] {play.title} — {tranche_label} tranche: {leg.get('role', 'core')} leg "
-            f"({leg.get('target_weight', 0):.0%} of play). {leg.get('rationale', '')}".strip()
-        ),
-        meta={
-            "source": "play",
-            "play_id": play.id,
-            "play_title": play.title,
-            "tranche_index": tranche_index,
-            "tranche_label": tranche_label,
-            "account_kind": play.account_kind,
-            "leg_role": leg.get("role"),
-            "notional_currency": "GBP",
-            "rail_breaches": breaches,
-        },
-    )
-    db.add(intent)
-    db.flush()
-    return intent
-
-
 def _executed_notional_today(db: Session) -> float:
     try:
         from app.services.execution_service import _daily_executed_notional
@@ -692,20 +622,18 @@ def stage_tranche(
     play: Play,
     tranche_index: int | None = None,
     *,
-    price_fn: Callable[[str], float | None] = last_price,
-    fx_fn: Callable[[str], float] = gbp_to,
-    currency_fn: Callable[[str, str | None], str] = quote_currency,
     risk: dict[str, Any] | None = None,
     free_cash_gbp: float | None = None,
 ) -> dict[str, Any]:
-    """Turn the next (or given) tranche into ``proposed`` buy intents."""
+    """Turn the next (or given) tranche into ``proposed`` buy intents via the
+    shared ``propose_trade`` path (same validation + rail checks as Archie's).
+    Legs that would breach a hard rail are reported, not proposed."""
+    from app.services import proposal_service
     from app.services.config_store import ConfigStore
 
     if play.status not in {"active", "draft"}:
         raise ValueError(f"Play is {play.status}; activate it before staging")
-    store = ConfigStore(db)
-    risk = risk or store.get_risk()
-    broker_mode = store.get_broker().get("broker_mode", "paper")
+    risk = risk or ConfigStore(db).get_risk()
     sizing = dict(play.sizing or {})
     tranches = sizing.get("tranches") or []
     staged = list(sizing.get("staged") or [])
@@ -721,7 +649,6 @@ def stage_tranche(
 
     tranche = tranches[tranche_index]
     tranche_gbp = float(play.budget_gbp) * float(tranche["pct_of_budget"])
-    max_single = float(risk.get("max_single_order_notional") or 0.0)
     max_daily = float(risk.get("max_daily_notional") or 0.0)
     daily_used = _executed_notional_today(db)
 
@@ -742,32 +669,39 @@ def stage_tranche(
             reason = "already held" if leg["ticker"] in alloc and alloc[leg["ticker"]] == 0 else "below minimum order size"
             skipped.append({"ticker": leg["ticker"], "reason": reason})
             continue
-        price = price_fn(leg["ticker"])
-        if not price or price <= 0:
-            skipped.append({"ticker": leg["ticker"], "reason": "no live price"})
-            continue
-        ccy = currency_fn(leg["ticker"], leg.get("currency"))
-        quantity = round(notional * fx_fn(ccy) / price, 4)
-        if quantity <= 0:
-            skipped.append({"ticker": leg["ticker"], "reason": "quantity rounds to zero"})
-            continue
-        running += notional
-        breaches: list[str] = []
-        if max_single and notional > max_single:
-            breaches.append(f"exceeds max single order ({_fmt_gbp(max_single)})")
-        if max_daily and daily_used + running > max_daily:
-            breaches.append(f"pushes today's notional past {_fmt_gbp(max_daily)}")
-        intent = _create_intent(
-            db, play=play, leg=leg, quantity=quantity, notional_gbp=notional,
-            tranche_index=tranche_index, tranche_label=tranche["label"], broker_mode=broker_mode, breaches=breaches,
+        rationale = (
+            f"[play] {play.title} — {tranche['label']} tranche: {leg.get('role', 'core')} leg "
+            f"({float(leg.get('target_weight') or 0):.0%} of play). {leg.get('rationale', '')}"
+        ).strip()
+        res = proposal_service.propose_trade(
+            db, side="buy", account_kind=play.account_kind, rationale=rationale,
+            instrument_code=leg.get("instrument_code") or None,
+            symbol=None if leg.get("instrument_code") else leg["ticker"],
+            notional_gbp=round(notional, 2), play_id=play.id, source="play",
         )
-        row = {"intent_id": intent.id, "ticker": leg["ticker"], "quantity": quantity,
-               "notional_gbp": round(notional, 2), "price": price, "currency": ccy, "breaches": breaches}
-        created.append(row)
-        if breaches:
-            breaches_all.append({"ticker": leg["ticker"], "breaches": breaches})
+        if not res.get("ok"):
+            if res.get("violations"):
+                breaches_all.append({"ticker": leg["ticker"], "breaches": res["violations"],
+                                     "notional_gbp": round(notional, 2)})
+            else:
+                skipped.append({"ticker": leg["ticker"], "reason": res.get("error") or "not proposed"})
+            continue
+        intent_view = res["intent"]
+        intent = db.get(TradeIntent, intent_view["id"])
+        if intent is not None:
+            intent.meta = {**(intent.meta or {}), "play_title": play.title, "tranche_index": tranche_index,
+                           "tranche_label": tranche["label"], "leg_role": leg.get("role")}
+            db.add(intent)
+            db.commit()
+        est = float(intent.estimated_notional if intent is not None else notional)
+        running += est
+        created.append({"intent_id": intent_view["id"], "ticker": leg["ticker"], "quantity": intent_view.get("quantity"),
+                        "notional_gbp": round(est, 2), "warnings": res.get("warnings") or []})
 
     warnings: list[str] = []
+    if max_daily and daily_used + running > max_daily:
+        warnings.append(f"Approving all of this tranche today would pass your {_fmt_gbp(max_daily)} daily notional rail — "
+                        "spread approvals over more than one day.")
     if free_cash_gbp is not None and running > free_cash_gbp:
         warnings.append(f"Tranche needs {_fmt_gbp(running)} but the account has {_fmt_gbp(free_cash_gbp)} free cash.")
 
@@ -779,7 +713,7 @@ def stage_tranche(
         if play.status == "draft":
             set_status(play, "active")
         db.add(play)
-    db.commit()
+        db.commit()
     return {
         "play_id": play.id,
         "tranche_index": tranche_index,
@@ -966,7 +900,6 @@ def review_active_plays(db: Session, **perf_kwargs: Any) -> dict[str, Any]:
 
 # ── LLM: drafting + narrative review ─────────────────────────────────────────
 
-_MCP_DIR = Path(__file__).resolve().parents[2] / "mcp_servers"
 _DRAFT_TOOLS = [
     "mcp__marketdata__get_price_snapshot",
     "mcp__marketdata__get_risk_metrics",
@@ -1034,16 +967,14 @@ def get_draft_job(job_id: str) -> DraftJob | None:
 
 
 def _mcp_servers() -> dict[str, Any]:
-    backend_root = str(_MCP_DIR.parent)
-    db_url = settings.database_url
-    if db_url.startswith("sqlite:///./"):
-        db_url = f"sqlite:///{(Path(backend_root) / db_url.replace('sqlite:///./', '', 1)).resolve()}"
-    env = {"PYTHONPATH": backend_root, "DATABASE_URL": db_url}
+    from app.services.mcp_registry import mcp_server_env, server_spec
+
     servers = {}
     for name in ("marketdata", "fundamentals"):
-        script = _MCP_DIR / f"{name}.py"
-        if script.is_file():
-            servers[name] = {"type": "stdio", "command": sys.executable, "args": [str(script)], "env": env}
+        spec = server_spec(name)
+        if spec.script_path.is_file():
+            servers[name] = {"type": "stdio", "command": sys.executable, "args": [str(spec.script_path)],
+                             "env": mcp_server_env(spec)}
     return servers
 
 
