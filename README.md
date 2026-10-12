@@ -1,176 +1,112 @@
 # OpenPF
 
-AI-powered portfolio operations platform built on Claude, with live trading via Trading 212.
+**An open-source AI agent for your Trading 212 portfolio — on a leash.**
 
-<!-- TODO: add screenshot or demo GIF here -->
-<!-- ![OpenPF Dashboard](docs/assets/screenshot.png) -->
+Archie (built on Claude) reads your Invest and Stocks ISA accounts, tells you how to put idle cash to work, sizes bets on the themes you believe in, reacts to the news that matters to *your* holdings, and builds you any view of your money you ask for. It can never trade on its own: every order is a proposal you approve.
+
+Self-hosted. Your keys, your data, your machine.
+
+![Home](docs/assets/home.png)
+
+## Try it in a minute — no broker account needed
+
+```bash
+git clone https://github.com/joshuaramkissoon/openpf && cd openpf
+make demo            # or ./scripts/demo.sh
+```
+
+Open http://localhost:5173. The demo runs against a **sandbox broker**: a built-in mock of the Trading 212 API with a realistic two-account portfolio, priced with real market data. Approve a trade and it fills against the mock. Nothing touches a real account.
+
+Archie uses your Claude login (the `claude` CLI) or `ANTHROPIC_API_KEY`.
 
 ## What it does
 
-- **AI portfolio copilot** -- Chat with Archie, an agent powered by Claude that can analyze your positions, run technical screens, place orders, and manage scheduled tasks.
-- **Live broker integration** -- Connects to Trading 212 (Invest + Stocks ISA) for real-time positions, order placement, and trade history.
-- **Quantitative toolkit** -- Built-in technical indicators (RSI, MACD, Bollinger Bands, ATR), risk metrics (Sharpe, Sortino, VaR, max drawdown), and strategy backtesting.
-- **Leveraged trading automation** -- Signal scanning, configurable risk rails, and policy-driven execution for leveraged products.
-- **Persistent agent memory** -- Archie remembers your preferences, goals, constraints, and past decisions across sessions.
+**Home: what's my money doing, and what needs me?** One number, one chart, and a short list of decisions: proposals to approve and signals worth a look, deduplicated and capped so they don't pile up.
 
-## Architecture
+**Archie.** Ask anything about your portfolio. "How should I deploy my £5k idle cash?" gets you specific, sized, per-account proposals that respect your risk rails. Each one lands in Decisions for a one-tap approve.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    React + Vite UI                       │
-│  Portfolio · Research · Execution · Leveraged · Chat     │
-└──────────────────────┬──────────────────────────────────┘
-                       │ REST + WebSocket
-┌──────────────────────▼──────────────────────────────────┐
-│                  FastAPI Backend                         │
-│  Routes · Services · SQLite · APScheduler               │
-├─────────────┬───────────────┬───────────────────────────┤
-│ Claude SDK  │  MCP Servers  │  Worker Process           │
-│ Chat + Agent│  ┌──────────┐ │  Scheduled tasks          │
-│  Runtime    │  │Trading212│ │  Telegram polling         │
-│             │  │MarketData│ │                           │
-│             │  │Scheduler │ │                           │
-│             │  └──────────┘ │                           │
-└─────────────┴───────────────┴───────────────────────────┘
-```
+![Archie](docs/assets/archie.png)
 
-## Quick start
+**Plays: sized bets on themes.** Tell it what you believe ("AI needs power", "the nuclear renaissance"). Archie researches a basket, then sizes it against your actual book:
+- Conviction × volatility sets the total, capped as a share of your portfolio.
+- Overlap with what you already hold counts towards the target.
+- Entry is staged in tranches.
+- Kill criteria are machine-checkable and checked daily.
 
-### Prerequisites
+Staging a tranche creates proposals. Nothing executes without you.
 
-- Python 3.11+
-- Node.js 18+
-- [Anthropic API key](https://console.anthropic.com/)
-- [Trading 212](https://www.trading212.com/) API key (optional -- needed for broker features)
+![A play](docs/assets/play-draft.png)
 
-### 1. Backend
+**Views: the app builds itself into what you want.** "Show me my portfolio split by theme with today's move." In about a minute there's a new page pinned in your sidebar, running live on your data. Edit it with a sentence and revert to any version. Views run in a locked-down sandbox: they can read a whitelisted set of portfolio data and nothing else. No network, no trading, no access to the app.
 
-```bash
-cd backend
-cp .env.example .env        # fill in your API keys
-python3 -m venv ../.venv
-../.venv/bin/pip install -r requirements.txt
-../.venv/bin/uvicorn app.main:app --reload --port 8000
-```
+![A view Archie built](docs/assets/view.png)
 
-In a second terminal, start the worker (scheduled tasks + Telegram):
+**Automations.** A morning brief, a weekly review, and watchlist and earnings monitors run on a schedule. Results land on Home and, optionally, in Telegram.
 
-```bash
-cd backend
-../.venv/bin/python worker.py
-```
+## Safety model
 
-API docs: http://localhost:8000/docs
+OpenPF is built so that a confused or prompt-injected agent cannot move your money.
 
-### 2. Frontend
+- **Archie can only propose.** Its broker tools are read-only. To act, it calls `propose_trade`, which checks your risk rails and queues a proposal.
+- **One execution gate, enforced in code.** Orders reach the broker only through `execute_intent`, and only for proposals a human approved. It re-checks every rail: per-order and daily notional caps, duplicate window and cash.
+- **Execution keys never enter an agent process.** Trading 212 lets you create separate read and trade keys. Only the API server holds the trade key. Agent hooks also block calls to the app's own API and to trading212.com.
+- **Safe defaults.**
+  - New installs run in paper mode on T212's demo environment.
+  - The server binds to localhost.
+  - `OPENPF_API_TOKEN` locks the API when you expose it on your LAN or Tailscale.
+  - Telegram ignores everyone not on your allowlist.
+- **Leveraged desk (labs, off by default):** an optional regime-aware 3× ETP engine. It only places orders itself if you switch on auto-execute, and always within its own hard daily rails. Agents can tighten those rails, never loosen them.
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+## Connect your Trading 212 account
 
-Dashboard: http://localhost:5173
+1. In Trading 212: Settings → API → generate a key for each account (Invest, Stocks ISA). Make one **read** key and, if you want to approve trades from OpenPF, a separate **trade** key (ideally IP-restricted).
+2. Set up and run:
 
-### Docker
+   ```bash
+   cd backend && cp .env.example .env    # add ANTHROPIC_API_KEY (or use your claude login)
+   python3 -m venv ../.venv && ../.venv/bin/pip install -r requirements.txt
+   ../.venv/bin/uvicorn app.main:app --port 8000
+   # second terminal
+   cd frontend && npm install && npm run dev
+   ```
 
-```bash
-# Hot-reload mode (default)
-make up
+3. Open http://localhost:5173 → Settings → Broker, paste your keys, and pick paper or live.
 
-# Stable mode (no live reload)
-make up MODE=stable
-
-# Logs / restart / stop
-make logs
-make restart
-make down
-```
-
-### Key environment variables
+Keep it running on an always-on machine with `./scripts/serve.sh` (see `docs/running-on-mac-mini.md`), or use Docker with `make up`.
 
 | Variable | Purpose |
-|----------|---------|
-| `ANTHROPIC_API_KEY` | Claude API access |
-| `CLAUDE_MODEL` | Model for Archie (e.g. `sonnet-4-6`) |
-| `T212_API_KEY_INVEST` | Trading 212 Invest account key |
-| `T212_API_KEY_STOCKS_ISA` | Trading 212 ISA account key |
-| `T212_BASE_ENV` | `demo` (default) or `live` |
-| `BROKER_MODE` | `paper` (default) or `live` — overridden by Settings → Broker once saved |
-| `OPENPF_API_TOKEN` | Optional. When set, the API and chat websocket require it (the UI prompts once) |
-| `OPENPF_USER_NAME` | Optional. How Archie addresses you |
-| `CLAUDE_MEMORY_STRATEGY` | `self_managed`, `distill`, or `off` |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude access (optional if you're logged in with the `claude` CLI) |
+| `BROKER_MODE` | `paper` (default) or `live`; Settings → Broker overrides it once saved |
+| `T212_BASE_ENV` | `demo` (default), `live`, or `sandbox` |
+| `OPENPF_SANDBOX` | `1` = use the built-in mock broker; real broker keys are ignored |
+| `OPENPF_API_TOKEN` | Require a token for the API and chat (set it before exposing beyond localhost) |
+| `OPENPF_USER_NAME` | How Archie addresses you |
+| `VIEWS_MODEL` / `CLAUDE_PLAYS_MODEL` | Models for the view builder and play drafting |
 
-See `backend/.env.example` for the full list.
-
-### Safety model
-
-- **Archie can only propose trades.** It has read-only broker tools plus `propose_trade`,
-  which checks the risk rails and queues a `proposed` intent. Nothing reaches the broker
-  until you approve it in the UI; execution re-checks every rail (single-order and daily
-  notional caps, duplicate window, cash).
-- Execution keys never enter any agent process, and agent tool hooks block calls to the
-  app's own API and to `trading212.com`.
-- The leveraged engine only places orders itself when you enable its auto-execute flag,
-  and always within its hard rails. Agents can't change that flag or loosen rails.
-- New installs default to paper trading on the T212 demo environment, bind to localhost,
-  and Telegram ignores everyone until you add your user id to the allowlist.
-
-## Tech stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, TypeScript, Vite, Recharts, Lightweight Charts |
-| Backend | FastAPI, SQLAlchemy, SQLite, APScheduler |
-| AI runtime | Claude Agent SDK, MCP (Model Context Protocol) |
-| Market data | yfinance (via MCP server) |
-| Broker | Trading 212 API (via MCP server) |
-
-## Project structure
+## How it's built
 
 ```
-backend/
-  app/
-    api/            # FastAPI route handlers
-    services/       # Core logic (chat runtime, agent, leveraged, memory)
-    quant/          # Technical indicators and risk metrics
-    models/         # SQLAlchemy models
-    core/           # Config, database setup
-  mcp_servers/      # MCP servers (Trading 212, market data, scheduler)
-  worker.py         # Background worker process
-
-frontend/
-  src/
-    components/     # React UI (chat, portfolio, charts, leveraged desk)
-    api/            # API client layer
-    types/          # TypeScript types
-
-.claude/
-  runtime/          # Agent working directory (memory, artifacts, skills)
+frontend/  React + Vite + Tailwind + shadcn
+  src/app/            shell, routing, data hooks
+  src/features/       home · plays · views (agent-built pages + sandbox runtime)
+backend/   FastAPI + SQLite + APScheduler + Claude Agent SDK
+  app/services/       portfolio, proposals + execution gate, plays, views builder, scheduler
+  app/services/sandbox_broker.py   mock Trading 212 for demos and development
+  mcp_servers/        Archie's tools: trading212 (read-only), marketdata, fundamentals,
+                      proposals, plays, views, scheduler, watchlist, …
+.claude/runtime/      Archie's identity, skills and (gitignored) memory
 ```
 
-## Testing
+Run the tests with `cd backend && ../.venv/bin/python -m pytest -q`. The frontend builds with `cd frontend && npm run build`.
 
-```bash
-# Compile check
-python3 -m compileall backend/app backend/tests
+## Status
 
-# Run tests (with venv activated)
-pytest backend/tests -q
-```
-
-## Contributing
-
-Contributions are welcome. Please open an issue to discuss your idea before submitting a PR.
-
-1. Fork the repo
-2. Create a feature branch
-3. Make your changes
-4. Open a pull request
+This is a personal project, released because the pattern seemed worth sharing: an agent that operates a real brokerage account behind a hard approval gate, and an app that grows the views you ask for. Expect rough edges. Issues and PRs welcome.
 
 ## Disclaimer
 
-This software is for research and personal tooling only. It is not financial advice. You are responsible for all trading decisions, strategy validation, regulatory obligations, and risk management.
+OpenPF is software for managing your own account. It is not financial advice, and nothing it says is a recommendation. You are responsible for every trade you approve. Trading 212's API is in beta and may change.
 
 ## License
 
