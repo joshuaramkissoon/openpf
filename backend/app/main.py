@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import plays as plays_api
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
 from app.core.config import get_settings
 from app.core.database import init_db
@@ -107,6 +108,7 @@ app.include_router(research.router, prefix=settings.api_prefix)
 app.include_router(attention.router, prefix=settings.api_prefix)
 app.include_router(watchlist.router, prefix=settings.api_prefix)
 app.include_router(instruments.router, prefix=settings.api_prefix)
+app.include_router(plays_api.router, prefix=settings.api_prefix)
 
 if _sandbox_enabled():
     from app.api import sandbox_t212
