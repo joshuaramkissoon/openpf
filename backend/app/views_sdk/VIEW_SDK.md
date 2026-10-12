@@ -86,10 +86,11 @@ All money is in the display currency (GBP default) unless a field says otherwise
  accounts:[{account:'invest'|'stocks_isa', total, invested, free_cash, ppl}],
  positions:[{ticker:'NVDA', name:'NVIDIA', accounts:['stocks_isa'], yf:'NVDA', instrument_currency:'USD',
    quantity, price, avg_price /* both in instrument_currency; GBX = pence */, value, cost, ppl /* display ccy */,
-   ppl_pct, weight /* of account total incl. cash */, momentum_63d, rsi_14, volatility_30d, risk_flag}],
+   ppl_pct, weight /* of account total incl. cash */, day_change_pct /* fraction, today */, day_change /* display ccy */,
+   momentum_63d, rsi_14, volatility_30d, risk_flag}],
  metrics:{total_value, free_cash, cash_ratio, concentration_hhi, top_position_weight, estimated_beta, estimated_volatility}}
 ```
-Positions are sorted by value desc. No sector field — use `fundamentals` per ticker (slow; ≤ ~15 tickers, run in parallel with `Promise.all`) or bucket by name.
+Positions are sorted by value desc. **Money rule:** for any amount (holding value, today's P&L, theme totals) sum the display-currency fields `value` / `day_change` / `ppl` — never multiply `price` or a quote by `quantity` (those are in the instrument's currency, e.g. USD or pence). Totals of `value` across positions plus `account.free_cash` equal `account.total`. No sector field — use `fundamentals` per ticker (slow; ≤ ~15 tickers, run in parallel with `Promise.all`) or bucket by name.
 
 **`history`** `{range?: '1m'|'3m'|'6m'|'ytd'|'1y'|'2y'|'5y'|'all', account?}` — daily equity curve.
 `{currency, range, points:[{date:'2026-07-12', total, invested, free_cash, gain /* value earned net of deposits since range start */}], return_pct /* money-weighted */, net_contributed, start_value, end_value}`
@@ -104,7 +105,7 @@ Fill missing months with 0 yourself when charting a calendar range.
 **`prices`** `{ticker, range?: '5d'|'1mo'|'3mo'|'6mo'|'1y'|'2y'|'5y'|'ytd'|'max', interval?: '1d'|'1wk'|'1mo'}` — OHLC. Use a position's `yf` for non-US listings.
 `{ticker, range, interval, candles:[{date, open, high, low, close, volume}]}`
 
-**`quotes`** `{tickers: ['AAPL', 'VUSA.L']}` (≤30) — latest price + day change.
+**`quotes`** `{tickers: ['AAPL', 'VUSA.L']}` (≤30) — latest price + day change, in the instrument's own currency. For holdings prefer `portfolio` (`day_change_pct`/`day_change`); use quotes for tickers you don't hold.
 `{quotes:[{ticker, price, change_pct /* fraction */, currency}]}` (price null if unavailable)
 
 **`fundamentals`** `{ticker}` — company facts (yfinance; ~1s each, cached).

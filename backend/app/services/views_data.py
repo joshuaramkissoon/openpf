@@ -147,6 +147,7 @@ def _portfolio(db: Session, params: dict[str, Any]) -> dict[str, Any]:
         row["quantity"] = _r(row["quantity"], 6)
         positions.append(row)
     positions.sort(key=lambda r: r["value"] or 0, reverse=True)
+    _attach_day_change(positions)
 
     def _acct(a: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -304,6 +305,30 @@ def _prices(db: Session, params: dict[str, Any]) -> dict[str, Any]:
             for c in data.get("candles", [])
         ],
     }
+
+
+def _attach_day_change(positions: list[dict[str, Any]]) -> None:
+    """Today's move per holding, so views never have to derive money from quotes
+    (quote prices are in the instrument's currency, not the display currency)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.leveraged_market import get_price
+
+    def _pct(sym: str) -> float | None:
+        try:
+            q = _cached(("quote", sym), 60, lambda sym=sym: get_price(sym) or {})
+            v = q.get("change_pct")
+            return float(v) if v is not None else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    syms = [str(p.get("yf") or p.get("ticker") or "") for p in positions]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pcts = list(pool.map(_pct, syms))
+    for row, pct in zip(positions, pcts):
+        row["day_change_pct"] = _r(pct, 5) if pct is not None else None
+        value = row.get("value") or 0.0
+        row["day_change"] = _r(value - value / (1 + pct)) if pct is not None and pct > -1 else None
 
 
 def _quotes(db: Session, params: dict[str, Any]) -> dict[str, Any]:
