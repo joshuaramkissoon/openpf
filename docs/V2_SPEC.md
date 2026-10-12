@@ -1,4 +1,4 @@
-# MyPF V2 Spec: Financial Second Brain (Build-Today)
+# OpenPF V2 Spec: Financial Second Brain (Build-Today)
 
 ## 1) Product Goal
 Build a single operator system that:

@@ -2,10 +2,12 @@ services:
   backend:
     build: ./backend
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # Published on the host's loopback only; set OPENPF_BIND=0.0.0.0 (and
+    # OPENPF_API_TOKEN in backend/.env) to expose it.
     ports:
-      - "8000:8000"
+      - "${OPENPF_BIND:-127.0.0.1}:8000:8000"
     volumes:
-      - ./backend/mypf.db:/app/mypf.db
+      - ${OPENPF_DB_FILE:-./backend/openpf.db}:/app/openpf.db
       - ./.claude:/app/.claude
       - ./backend/logs:/app/logs
     env_file: ./backend/.env
@@ -18,7 +20,7 @@ services:
     build: ./backend
     command: python worker.py
     volumes:
-      - ./backend/mypf.db:/app/mypf.db
+      - ${OPENPF_DB_FILE:-./backend/openpf.db}:/app/openpf.db
       - ./.claude:/app/.claude
       - ./backend/logs:/app/logs
     env_file: ./backend/.env
@@ -33,9 +35,10 @@ services:
     build: ./frontend
     command: npm run dev -- --host
     ports:
-      - "5173:5173"
+      - "${OPENPF_BIND:-127.0.0.1}:5173:5173"
     environment:
       API_PROXY_TARGET: http://backend:8000
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
     depends_on:
       - backend
     restart: unless-stopped

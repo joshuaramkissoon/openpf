@@ -15,8 +15,16 @@ from app.services.claude_sdk_config import configure_sdk_auth, parse_setting_sou
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-_MEMORY_START = "<!-- MYPF_MEMORY_START -->"
-_MEMORY_END = "<!-- MYPF_MEMORY_END -->"
+_MEMORY_START = "<!-- OPENPF_MEMORY_START -->"
+_MEMORY_END = "<!-- OPENPF_MEMORY_END -->"
+# Pre-rename markers; existing memory docs are rewritten with the new ones.
+_LEGACY_MARKERS = (("<!-- MYPF_MEMORY_START -->", _MEMORY_START), ("<!-- MYPF_MEMORY_END -->", _MEMORY_END))
+
+
+def _upgrade_markers(doc: str) -> str:
+    for old, new in _LEGACY_MARKERS:
+        doc = doc.replace(old, new)
+    return doc
 _MAX_FACTS_PER_UPDATE = 3
 _memory_lock = asyncio.Lock()
 
@@ -122,7 +130,7 @@ def _memory_file() -> Path:
 
 def _default_memory_doc() -> str:
     return (
-        "# MyPF Claude Runtime Memory\n\n"
+        "# OpenPF Claude Runtime Memory\n\n"
         "## Guidance\n"
         "- Persist only durable user preferences, constraints, goals, and workflow decisions.\n"
         "- Never store secrets, credentials, exact balances, or transient market noise.\n\n"
@@ -134,6 +142,7 @@ def _default_memory_doc() -> str:
 
 
 def _read_memory_lines(doc: str) -> list[str]:
+    doc = _upgrade_markers(doc)
     start = doc.find(_MEMORY_START)
     end = doc.find(_MEMORY_END)
     if start == -1 or end == -1 or end <= start:
@@ -160,7 +169,7 @@ def _normalize_fact_key(line: str) -> str:
 
 def _write_memory_lines(path: Path, lines: list[str]) -> None:
     if path.exists():
-        doc = path.read_text(encoding="utf-8")
+        doc = _upgrade_markers(path.read_text(encoding="utf-8"))
     else:
         doc = _default_memory_doc()
 

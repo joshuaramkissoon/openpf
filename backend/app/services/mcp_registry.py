@@ -1,0 +1,255 @@
+"""Single registry of the MCP servers Archie can use, per runtime context.
+
+Every Claude runtime (interactive chat, the analyst cycle, the research runner
+and scheduled tasks) builds its ``mcp_servers`` / ``allowed_tools`` from here
+instead of hand-wiring each server, so the safety invariants hold everywhere:
+
+* No server exposes broker order placement or cancellation. The agent can only
+  *propose* trades (``proposals`` server → a ``proposed`` TradeIntent); live
+  orders go through the approval-gated ``execution_service.execute_intent``.
+* No subprocess ever receives T212 execution (write) keys or the app's API
+  token. Only the ``trading212`` server gets the read-only T212 keys.
+
+Adding a server is a one-entry change to ``MCP_SERVERS``::
+
+    McpServerSpec(
+        name="plays",                     # -> tool ids mcp__plays__<tool>
+        script="plays.py",                # file in backend/mcp_servers/
+        tools=("list_plays", "create_play"),
+        contexts=frozenset({CHAT, SCHEDULED}),
+    )
+
+Contexts: ``CHAT`` (dashboard chat / Telegram), ``AGENT`` (analyst cycle),
+``RESEARCH`` (single-thesis research runner), ``SCHEDULED`` (cron tasks).
+Never register a tool that places, modifies or cancels broker orders, or that
+changes risk rails / auto-execute policy — ``tests/test_execution_gate.py``
+enforces this.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from app.core.config import get_settings
+
+CHAT = "chat"
+AGENT = "agent"
+RESEARCH = "research"
+SCHEDULED = "scheduled"
+ALL_CONTEXTS = frozenset({CHAT, AGENT, RESEARCH, SCHEDULED})
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+MCP_SERVER_DIR = BACKEND_ROOT / "mcp_servers"
+
+
+@dataclass(frozen=True)
+class McpServerSpec:
+    name: str
+    script: str
+    tools: tuple[str, ...]
+    contexts: frozenset[str]
+    # Only the broker read server gets (read-only) T212 credentials.
+    needs_t212_read_keys: bool = False
+
+    @property
+    def tool_ids(self) -> list[str]:
+        return [f"mcp__{self.name}__{tool}" for tool in self.tools]
+
+    @property
+    def script_path(self) -> Path:
+        return MCP_SERVER_DIR / self.script
+
+
+MCP_SERVERS: tuple[McpServerSpec, ...] = (
+    McpServerSpec(
+        name="trading212",
+        script="t212.py",
+        tools=(
+            "get_account_summary",
+            "get_positions",
+            "get_pending_orders",
+            "search_instruments",
+            "get_exchanges",
+            "get_order_history",
+            "get_dividend_history",
+            "get_transaction_history",
+            "request_csv_export",
+            "get_csv_export_status",
+        ),
+        contexts=ALL_CONTEXTS,
+        needs_t212_read_keys=True,
+    ),
+    McpServerSpec(
+        name="marketdata",
+        script="marketdata.py",
+        tools=(
+            "get_price_snapshot",
+            "get_price_history_rows",
+            "get_technical_snapshot",
+            "get_indicator_series",
+            "get_risk_metrics",
+            "get_correlation_matrix",
+            "compare_assets",
+        ),
+        contexts=ALL_CONTEXTS,
+    ),
+    McpServerSpec(
+        name="scheduler",
+        script="scheduler.py",
+        tools=(
+            "list_scheduled_tasks",
+            "create_scheduled_task",
+            "pause_scheduled_task",
+            "resume_scheduled_task",
+            "delete_scheduled_task",
+            "run_scheduled_task_now",
+            "get_scheduled_task_logs",
+            "run_due_scheduled_tasks",
+            "seed_default_scheduled_tasks",
+        ),
+        contexts=frozenset({CHAT, AGENT, SCHEDULED}),
+    ),
+    McpServerSpec(
+        name="forecast",
+        script="forecast.py",
+        tools=("forecast_prices", "forecast_status"),
+        contexts=frozenset({CHAT, RESEARCH}),
+    ),
+    McpServerSpec(
+        name="fundamentals",
+        script="fundamentals.py",
+        tools=(
+            "get_fundamentals",
+            "get_valuation",
+            "get_financial_statements",
+            "get_earnings_calendar",
+        ),
+        contexts=ALL_CONTEXTS,
+    ),
+    McpServerSpec(
+        name="intel",
+        script="intel.py",
+        tools=("get_company_news", "get_market_news", "get_macro_snapshot", "get_earnings"),
+        contexts=frozenset({CHAT, AGENT, SCHEDULED}),
+    ),
+    McpServerSpec(
+        name="watchlist",
+        script="watchlist.py",
+        tools=(
+            "list_watchlist",
+            "add_to_watchlist",
+            "update_watchlist_item",
+            "remove_from_watchlist",
+            "flag_watchlist_item",
+        ),
+        contexts=frozenset({CHAT, SCHEDULED}),
+    ),
+    # The ONLY way the agent can express a trade: it records a 'proposed'
+    # TradeIntent for a human to approve. It cannot execute anything.
+    McpServerSpec(
+        name="proposals",
+        script="proposals.py",
+        tools=("propose_trade", "list_proposals"),
+        contexts=frozenset({CHAT, SCHEDULED}),
+    ),
+)
+
+
+def server_spec(name: str) -> McpServerSpec:
+    for spec in MCP_SERVERS:
+        if spec.name == name:
+            return spec
+    raise KeyError(name)
+
+
+def tool_ids(*names: str) -> list[str]:
+    """Allowed-tool ids for the named servers (used for subagent tool lists)."""
+    out: list[str] = []
+    for name in names:
+        out.extend(server_spec(name).tool_ids)
+    return out
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Subprocess environments
+# ──────────────────────────────────────────────────────────────────────────
+
+# Env vars that must never reach the Claude CLI or any MCP subprocess other than
+# via an explicit per-server injection (read keys → trading212 only): broker
+# keys/secrets (incl. execution keys) and the app's own API/bot tokens, so
+# Bash/WebFetch can't reuse them. Non-secret T212_* settings (T212_BASE_ENV)
+# pass through untouched.
+_SENSITIVE_NAMES = {"OPENPF_API_TOKEN", "TELEGRAM_BOT_TOKEN"}
+
+
+def _is_sensitive(key: str) -> bool:
+    if key in _SENSITIVE_NAMES:
+        return True
+    return key.startswith(("T212_", "ARCHIE_T212_")) and ("KEY" in key or "SECRET" in key)
+
+
+def _scrubbed_inherited_env() -> dict[str, str]:
+    """Blank every sensitive var the backend process inherited.
+
+    The SDK merges ``{**os.environ, **options.env}`` for the CLI, and the CLI
+    passes its env on to stdio MCP servers, so overriding with "" is what keeps
+    a secret exported in the backend's shell out of every child process.
+    """
+    return {key: "" for key in os.environ if _is_sensitive(key)}
+
+
+def resolved_database_url() -> str:
+    """DATABASE_URL with a relative SQLite path made absolute (backend root), so
+    MCP subprocesses — which may run with another CWD — open the same file."""
+    url = get_settings().database_url
+    prefix = "sqlite:///"
+    if url.startswith(prefix) and not url.startswith("sqlite:////"):
+        rel = url[len(prefix):]
+        if rel and rel != ":memory:" and not Path(rel).is_absolute():
+            return f"{prefix}{(BACKEND_ROOT / rel).resolve()}"
+    return url
+
+
+def sdk_env() -> dict[str, str]:
+    """Env overrides for the Claude CLI subprocess itself (passed as
+    ``ClaudeAgentOptions(env=...)``). Contains no broker credentials."""
+    env = _scrubbed_inherited_env()
+    env["PYTHONPATH"] = str(BACKEND_ROOT)
+    return env
+
+
+def mcp_server_env(spec: McpServerSpec) -> dict[str, str]:
+    env = _scrubbed_inherited_env()
+    env["PYTHONPATH"] = str(BACKEND_ROOT)
+    env["DATABASE_URL"] = resolved_database_url()
+    if spec.needs_t212_read_keys:
+        from app.services.claude_sdk_config import resolve_t212_env
+
+        env.update(resolve_t212_env())
+    return env
+
+
+def build_mcp_servers(context: str) -> tuple[dict[str, Any], list[str]]:
+    """``(mcp_servers, allowed_tool_ids)`` for one runtime context.
+
+    Servers whose script is missing are skipped (and their tools not allowed).
+    """
+    if context not in ALL_CONTEXTS:
+        raise ValueError(f"unknown MCP context {context!r}")
+    servers: dict[str, Any] = {}
+    allowed: list[str] = []
+    for spec in MCP_SERVERS:
+        if context not in spec.contexts or not spec.script_path.is_file():
+            continue
+        servers[spec.name] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [str(spec.script_path)],
+            "env": mcp_server_env(spec),
+        }
+        allowed.extend(spec.tool_ids)
+    return servers, allowed

@@ -1,6 +1,6 @@
 """Market-intelligence MCP server — news (Finnhub) + macro (FRED).
 
-Gives Archie continuous-information tools so it can watch the world for Josh:
+Gives Archie continuous-information tools so it can watch the world for the user:
 company/market news, a macro snapshot, and earnings timing. Keys are read from
 the env or ConfigStore by app.services.intel_service (keyless-degradable).
 """
@@ -23,7 +23,7 @@ try:
 except OSError:
     import tempfile
 
-    _LOG_DIR = Path(tempfile.gettempdir()) / "mypf-mcp-logs"
+    _LOG_DIR = Path(tempfile.gettempdir()) / "openpf-mcp-logs"
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("intel-mcp")

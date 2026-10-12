@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.services.mcp_registry import tool_ids
 
 settings = get_settings()
 
@@ -43,12 +44,13 @@ def resolve_t212_env() -> dict[str, str]:
     Note: deliberately does NOT prefer the legacy ``ARCHIE_T212_*`` keys — those
     being stale (while the regular keys were updated) is exactly what caused
     Archie's 401s. Credentials live in subprocess memory only.
+
+    READ keys only. Execution (write) keys are never handed to any agent
+    subprocess — live orders go through ``execution_service.execute_intent``.
     """
     env: dict[str, str] = {"T212_BASE_ENV": settings.t212_base_env}
     invest = ("", "")
     isa = ("", "")
-    invest_exec = ("", "")
-    isa_exec = ("", "")
     try:
         from app.core.database import SessionLocal
         from app.services.config_store import ConfigStore
@@ -60,12 +62,6 @@ def resolve_t212_env() -> dict[str, str]:
             sc = store.get_account_credentials("stocks_isa")
             invest = (str(ic.get("t212_api_key", "")).strip(), str(ic.get("t212_api_secret", "")).strip())
             isa = (str(sc.get("t212_api_key", "")).strip(), str(sc.get("t212_api_secret", "")).strip())
-            # Dedicated IP-restricted execution (write) keys — injected separately so
-            # Archie's reads keep working even when the exec key's IP allowlist is stale.
-            xic = store.get_account_exec_credentials("invest")
-            xsc = store.get_account_exec_credentials("stocks_isa")
-            invest_exec = (str(xic.get("t212_api_key", "")).strip(), str(xic.get("t212_api_secret", "")).strip())
-            isa_exec = (str(xsc.get("t212_api_key", "")).strip(), str(xsc.get("t212_api_secret", "")).strip())
     except Exception:  # noqa: BLE001 — fall back to .env below
         pass
 
@@ -79,25 +75,11 @@ def resolve_t212_env() -> dict[str, str]:
             (settings.t212_stocks_isa_api_key or settings.t212_api_key_stocks_isa or "").strip(),
             (settings.t212_stocks_isa_api_secret or settings.t212_api_secret_stocks_isa or "").strip(),
         )
-    if not all(invest_exec):
-        invest_exec = (
-            (settings.t212_exec_invest_api_key or "").strip(),
-            (settings.t212_exec_invest_api_secret or "").strip(),
-        )
-    if not all(isa_exec):
-        isa_exec = (
-            (settings.t212_exec_stocks_isa_api_key or "").strip(),
-            (settings.t212_exec_stocks_isa_api_secret or "").strip(),
-        )
 
     if all(invest):
         env["T212_API_KEY_INVEST"], env["T212_API_SECRET_INVEST"] = invest
     if all(isa):
         env["T212_API_KEY_STOCKS_ISA"], env["T212_API_SECRET_STOCKS_ISA"] = isa
-    if all(invest_exec):
-        env["T212_EXEC_API_KEY_INVEST"], env["T212_EXEC_API_SECRET_INVEST"] = invest_exec
-    if all(isa_exec):
-        env["T212_EXEC_API_KEY_STOCKS_ISA"], env["T212_EXEC_API_SECRET_STOCKS_ISA"] = isa_exec
     return env
 
 
@@ -193,97 +175,6 @@ def list_skill_files(cwd: Path | None = None) -> list[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# MCP tool allow-lists
-#
-# Centralised here (per docs/plans/2026-02-19-archie-subagents-design.md) so
-# the chat/agent/scheduler runtimes and build_subagents() share one source of
-# truth and avoid circular imports.
-# ──────────────────────────────────────────────────────────────────────────
-
-_T212_MCP_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__get_exchanges",
-    "mcp__trading212__get_order_history",
-    "mcp__trading212__get_dividend_history",
-    "mcp__trading212__get_transaction_history",
-    "mcp__trading212__request_csv_export",
-    "mcp__trading212__get_csv_export_status",
-]
-
-_MARKET_MCP_TOOLS = [
-    "mcp__marketdata__get_price_snapshot",
-    "mcp__marketdata__get_price_history_rows",
-    "mcp__marketdata__get_technical_snapshot",
-    "mcp__marketdata__get_indicator_series",
-    "mcp__marketdata__get_risk_metrics",
-    "mcp__marketdata__get_correlation_matrix",
-    "mcp__marketdata__compare_assets",
-]
-
-_SCHEDULER_MCP_TOOLS = [
-    "mcp__scheduler__list_scheduled_tasks",
-    "mcp__scheduler__create_scheduled_task",
-    "mcp__scheduler__pause_scheduled_task",
-    "mcp__scheduler__resume_scheduled_task",
-    "mcp__scheduler__delete_scheduled_task",
-    "mcp__scheduler__run_scheduled_task_now",
-    "mcp__scheduler__get_scheduled_task_logs",
-    "mcp__scheduler__run_due_scheduled_tasks",
-    "mcp__scheduler__seed_default_scheduled_tasks",
-]
-
-_FORECAST_MCP_TOOLS = [
-    "mcp__forecast__forecast_prices",
-    "mcp__forecast__forecast_status",
-]
-
-_FUNDAMENTALS_MCP_TOOLS = [
-    "mcp__fundamentals__get_fundamentals",
-    "mcp__fundamentals__get_valuation",
-    "mcp__fundamentals__get_financial_statements",
-    "mcp__fundamentals__get_earnings_calendar",
-]
-
-_INTEL_MCP_TOOLS = [
-    "mcp__intel__get_company_news",
-    "mcp__intel__get_market_news",
-    "mcp__intel__get_macro_snapshot",
-    "mcp__intel__get_earnings",
-]
-
-_WATCHLIST_MCP_TOOLS = [
-    "mcp__watchlist__list_watchlist",
-    "mcp__watchlist__add_to_watchlist",
-    "mcp__watchlist__update_watchlist_item",
-    "mcp__watchlist__remove_from_watchlist",
-    "mcp__watchlist__flag_watchlist_item",
-]
-
-# Narrow T212 subset the execution subagent is allowed to use — no CSV
-# export, no dividend/transaction history.
-_EXECUTION_T212_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__get_order_history",
-]
-
-
-# ──────────────────────────────────────────────────────────────────────────
 # Subagents
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -326,30 +217,13 @@ _QUANT_PROMPT = (
     "on it. Return concise, quantified results."
 )
 
-_EXECUTION_PROMPT = (
-    "You are Archie's trade execution specialist. You place and cancel orders "
-    "via the Trading 212 tools, using only the account balance, positions, and "
-    "exact order instructions passed to you. Do not improvise sizing or "
-    "instruments. "
-    "ACCOUNT: every order tool takes an explicit `account` ('invest' or "
-    "'stocks_isa'). Never assume or default the account — use exactly the account "
-    "specified in your instructions, and if it was not specified, do NOT guess: "
-    "return an error asking which account to use. Echo the account you acted on in "
-    "your commentary. (Order writes use the IP-restricted execution key; a tool "
-    "error mentioning IP restriction means the key's allowlist is stale — surface "
-    "that verbatim in `errors`, do not retry.) "
-    "Always finish with a single JSON block matching the execution "
-    "schema: {\"trades\": [...], \"errors\": [...], \"commentary\": \"...\"}. "
-    "Return structured JSON only — never unstructured prose as the final answer."
-)
-
-
 def build_subagents() -> dict[str, Any]:
     """Construct Archie's subagent roster.
 
     Returns a ``dict[str, AgentDefinition]`` suitable for
-    ``ClaudeAgentOptions(agents=...)``. See
-    docs/plans/2026-02-19-archie-subagents-design.md for the roster spec.
+    ``ClaudeAgentOptions(agents=...)``. There is deliberately no execution
+    subagent: no agent can place or cancel orders — the main agent drafts trades
+    with ``propose_trade`` and a human approves them.
     """
     from claude_agent_sdk import AgentDefinition
 
@@ -361,7 +235,7 @@ def build_subagents() -> dict[str, Any]:
             "structured research findings and writes artifacts when useful."
         ),
         prompt=_RESEARCHER_PROMPT,
-        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS, *_INTEL_MCP_TOOLS],
+        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *tool_ids("marketdata", "fundamentals", "intel")],
         model="sonnet",
     )
 
@@ -374,24 +248,11 @@ def build_subagents() -> dict[str, Any]:
             "analysis is needed."
         ),
         prompt=_QUANT_PROMPT,
-        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS, *_FORECAST_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS],
+        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *tool_ids("marketdata", "forecast", "fundamentals")],
         model="claude-opus-4-8",
     )
 
-    execution = AgentDefinition(
-        description=(
-            "Trade execution specialist. Delegate ALL order placement and "
-            "cancellation here. Always pass: current account balance, relevant "
-            "positions, and exact order instructions (symbol, type, qty, limit "
-            "price if applicable). Returns a typed list of trade results — do "
-            "not attempt T212 tool calls yourself."
-        ),
-        prompt=_EXECUTION_PROMPT,
-        tools=list(_EXECUTION_T212_TOOLS),
-        model="haiku",
-    )
-
-    return {"researcher": researcher, "quant": quant, "execution": execution}
+    return {"researcher": researcher, "quant": quant}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -430,6 +291,50 @@ def _deny(reason: str) -> dict[str, Any]:
     }
 
 
+# The trading surface. The agent can only *propose* trades (propose_trade); these
+# guards stop it routing around that gate via Bash/WebFetch: calling the app's own
+# API (where a human approves/executes), hitting the broker directly, or poking
+# the execution code / exec credentials / DB from a shell.
+_API_PORT = str(os.environ.get("OPENPF_API_PORT") or os.environ.get("API_PORT") or "8000")
+_NETWORK_DENY = [
+    (
+        re.compile(
+            r"(?:\blocalhost\b|\b127(?:\.\d{1,3}){3}\b|\b0\.0\.0\.0\b|\[::1\]|\bhost\.docker\.internal\b|\b2130706433\b)",
+            re.IGNORECASE,
+        ),
+        "requests to the app's own host (localhost/loopback) are blocked",
+    ),
+    (re.compile(rf"\bbackend:{_API_PORT}\b|:{_API_PORT}/api\b", re.IGNORECASE), "requests to the app's own API are blocked"),
+    (
+        re.compile(r"/api/(?:agent/intents|orders|leveraged|config)\b", re.IGNORECASE),
+        "trading/config API endpoints are human-only",
+    ),
+    (re.compile(r"trading212\.com", re.IGNORECASE), "direct Trading 212 API access is blocked — use the read-only trading212 tools"),
+]
+_BASH_TRADING_DENY = [
+    (
+        re.compile(
+            r"\b(?:execute_intent|approve_intent|place_(?:market|limit|stop|stop_limit)_order|cancel_order"
+            r"|build_t212_client|get_account_exec_credentials|exec_api_(?:key|secret)|T212_EXEC|update_policy"
+            r"|set_leveraged|auto_execute|execute_signal|ConfigStore|app_config|sqlite3?)\b",
+            re.IGNORECASE,
+        ),
+        "trade execution, broker credentials and the app database are off-limits — propose trades with propose_trade",
+    ),
+    (re.compile(r"\.(?:db|sqlite3?)\b", re.IGNORECASE), "the app database is off-limits"),
+]
+# Write/Edit may only touch agent-owned state under .claude/ in this repo, never
+# the app's code or config (which would let the agent rewrite its own gate).
+_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
+def _network_violation(text: str) -> str | None:
+    for pattern, reason in _NETWORK_DENY:
+        if pattern.search(text):
+            return reason
+    return None
+
+
 async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
     command = str((input_data.get("tool_input") or {}).get("command", ""))
     for pattern, reason in _BASH_DENY:
@@ -438,7 +343,36 @@ async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, conte
     for pattern, reason in _SECRET_PATTERNS:
         if pattern.search(command):
             return _deny(reason)
+    for pattern, reason in _BASH_TRADING_DENY:
+        if pattern.search(command):
+            return _deny(reason)
+    reason = _network_violation(command)
+    if reason:
+        return _deny(reason)
     return {}
+
+
+async def _web_fetch_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    url = str((input_data.get("tool_input") or {}).get("url", ""))
+    reason = _network_violation(url)
+    if reason:
+        return _deny(reason)
+    return {}
+
+
+def _outside_agent_area(raw_path: str, cwd: str | None) -> bool:
+    if not raw_path:
+        return False
+    root = project_root()
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd or resolve_sdk_cwd()) / path
+    path = path.resolve()
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False  # outside the repo: left to the SDK's own permission checks
+    return not rel.parts or rel.parts[0] != ".claude"
 
 
 async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
@@ -450,6 +384,12 @@ async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, conte
     for pattern, reason in _SECRET_PATTERNS:
         if pattern.search(target):
             return _deny(reason)
+    if re.search(r"\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?\b", target, re.IGNORECASE):
+        return _deny("the app database is off-limits")
+    if str(input_data.get("tool_name", "")) in _WRITE_TOOLS:
+        write_target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        if _outside_agent_area(write_target, input_data.get("cwd")):
+            return _deny("writes are limited to agent state under .claude/ — app code and config are read-only")
     return {}
 
 
@@ -457,14 +397,17 @@ def build_security_hooks() -> dict[str, Any]:
     """Build PreToolUse security hooks for ClaudeAgentOptions(hooks=...).
 
     Returns ``dict[HookEvent, list[HookMatcher]]``. Blocks dangerous Bash
-    commands and reads/writes that touch secrets.
+    commands, reads/writes that touch secrets or the app DB, writes outside
+    agent state, and any Bash/WebFetch route around the trade-proposal gate
+    (self-API calls, trading212.com, execution code/credentials).
     """
     from claude_agent_sdk import HookMatcher
 
     return {
         "PreToolUse": [
             HookMatcher(matcher="Bash", hooks=[_bash_guard]),
-            HookMatcher(matcher="Read|Edit|Write|Glob|Grep", hooks=[_file_guard]),
+            HookMatcher(matcher="WebFetch", hooks=[_web_fetch_guard]),
+            HookMatcher(matcher="Read|Edit|MultiEdit|Write|NotebookEdit|Glob|Grep", hooks=[_file_guard]),
         ],
     }
 

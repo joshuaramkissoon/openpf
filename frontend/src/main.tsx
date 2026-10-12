@@ -2,12 +2,14 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 
 import App from './App'
+import { TokenGate } from './components/auth/token-gate'
 import { Toaster } from './components/ui/sonner'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <>
     <App />
+    <TokenGate />
     {/* Operator theme is dark; pin the toaster to match (no next-themes provider).
         No richColors — toasts use the slate popover tokens + a colored icon, which
         is far less jarring than saturated full-bleed red/green panels. */}

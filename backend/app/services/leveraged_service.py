@@ -315,6 +315,50 @@ def get_policy(db: Session) -> dict[str, Any]:
     return policy
 
 
+# Agent-suggested policy updates may only TIGHTEN the rails. Lower-is-tighter
+# caps where 0 means "disabled/unlimited" (so 0 is never a tightening).
+_AGENT_TIGHTEN_ONLY_CAPS = (
+    "per_position_notional",
+    "max_total_exposure",
+    "max_open_positions",
+    "stop_loss_pct",
+    "daily_loss_limit_gbp",
+    "max_daily_trades",
+    "max_hold_days",
+)
+# Strategy knobs that don't loosen risk.
+_AGENT_FREE_KEYS = ("scan_symbols", "instrument_priority", "take_profit_pct", "daily_profit_target_gbp", "close_time_uk")
+
+
+def filter_agent_policy_patch(current: dict[str, Any], patch: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Split an agent-originated policy patch into (allowed, rejected-with-reason).
+
+    The agent can never enable auto-execution, (re)enable the engine, allow
+    overnight holds, or loosen any cap — those are human-only decisions."""
+    allowed: dict[str, Any] = {}
+    rejected: dict[str, str] = {}
+    for key, value in (patch or {}).items():
+        if key in _AGENT_FREE_KEYS:
+            allowed[key] = value
+        elif key in _AGENT_TIGHTEN_ONLY_CAPS:
+            try:
+                new_v, cur_v = float(value), float(current.get(key) or 0)
+            except (TypeError, ValueError):
+                rejected[key] = "not a number"
+                continue
+            if new_v > 0 and (cur_v <= 0 or new_v <= cur_v):
+                allowed[key] = value
+            else:
+                rejected[key] = "agents may only tighten rails"
+        elif key == "enabled" and value is False:
+            allowed[key] = False  # pausing the engine is always safe
+        elif key == "allow_overnight" and value is False:
+            allowed[key] = False
+        else:
+            rejected[key] = "human-only setting"
+    return allowed, rejected
+
+
 def update_policy(db: Session, patch: dict[str, Any], actor: str = "user") -> dict[str, Any]:
     store = ConfigStore(db)
     current = get_policy(db)

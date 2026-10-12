@@ -174,7 +174,7 @@ def _watch_thesis_invalidation(db: Session, seen: set[str], out: list[Alert]) ->
 # Watchlist items are first-class watched entities alongside holdings. These
 # raise `watchlist`-category alerts (which the board surfaces inline) so a tracked
 # idea resurfaces the moment its target is hit, it moves hard, earnings loom, or
-# material news lands — without Josh having to check it.
+# material news lands — without the user having to check it.
 
 _WL_NEWS_LOOKBACK_DAYS = 1
 
@@ -293,7 +293,7 @@ def _watch_watchlist_news(db: Session, seen: set[str], out: list[Alert]) -> None
         if key in seen:
             continue
         # A news article is a point-in-time event: once flagged it should never
-        # re-fire, even after Josh dismisses it (dismissed keys are absent from
+        # re-fire, even after the user dismisses it (dismissed keys are absent from
         # `seen`). So check ALL statuses for this exact article, not just open ones.
         if db.execute(select(Alert.id).where(Alert.dedupe_key == key)).first():
             continue

@@ -45,19 +45,6 @@ def _latest_account_cash(db: Session) -> float:
     return float(row.free_cash or 0.0)
 
 
-def _find_duplicate(db: Session, intent: TradeIntent, window_seconds: int) -> bool:
-    cutoff = datetime.utcnow() - timedelta(seconds=window_seconds)
-    q = select(TradeIntent).where(
-        TradeIntent.created_at >= cutoff,
-        TradeIntent.id != intent.id,
-        TradeIntent.symbol == intent.symbol,
-        TradeIntent.side == intent.side,
-        TradeIntent.quantity == intent.quantity,
-        TradeIntent.status.in_(["proposed", "approved", "executed"]),
-    )
-    return db.execute(q).scalar_one_or_none() is not None
-
-
 # A 'proposed' intent older than this is auto-archived: a stale proposal no
 # longer reflects current prices/conviction, so it shouldn't sit in the queue
 # as something actionable.
@@ -120,7 +107,7 @@ def list_events(db: Session, limit: int = 300) -> list[ExecutionEvent]:
     return list(db.execute(q).scalars().all())
 
 
-def approve_intent(db: Session, intent_id: str, note: str | None = None) -> TradeIntent:
+def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: str = "human") -> TradeIntent:
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
@@ -137,7 +124,7 @@ def approve_intent(db: Session, intent_id: str, note: str | None = None) -> Trad
     db.commit()
     db.refresh(intent)
 
-    _log_event(db, intent.id, "info", "intent approved", {"note": note or ""})
+    _log_event(db, intent.id, "info", "intent approved", {"note": note or "", "actor": actor})
     return intent
 
 
@@ -167,19 +154,76 @@ def _paper_fill_price(symbol: str) -> float:
         return 0.0
 
 
+def rail_violations(
+    db: Session,
+    *,
+    symbol: str,
+    side: str,
+    quantity: float,
+    estimated_notional: float,
+    exclude_intent_id: str | None = None,
+    risk: dict | None = None,
+) -> list[str]:
+    """Every execution rail an order of this shape would trip right now.
+
+    Shared by ``execute_intent`` (which refuses on any violation) and the agent's
+    ``propose_trade`` tool (which reports them up front so the agent sizes within
+    the caps). Messages are stable ``<guard>: <reason>`` strings.
+    """
+    risk = risk or ConfigStore(db).get_risk()
+    out: list[str] = []
+
+    cutoff = datetime.utcnow() - timedelta(seconds=int(risk["duplicate_order_window_seconds"]))
+    dup_q = select(TradeIntent.id).where(
+        TradeIntent.created_at >= cutoff,
+        TradeIntent.symbol == symbol,
+        TradeIntent.side == side,
+        TradeIntent.quantity == quantity,
+        TradeIntent.status.in_(["proposed", "approved", "executed"]),
+    )
+    if exclude_intent_id:
+        dup_q = dup_q.where(TradeIntent.id != exclude_intent_id)
+    if db.execute(dup_q.limit(1)).first() is not None:
+        out.append("duplicate-order-guard: similar order already exists in recent window")
+
+    if estimated_notional > float(risk["max_single_order_notional"]):
+        out.append("risk-guard: order exceeds max single-order notional")
+
+    if _daily_executed_notional(db) + estimated_notional > float(risk["max_daily_notional"]):
+        out.append("risk-guard: order exceeds max daily notional")
+
+    if side == "buy" and estimated_notional > _latest_account_cash(db):
+        out.append("risk-guard: insufficient available cash")
+
+    return out
+
+
 def execute_intent(
     db: Session,
     intent_id: str,
     *,
     force_live: bool = False,
     account_kind: str | None = None,
+    approve: bool = False,
+    approved_via: str = "ui",
 ) -> TradeIntent:
+    """Execute an APPROVED intent. This is the single gate for live orders.
+
+    ``approve=True`` is a human-UI convenience: it approves a ``proposed``
+    intent and executes it in one call, recording a human approval in the audit
+    log. Agent code paths must never pass it — the agent can only propose.
+    """
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
 
-    if intent.status not in {"approved", "proposed"}:
-        raise ExecutionError(f"Intent {intent_id} cannot be executed from status {intent.status}")
+    if approve and intent.status == "proposed":
+        intent = approve_intent(db, intent_id, note=f"human approval via {approved_via}", actor="human")
+
+    if intent.status != "approved":
+        raise ExecutionError(
+            f"Intent {intent_id} cannot be executed from status {intent.status} (it must be approved first)"
+        )
 
     # Resolve the destination account explicitly: the caller's choice wins, else
     # the account the intent was proposed for, else invest. No silent invest
@@ -192,20 +236,17 @@ def execute_intent(
     risk = config.get_risk()
     broker = config.get_broker()
 
-    if _find_duplicate(db, intent, int(risk["duplicate_order_window_seconds"])):
-        raise ExecutionError("duplicate-order-guard: similar order already exists in recent window")
-
-    if intent.estimated_notional > float(risk["max_single_order_notional"]):
-        raise ExecutionError("risk-guard: order exceeds max single-order notional")
-
-    daily_notional = _daily_executed_notional(db)
-    if daily_notional + intent.estimated_notional > float(risk["max_daily_notional"]):
-        raise ExecutionError("risk-guard: order exceeds max daily notional")
-
-    if intent.side == "buy":
-        cash = _latest_account_cash(db)
-        if intent.estimated_notional > cash:
-            raise ExecutionError("risk-guard: insufficient available cash")
+    violations = rail_violations(
+        db,
+        symbol=intent.symbol,
+        side=intent.side,
+        quantity=intent.quantity,
+        estimated_notional=intent.estimated_notional,
+        exclude_intent_id=intent.id,
+        risk=risk,
+    )
+    if violations:
+        raise ExecutionError(violations[0])
 
     mode = broker.get("broker_mode", "paper")
     if force_live:

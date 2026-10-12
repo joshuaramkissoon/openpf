@@ -3,7 +3,7 @@
 AI-powered portfolio operations platform built on Claude, with live trading via Trading 212.
 
 <!-- TODO: add screenshot or demo GIF here -->
-<!-- ![MyPF Dashboard](docs/assets/screenshot.png) -->
+<!-- ![OpenPF Dashboard](docs/assets/screenshot.png) -->
 
 ## What it does
 
@@ -95,10 +95,26 @@ make down
 | `CLAUDE_MODEL` | Model for Archie (e.g. `sonnet-4-6`) |
 | `T212_API_KEY_INVEST` | Trading 212 Invest account key |
 | `T212_API_KEY_STOCKS_ISA` | Trading 212 ISA account key |
-| `T212_BASE_ENV` | `demo` or `live` |
+| `T212_BASE_ENV` | `demo` (default) or `live` |
+| `BROKER_MODE` | `paper` (default) or `live` — overridden by Settings → Broker once saved |
+| `OPENPF_API_TOKEN` | Optional. When set, the API and chat websocket require it (the UI prompts once) |
+| `OPENPF_USER_NAME` | Optional. How Archie addresses you |
 | `CLAUDE_MEMORY_STRATEGY` | `self_managed`, `distill`, or `off` |
 
 See `backend/.env.example` for the full list.
+
+### Safety model
+
+- **Archie can only propose trades.** It has read-only broker tools plus `propose_trade`,
+  which checks the risk rails and queues a `proposed` intent. Nothing reaches the broker
+  until you approve it in the UI; execution re-checks every rail (single-order and daily
+  notional caps, duplicate window, cash).
+- Execution keys never enter any agent process, and agent tool hooks block calls to the
+  app's own API and to `trading212.com`.
+- The leveraged engine only places orders itself when you enable its auto-execute flag,
+  and always within its hard rails. Agents can't change that flag or loosen rails.
+- New installs default to paper trading on the T212 demo environment, bind to localhost,
+  and Telegram ignores everyone until you add your user id to the allowlist.
 
 ## Tech stack
 
