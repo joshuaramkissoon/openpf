@@ -1,4 +1,6 @@
 import axios from 'axios'
+
+import { withAuth, withWsToken } from './auth'
 import type {
   AgentRun,
   AgentRunDetail,
@@ -24,10 +26,12 @@ import type {
   WatchlistItem,
 } from '../types'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
-  timeout: 30000,
-})
+const api = withAuth(
+  axios.create({
+    baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+    timeout: 30000,
+  }),
+)
 
 export async function getConfig() {
   const { data } = await api.get<AppConfig>('/config')
@@ -322,7 +326,7 @@ export function streamChatMessage(
   const BASE_DELAY_MS = 500
 
   const done = new Promise<void>((resolve, reject) => {
-    const url = `${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`
+    const url = withWsToken(`${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`)
 
     const fail = (message: string) => {
       if (settled) return

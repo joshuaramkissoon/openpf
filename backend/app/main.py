@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
+from app.core.auth import ApiTokenMiddleware
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.services.claude_chat_runtime import claude_chat_runtime
@@ -35,8 +38,31 @@ def _scheduler_should_run() -> bool:
         return False
 
 
+def _bind_host() -> str:
+    """Best-effort host uvicorn was bound to (``--host`` arg or UVICORN_HOST)."""
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--host" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--host="):
+            return arg.split("=", 1)[1]
+    return os.environ.get("UVICORN_HOST", "127.0.0.1")
+
+
+def _warn_if_exposed_without_token() -> None:
+    host = _bind_host()
+    if settings.openpf_api_token or host in {"127.0.0.1", "localhost", "::1"}:
+        return
+    logging.getLogger(__name__).warning(
+        "API is bound to %s with no OPENPF_API_TOKEN set — anyone who can reach this host can "
+        "read your portfolio and approve trades. Set OPENPF_API_TOKEN or bind to 127.0.0.1.",
+        host,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _warn_if_exposed_without_token()
     init_db()
     # One-time migration off the legacy config symbol list onto the watchlist table.
     try:
@@ -64,6 +90,10 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Added before CORS so CORS stays outermost and 401s still carry CORS headers.
+if settings.openpf_api_token:
+    app.add_middleware(ApiTokenMiddleware, token=settings.openpf_api_token, api_prefix=settings.api_prefix)
 
 app.add_middleware(
     CORSMiddleware,
