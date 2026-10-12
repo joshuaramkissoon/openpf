@@ -75,6 +75,7 @@ class Job:
             "id": self.id,
             "view_id": self.view_id,
             "kind": self.kind,
+            "prompt": self.prompt,
             "status": self.status,
             "progress": self.progress,
             "error": self.error,
@@ -114,7 +115,7 @@ def prepare_job(prompt: str, *, view_id: str | None = None, kind: JobKind | None
             raise BuildConflict("this view is already being built")
         kind = kind if kind in ("edit", "fix") else "edit"
     else:
-        meta = store.create_view(title="New view", prompt=prompt)
+        meta = store.create_view(title="New view", prompt=prompt, slug=store.prompt_slug(prompt))
         view_id = meta["id"]
         kind = "create"
         created = True
@@ -296,6 +297,7 @@ async def _run(job: Job) -> None:
         HookMatcher,
         PermissionResultDeny,
         ResultMessage,
+        StreamEvent,
         ToolUseBlock,
     )
 
@@ -331,12 +333,22 @@ async def _run(job: Job) -> None:
         setting_sources=[],
         max_turns=24,
         max_budget_usd=2.0,
+        include_partial_messages=True,
     )
 
     async def converse(client: Any, message: str) -> None:
         await client.query(message)
         async for msg in client.receive_response():
-            if isinstance(msg, AssistantMessage):
+            if isinstance(msg, StreamEvent):
+                # Announce a tool as soon as the model starts writing it — a Write
+                # streams for most of the build, so this is the line users watch.
+                ev = msg.event or {}
+                block = ev.get("content_block") or {}
+                if ev.get("type") == "content_block_start" and block.get("type") == "tool_use":
+                    line = {"Write": "Writing the view…", "Edit": "Refining the view…"}.get(block.get("name"))
+                    if line:
+                        job.say(line)
+            elif isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
                         line = _describe_tool(block.name, block.input or {}, draft)

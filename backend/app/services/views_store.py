@@ -116,10 +116,19 @@ def get_view(view_id: str) -> dict[str, Any]:
     return public(_read_meta(view_id))
 
 
-def create_view(*, title: str, description: str = "", icon: str = DEFAULT_ICON, prompt: str = "", starter: str | None = None) -> dict[str, Any]:
+_STOP = {"a", "an", "the", "me", "my", "of", "by", "for", "and", "to", "in", "on", "show", "build", "make", "create", "give", "view", "page", "please", "i", "want", "with", "what", "how", "is", "are", "can", "you"}
+
+
+def prompt_slug(prompt: str) -> str:
+    """'show me my dividend income by month' → 'dividend-income-month'."""
+    words = [w for w in re.findall(r"[a-z0-9]+", (prompt or "").lower()) if w not in _STOP]
+    return _slug("-".join(words[:4])) if words else "view"
+
+
+def create_view(*, title: str, description: str = "", icon: str = DEFAULT_ICON, prompt: str = "", starter: str | None = None, slug: str | None = None) -> dict[str, Any]:
     """Create an empty view shell (no versions yet — the builder writes v1)."""
     with _LOCK:
-        base = _slug(title or prompt)
+        base = _slug(slug or title or prompt)
         view_id = base
         while (data_dir() / view_id).exists():
             view_id = f"{base[:32]}-{uuid.uuid4().hex[:6]}"
