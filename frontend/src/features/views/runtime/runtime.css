@@ -165,3 +165,5 @@ input.op-input[type='number'] { font-family: var(--font-mono); text-align: right
 
 /* privacy */
 .op-blur { filter: blur(6px); user-select: none; }
+.op-card-flush .op-table th:first-child, .op-card-flush .op-table td:first-child { padding-left: 20px; }
+.op-card-flush .op-table th:last-child, .op-card-flush .op-table td:last-child { padding-right: 20px; }

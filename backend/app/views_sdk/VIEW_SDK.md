@@ -26,7 +26,7 @@ openpf.ready(async () => {
 </script>
 ```
 
-- Line 1 MUST be the `openpf-view` header comment (JSON: title ≤ 40 chars, description ≤ 120 chars, icon = a lucide icon name such as `coins`, `target`, `pie-chart`, `chart-line`, `chart-column`, `scale`, `radar`, `calendar`, `wallet`, `layers`, `flame`, `shield`, `gauge`).
+- Line 1 MUST be the `openpf-view` header comment (JSON: title ≤ 40 chars, description ≤ 120 chars, icon = one of: `coins`, `target`, `pie-chart`, `chart-line`, `chart-column`, `chart-area`, `scale`, `radar`, `calendar`, `wallet`, `layers`, `flame`, `shield`, `gauge`, `trending-up`, `trending-down`, `activity`, `banknote`, `percent`, `globe`, `landmark`, `briefcase`, `bell`, `eye`, `list`, `table`, `layout-grid`, `sparkles`, `zap`, `clock`, `piggy-bank`, `receipt`, `crosshair`, `compass`).
 - No `<html>/<head>/<body>`. The fragment is placed in the body; the page header (title, description) is rendered by the app — do not repeat the title inside the view.
 - Put all code in `openpf.ready(async () => { … })`. Thrown errors show a friendly error panel with a "Fix it" button.
 - Show skeletons while loading (`<div class="op-skeleton" style="height:240px"></div>`), then replace. Handle empty data with an `.op-empty` message (one calm sentence saying what will appear and when).
