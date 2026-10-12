@@ -306,6 +306,9 @@ export interface TradeIntent {
   rationale: string
   broker_mode: string
   account_kind?: string | null
+  source?: string | null
+  play_id?: string | null
+  play_title?: string | null
   approved_at?: string | null
   executed_at?: string | null
   broker_order_id?: string | null

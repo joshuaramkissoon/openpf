@@ -43,6 +43,11 @@ class TradeIntentItem(BaseModel):
     rationale: str
     broker_mode: str
     account_kind: str | None = None
+    # Where the proposal came from ('chat', 'play', 'agent_run', …) and, for play
+    # tranches, which play — so the UI can label and link it.
+    source: str | None = None
+    play_id: str | None = None
+    play_title: str | None = None
     approved_at: datetime | None = None
     executed_at: datetime | None = None
     broker_order_id: str | None = None

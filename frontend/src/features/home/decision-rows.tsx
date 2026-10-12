@@ -1,3 +1,4 @@
+import { navigate } from "@/lib/router"
 import { useState } from "react"
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
@@ -97,6 +98,15 @@ export function ProposalRow({
         </button>
         <Money value={intent.estimated_notional} currency="GBP" decimals={0} className="text-sm" />
         {preset ? <span className="text-xs text-muted-foreground">· {accountShort(preset)}</span> : null}
+        {intent.play_id ? (
+          <button
+            type="button"
+            onClick={() => navigate(`/plays/${intent.play_id}`)}
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+          >
+            · {intent.play_title ?? "Play"}
+          </button>
+        ) : null}
         {intent.status === "approved" ? <span className="text-xs text-muted-foreground">· approved</span> : null}
         <span
           className={cn(
