@@ -1,6 +1,6 @@
 """Tests for the signal-attribution loop (predicted vs realized edge)."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import uuid
@@ -37,7 +37,7 @@ def _add(db, *, direction, expected_edge, confidence, pnl_pct, regime="risk_on")
     db.add(LeveragedTrade(
         id=str(uuid.uuid4()), status="closed", symbol="3NVD", instrument_code="3NVD_EQ",
         account_kind="stocks_isa", direction=direction, quantity=2.0, entry_price=100.0,
-        entry_notional=200.0, entered_at=datetime(2026, 5, 1), exited_at=datetime(2026, 5, 2),
+        entry_notional=200.0, entered_at=datetime.utcnow() - timedelta(days=3), exited_at=datetime.utcnow() - timedelta(days=2),
         pnl_pct=pnl_pct, pnl_value=pnl_pct * 200.0, close_reason="take_profit", signal_id=sid,
     ))
     db.commit()

@@ -134,7 +134,7 @@ def test_sub_window_reports_windowed_return(db):
     db.commit()
 
     # Window covering only the recorded span (no deposits inside it).
-    h = portfolio_history(db, account_kind="invest", display_currency="GBP", days=200)
+    h = portfolio_history(db, account_kind="invest", display_currency="GBP", days=(date.today() - date(2026, 2, 10)).days)
     pts = h["points"]
     assert pts[0]["gain"] == pytest.approx(0.0)
     assert pts[-1]["gain"] == pytest.approx(3000.0)  # 5000 → 8000, no in-window flows
