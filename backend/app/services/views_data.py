@@ -12,7 +12,6 @@ don't couple to internal schemas. Nothing here writes, trades or exposes keys.
 
 from __future__ import annotations
 
-import importlib
 import logging
 import re
 import threading
@@ -401,22 +400,19 @@ def _proposals(db: Session, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _plays(db: Session, params: dict[str, Any]) -> dict[str, Any]:
-    """Theme bets. Built by the plays workstream; tolerate it being absent."""
+    """Theme bets (thesis, basket legs, sizing, review verdict)."""
     try:
-        mod = importlib.import_module("app.services.plays_service")
+        from app.services.plays_service import list_plays, serialize_play
     except ImportError:
         return {"available": False, "plays": []}
-    for name in ("list_plays_for_views", "list_plays"):
-        fn = getattr(mod, name, None)
-        if callable(fn):
-            try:
-                rows = fn(db)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("views plays source failed: %s", exc)
-                return {"available": False, "plays": []}
-            plays = [r if isinstance(r, dict) else getattr(r, "__dict__", {}) for r in rows or []]
-            return {"available": True, "plays": [{k: v for k, v in p.items() if not k.startswith("_")} for p in plays]}
-    return {"available": False, "plays": []}
+    status = params.get("status")
+    if status is not None and status not in ("draft", "active", "paused", "closed"):
+        raise DataSourceError("status must be draft | active | paused | closed")
+    plays = []
+    for p in list_plays(db, status=status):
+        s = serialize_play(p)
+        plays.append({k: s.get(k) for k in ("id", "title", "thesis", "status", "conviction", "horizon_months", "account_kind", "budget_gbp", "legs", "kill_criteria", "review", "created_at", "activated_at")})
+    return {"available": True, "plays": plays}
 
 
 SOURCES: dict[str, Callable[[Session, dict[str, Any]], dict[str, Any]]] = {

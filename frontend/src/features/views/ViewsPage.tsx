@@ -27,7 +27,6 @@ import {
   patchView,
   revertView,
 } from '@/api/views'
-import { useDisplayPrefs } from '@/lib/display-prefs'
 import { PageHeader } from '@/components/kit'
 import {
   AlertDialog,
@@ -52,6 +51,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toastApiError } from '@/lib/api-error'
+import { useDisplayPrefs } from '@/lib/display-prefs'
 import { usePrivacyMode } from '@/lib/privacy'
 import { navigate, type Route } from '@/lib/router'
 import { cn } from '@/lib/utils'
@@ -68,11 +68,6 @@ const EXAMPLES = [
   'Daily moves of my top 10 holdings as a heatmap',
   'What I bought and sold each month',
 ]
-
-/** Display currency for views — follows the shell's currency switch. */
-function useDisplayCurrency(): 'GBP' | 'USD' {
-  return useDisplayPrefs().currency
-}
 
 function ago(iso: string | null | undefined): string {
   if (!iso) return ''
@@ -347,7 +342,7 @@ function BuildProgress({ job, overlay }: { job: ViewJob; overlay?: boolean }) {
 // ── detail (/views/:id) ────────────────────────────────────────────────
 function ViewDetail({ viewId }: { viewId: string }) {
   const privacy = usePrivacyMode()
-  const currency = useDisplayCurrency()
+  const { currency } = useDisplayPrefs()
   const [meta, setMeta] = useState<ViewMeta | null>(null)
   const [doc, setDoc] = useState<ViewDocument | null>(null)
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(null)

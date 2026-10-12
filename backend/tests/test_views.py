@@ -219,3 +219,27 @@ def test_enqueue_creates_view_shell_and_request(views_dir):
 def test_enqueue_edit_requires_existing_view(views_dir):
     with pytest.raises(store.ViewNotFound):
         builder.enqueue("make it blue", view_id="nope")
+
+
+def test_plays_source_reads_plays_service():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.core.database import Base
+    from app.models import entities  # noqa: F401 — register all tables
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        out = views_data.resolve(db, "plays", {})
+        assert out == {"available": True, "plays": []}
+        with pytest.raises(views_data.DataSourceError):
+            views_data.resolve(db, "plays", {"status": "deleted"})
+
+
+def test_views_mcp_server_registered():
+    from app.services.mcp_registry import CHAT, MCP_SERVERS
+
+    spec = next(s for s in MCP_SERVERS if s.name == "views")
+    assert spec.script_path.is_file() and CHAT in spec.contexts
+    assert set(spec.tool_ids) == {"mcp__views__list_views", "mcp__views__create_view", "mcp__views__update_view"}

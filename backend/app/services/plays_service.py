@@ -492,11 +492,6 @@ def list_plays(db: Session, status: str | None = None) -> list[Play]:
     return list(db.execute(q).scalars().all())
 
 
-def list_plays_for_views(db: Session) -> list[dict[str, Any]]:
-    """Plays as plain dicts for the agent-built Views data bridge."""
-    return [serialize_play(p) for p in list_plays(db)]
-
-
 def get_play(db: Session, play_id: str) -> Play | None:
     return db.get(Play, play_id)
 
