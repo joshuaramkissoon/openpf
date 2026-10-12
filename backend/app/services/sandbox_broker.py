@@ -155,9 +155,9 @@ def gbpusd() -> float:
         return hit[0]
     value = 1.33
     try:
-        from app.services.market_data import fetch_history
+        from app.services.fx import get_fx_rate
 
-        value = float(fetch_history("GBPUSD=X", lookback_days=10)["close"].iloc[-1])
+        value = float(get_fx_rate("GBP", "USD")) or value
     except Exception:  # noqa: BLE001
         pass
     _price_cache["GBPUSD"] = (value, time.time())
