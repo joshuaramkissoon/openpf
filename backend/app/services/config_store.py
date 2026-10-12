@@ -63,7 +63,8 @@ TELEGRAM_DEFAULT = {
 }
 
 LEVERAGED_DEFAULT = {
-    "enabled": True,
+    # Labs feature: off for new installs (existing DB rows keep their value).
+    "enabled": False,
     "account_kind": "stocks_isa",
     "auto_execute_enabled": False,
     "per_position_notional": 200.0,
@@ -363,7 +364,7 @@ class ConfigStore:
     def get_leveraged(self) -> dict[str, Any]:
         current = self.get("leveraged_config", LEVERAGED_DEFAULT)
         merged = {**LEVERAGED_DEFAULT, **(current or {})}
-        merged["enabled"] = bool(merged.get("enabled", True))
+        merged["enabled"] = bool(merged.get("enabled", False))
         merged["auto_execute_enabled"] = bool(merged.get("auto_execute_enabled", False))
         # Leveraged execution rail: ISA only.
         merged["account_kind"] = "stocks_isa"

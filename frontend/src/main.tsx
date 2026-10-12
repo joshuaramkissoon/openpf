@@ -1,18 +1,22 @@
-import React from 'react'
 import ReactDOM from 'react-dom/client'
 
 import App from './App'
 import { TokenGate } from './components/auth/token-gate'
 import { Toaster } from './components/ui/sonner'
+import { ThemeProvider, useTheme } from './lib/theme'
 import './index.css'
 
+/** No richColors — toasts use the popover tokens + a colored icon, which is far
+ *  less jarring than saturated full-bleed red/green panels. */
+function ThemedToaster() {
+  const { resolved } = useTheme()
+  return <Toaster theme={resolved} position="top-right" closeButton />
+}
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <>
+  <ThemeProvider>
     <App />
     <TokenGate />
-    {/* Operator theme is dark; pin the toaster to match (no next-themes provider).
-        No richColors — toasts use the slate popover tokens + a colored icon, which
-        is far less jarring than saturated full-bleed red/green panels. */}
-    <Toaster theme="dark" position="top-right" closeButton />
-  </>
+    <ThemedToaster />
+  </ThemeProvider>
 )

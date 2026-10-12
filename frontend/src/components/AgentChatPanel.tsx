@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Sparkles, Square, Wrench } from 'lucide-react'
+import { ArrowUp, Banknote, ChevronDown, ChevronRight, Globe, LayoutGrid, PanelLeft, Sparkles, Square, Target, Wrench } from 'lucide-react'
 
 import { getChatMessages, stopChat, streamChatMessage, type StreamHandle } from '../api/client'
 import type { ChatMessage, ChatQuestionAnswers, ChatQuestionPrompt, ChatSession, ToolCallEntry } from '../types'
@@ -137,11 +137,33 @@ function ToolCallsSummary({ toolCalls, expanded, onToggle }: {
   )
 }
 
-const SUGGESTED_PROMPTS = [
-  "How's my portfolio doing?",
-  'What are my biggest positions?',
-  'Any risk concerns?',
-  'Summarise my allocation',
+// Starter prompts for an empty conversation — each one shows off a different
+// thing Archie is for: deploying cash, sizing a theme bet, reacting to macro,
+// and building a custom view.
+const STARTERS: { icon: typeof Banknote; title: string; prompt: string }[] = [
+  {
+    icon: Banknote,
+    title: 'Put my idle cash to work',
+    prompt:
+      'I have uninvested cash sitting in my accounts. Given my current allocation and risk rails, how should I deploy it? Propose specific trades with sizes and which account each belongs in.',
+  },
+  {
+    icon: Target,
+    title: 'Build me a play around…',
+    prompt:
+      'Build me a play around AI power demand: a basket of names, position sizing for my book, a staged entry plan and clear kill criteria.',
+  },
+  {
+    icon: Globe,
+    title: "React to today's macro news",
+    prompt:
+      "What's moved in macro and markets today, and what does it mean for my holdings specifically? Is there anything I should do?",
+  },
+  {
+    icon: LayoutGrid,
+    title: 'Build me a view of…',
+    prompt: 'Build me a view of my dividend income by month over the last year.',
+  },
 ]
 
 const MARKDOWN_CLASS =
@@ -223,6 +245,8 @@ interface Props {
   pendingPrompt?: string | null
   /** Called once the pendingPrompt has been applied, so the parent can clear it. */
   onPendingPromptConsumed?: () => void
+  /** Send the pendingPrompt straight away instead of only pre-filling it. */
+  pendingPromptSend?: boolean
 }
 
 export function AgentChatPanel({
@@ -237,6 +261,7 @@ export function AgentChatPanel({
   onOpenSessions,
   pendingPrompt = null,
   onPendingPromptConsumed,
+  pendingPromptSend = false,
 }: Props) {
   const sessionsRef = useRef(new Map<string, SessionState>())
   const activeStreamsRef = useRef(new Map<string, StreamHandle>())
@@ -311,6 +336,11 @@ export function AgentChatPanel({
   // Pre-fills + focuses but never auto-sends, so the prompt can be edited first.
   useEffect(() => {
     if (!pendingPrompt) return
+    if (pendingPromptSend && activeSessionId) {
+      onPendingPromptConsumed?.()
+      void submitContent(pendingPrompt)
+      return
+    }
     setInput(pendingPrompt)
     onPendingPromptConsumed?.()
     // Focus after the panel has painted (the parent switches to the chat tab in
@@ -322,6 +352,7 @@ export function AgentChatPanel({
       ta.setSelectionRange(ta.value.length, ta.value.length)
       autoResize()
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrompt, onPendingPromptConsumed, autoResize])
 
   useEffect(() => {
@@ -730,24 +761,31 @@ export function AgentChatPanel({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6"
       >
         {visibleMessages.length === 0 && !current.sending ? (
-          <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted/40 text-muted-foreground">
-              <Sparkles className="size-5" />
+          <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-8">
+            <div className="space-y-2">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <Sparkles className="size-5" />
+              </div>
+              <p className="text-2xl font-semibold tracking-tight text-foreground">What should we work on?</p>
+              <p className="text-sm text-muted-foreground">
+                Archie reads your live portfolio and the market. Anything it wants to trade comes back to you as a
+                proposal to approve.
+              </p>
             </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">Hey! I'm Archie, your portfolio copilot.</p>
-              <p className="text-xs text-muted-foreground">Ask about performance, positions, allocation or risk.</p>
-            </div>
-            <div className="flex max-w-md flex-wrap justify-center gap-2">
-              {SUGGESTED_PROMPTS.map((prompt) => (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {STARTERS.map(({ icon: Icon, title, prompt }) => (
                 <button
-                  key={prompt}
+                  key={title}
                   type="button"
                   onClick={() => onPromptChipClick(prompt)}
                   disabled={!activeSessionId}
-                  className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                  className="group flex flex-col gap-1.5 rounded-xl border border-border bg-card/40 p-4 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
                 >
-                  {prompt}
+                  <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Icon className="size-4 text-muted-foreground transition-colors group-hover:text-primary" />
+                    {title}
+                  </span>
+                  <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{prompt}</span>
                 </button>
               ))}
             </div>

@@ -130,7 +130,66 @@
     --sidebar-ring: oklch(0.685 0.072 162 / 50%);
 }
 
+/*
+ * Light theme — same hues and semantics, inverted lightness. Applied by the
+ * theme provider (`<html class="light">`) when the user picks Light, or System
+ * with a light OS preference.
+ */
+.light {
+    --background: oklch(0.985 0.002 256);
+    --foreground: oklch(0.21 0.012 256);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.21 0.012 256);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.21 0.012 256);
+
+    --primary: oklch(0.52 0.085 162);
+    --primary-foreground: oklch(0.985 0.01 162);
+
+    --secondary: oklch(0.955 0.004 256);
+    --secondary-foreground: oklch(0.21 0.012 256);
+    --muted: oklch(0.955 0.004 256);
+    --muted-foreground: oklch(0.50 0.015 256);
+    --accent: oklch(0.94 0.005 256);
+    --accent-foreground: oklch(0.21 0.012 256);
+
+    --destructive: oklch(0.56 0.19 24);
+    --destructive-foreground: oklch(0.98 0.01 24);
+
+    --border: oklch(0.21 0.012 256 / 10%);
+    --input: oklch(0.21 0.012 256 / 14%);
+    --ring: oklch(0.52 0.085 162 / 45%);
+
+    --positive: oklch(0.55 0.13 152);
+    --positive-foreground: oklch(0.98 0.02 152);
+    --negative: oklch(0.56 0.18 24);
+    --negative-foreground: oklch(0.98 0.01 24);
+    --warning: oklch(0.62 0.13 70);
+    --warning-foreground: oklch(0.98 0.02 80);
+
+    --chart-1: oklch(0.58 0.085 162);
+    --chart-2: oklch(0.58 0.09 232);
+    --chart-3: oklch(0.68 0.11 78);
+    --chart-4: oklch(0.60 0.12 18);
+    --chart-5: oklch(0.57 0.10 292);
+    --chart-6: oklch(0.62 0.08 202);
+    --chart-7: oklch(0.66 0.11 122);
+    --chart-8: oklch(0.60 0.10 44);
+
+    --sidebar: oklch(0.97 0.003 256);
+    --sidebar-foreground: oklch(0.25 0.012 256);
+    --sidebar-primary: oklch(0.52 0.085 162);
+    --sidebar-primary-foreground: oklch(0.985 0.01 162);
+    --sidebar-accent: oklch(0.925 0.005 256);
+    --sidebar-accent-foreground: oklch(0.21 0.012 256);
+    --sidebar-border: oklch(0.21 0.012 256 / 8%);
+    --sidebar-ring: oklch(0.52 0.085 162 / 45%);
+}
+
 @layer base {
+  html.light {
+    color-scheme: light;
+  }
   * {
     @apply border-border outline-ring/50;
   }

@@ -23,7 +23,12 @@ interface Props {
   hideHeader?: boolean
   privacyMode?: PrivacyMode
   onPrivacyModeChange?: (mode: PrivacyMode) => void
+  /** Render only these sections (the Settings page splits them across tabs). */
+  sections?: SettingsSection[]
 }
+
+export type SettingsSection = 'privacy' | 'broker' | 'risk' | 'credentials' | 'telegram'
+
 
 const PRIVACY_MODE_ICON: Record<PrivacyMode, typeof Eye> = {
   off: Eye,
@@ -38,7 +43,9 @@ export function SettingsPanel({
   hideHeader = false,
   privacyMode = 'off',
   onPrivacyModeChange,
+  sections,
 }: Props) {
+  const show = (key: SettingsSection) => !sections || sections.includes(key)
   const [working, setWorking] = useState(false)
   const PrivacyModeIcon = PRIVACY_MODE_ICON[privacyMode]
 
@@ -263,7 +270,7 @@ export function SettingsPanel({
       )}
 
       {/* Privacy — prominent, full width */}
-      <SectionCard title="Privacy" description="Hide sensitive figures for safer screen sharing (press P to cycle)">
+      {show('privacy') && <SectionCard title="Privacy" description="Hide sensitive figures for safer screen sharing (press P to cycle)">
         <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 bg-muted/25 px-3.5 py-3">
           <div className="flex min-w-0 gap-3">
             <PrivacyModeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -291,11 +298,11 @@ export function SettingsPanel({
           </Select>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">{privacyModeDescription(privacyMode)}</p>
-      </SectionCard>
+      </SectionCard>}
 
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className={sections ? 'space-y-5' : 'grid gap-5 sm:grid-cols-2'}>
         {/* Broker */}
-        <SectionCard title="Broker" description="Execution mode and Trading 212 environment">
+        {show('broker') && <SectionCard title="Broker" description="Execution mode and Trading 212 environment">
           <form
             className="space-y-4"
             onSubmit={(e) => {
@@ -360,10 +367,10 @@ export function SettingsPanel({
               Save broker
             </Button>
           </form>
-        </SectionCard>
+        </SectionCard>}
 
         {/* Risk Rails */}
-        <SectionCard title="Risk Rails" description="Hard limits enforced on every order">
+        {show('risk') && <SectionCard title="Risk Rails" description="Hard limits enforced on every order">
           <form
             className="space-y-4"
             onSubmit={(e) => {
@@ -413,10 +420,10 @@ export function SettingsPanel({
               Save risk
             </Button>
           </form>
-        </SectionCard>
+        </SectionCard>}
 
         {/* Invest Credentials */}
-        <SectionCard
+        {show('credentials') && <SectionCard
           title="Invest Credentials"
           description="Read key (unrestricted) + execution key (IP-restricted)"
           action={
@@ -521,10 +528,10 @@ export function SettingsPanel({
               </Button>
             </div>
           </form>
-        </SectionCard>
+        </SectionCard>}
 
         {/* Stocks ISA Credentials */}
-        <SectionCard
+        {show('credentials') && <SectionCard
           title="Stocks ISA Credentials"
           description="Read key (unrestricted) + execution key (IP-restricted)"
           action={
@@ -629,13 +636,13 @@ export function SettingsPanel({
               </Button>
             </div>
           </form>
-        </SectionCard>
+        </SectionCard>}
       </div>
 
       {/* Watchlist moved to its own view — see the Watchlist tab in the sidebar. */}
 
       {/* Telegram Ops — full width */}
-      <SectionCard
+      {show('telegram') && <SectionCard
         title="Telegram Ops"
         description="Alerts and command polling"
         action={
@@ -733,7 +740,7 @@ export function SettingsPanel({
             </Button>
           </div>
         </form>
-      </SectionCard>
+      </SectionCard>}
     </div>
   )
 }

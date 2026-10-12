@@ -145,7 +145,7 @@ export function ArtifactsWorkspace({ onError }: Props) {
     <div className="space-y-6">
       <div className={cn('grid gap-4', selectedPath && 'lg:grid-cols-2')}>
         {/* Artifact list */}
-        <SectionCard title="Artifacts" action={<div className="flex items-center gap-2">{headerActions}</div>} noPadding>
+        <SectionCard title="Reports" action={<div className="flex items-center gap-2">{headerActions}</div>} noPadding>
           <div className="border-b border-border/60 px-5 py-2.5 text-xs text-muted-foreground">
             <span className="font-mono tabular-nums text-foreground">{filteredArtifacts.length}</span>
             {typeFilter === 'all' ? ' total' : ` ${typeLabel(typeFilter)}`}
