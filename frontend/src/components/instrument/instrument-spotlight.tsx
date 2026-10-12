@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Clock, Search, Star, TrendingUp } from "lucide-react"
+import { Clock, Search, Sparkles, Star, TrendingUp, type LucideIcon } from "lucide-react"
 
 import {
   Command,
@@ -25,6 +25,17 @@ export interface RecentInstrument {
   name?: string | null
 }
 
+/** A non-instrument palette entry: navigation or an app action. */
+export interface SpotlightCommand {
+  id: string
+  label: string
+  group: "Go to" | "Actions"
+  icon: LucideIcon
+  keywords?: string
+  shortcut?: string
+  onSelect: () => void
+}
+
 const CONVICTION_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
 
 function matches(query: string, ...fields: (string | null | undefined)[]): boolean {
@@ -39,12 +50,18 @@ export function InstrumentSpotlight({
   positions,
   recent,
   onSelect,
+  commands = [],
+  onAskArchie,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   positions: PositionItem[]
   recent: RecentInstrument[]
   onSelect: (ticker: string, hint?: InstrumentHint) => void
+  /** Navigation + actions listed alongside instruments. */
+  commands?: SpotlightCommand[]
+  /** "Ask Archie: <query>" — offered whenever something is typed. */
+  onAskArchie?: (prompt: string) => void
 }) {
   const [query, setQuery] = useState("")
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
@@ -126,16 +143,63 @@ export function InstrumentSpotlight({
   // Recents surface only on an empty query — they'd be noise once you start typing.
   const recentRows = useMemo(() => (query.trim() ? [] : recent.slice(0, 6)), [recent, query])
 
-  const isEmpty =
-    holdings.length === 0 && watched.length === 0 && extraResults.length === 0 && recentRows.length === 0
+  const matchedCommands = useMemo(
+    () => commands.filter((c) => matches(query, c.label, c.keywords)),
+    [commands, query]
+  )
+  const navCommands = matchedCommands.filter((c) => c.group === "Go to")
+  const actionCommands = matchedCommands.filter((c) => c.group === "Actions")
+  const askText = query.trim()
 
-  const resetKey = `${query}:${holdings.length}:${watched.length}:${extraResults.length}:${recentRows.length}`
+  function runCommand(cmd: SpotlightCommand) {
+    onOpenChange(false)
+    cmd.onSelect()
+  }
+
+  const isEmpty =
+    holdings.length === 0 &&
+    watched.length === 0 &&
+    extraResults.length === 0 &&
+    recentRows.length === 0 &&
+    matchedCommands.length === 0 &&
+    !(onAskArchie && askText)
+
+  const resetKey = `${query}:${holdings.length}:${watched.length}:${extraResults.length}:${recentRows.length}:${matchedCommands.length}`
+
+  // Pages/actions lead on an empty query; once typing, instruments lead.
+  const commandGroups = (
+    <>
+      {navCommands.length > 0 ? (
+        <CommandGroup heading="Go to">
+          {navCommands.map((c) => (
+            <CommandItem key={c.id} value={`cmd:${c.id}`} onSelect={() => runCommand(c)}>
+              <c.icon className="size-3.5 text-muted-foreground" />
+              <span>{c.label}</span>
+              {c.shortcut ? <CommandShortcut className="ml-auto">{c.shortcut}</CommandShortcut> : null}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      ) : null}
+
+      {actionCommands.length > 0 ? (
+        <CommandGroup heading="Actions">
+          {actionCommands.map((c) => (
+            <CommandItem key={c.id} value={`cmd:${c.id}`} onSelect={() => runCommand(c)}>
+              <c.icon className="size-3.5 text-muted-foreground" />
+              <span>{c.label}</span>
+              {c.shortcut ? <CommandShortcut className="ml-auto">{c.shortcut}</CommandShortcut> : null}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      ) : null}
+    </>
+  )
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
       <Command value={query} resetKey={resetKey}>
         <CommandInput
-          placeholder="Jump to an instrument — ticker or name…"
+          placeholder={commands.length ? "Search instruments, pages and actions…" : "Jump to an instrument — ticker or name…"}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -145,6 +209,8 @@ export function InstrumentSpotlight({
               {query.trim() ? `No instruments match “${query.trim()}”.` : "Start typing a ticker or name."}
             </CommandEmpty>
           ) : null}
+
+          {!askText ? commandGroups : null}
 
           {recentRows.length > 0 ? (
             <CommandGroup heading="Recently viewed">
@@ -221,6 +287,24 @@ export function InstrumentSpotlight({
                   <Row ticker={r.display_ticker || r.ticker} name={r.name} />
                 </CommandItem>
               ))}
+            </CommandGroup>
+          ) : null}
+          {askText ? commandGroups : null}
+
+          {onAskArchie && askText ? (
+            <CommandGroup heading="Archie">
+              <CommandItem
+                value="ask-archie"
+                onSelect={() => {
+                  onOpenChange(false)
+                  onAskArchie(askText)
+                }}
+              >
+                <Sparkles className="size-3.5 text-primary" />
+                <span className="min-w-0 truncate">
+                  Ask Archie: <span className="text-muted-foreground">“{askText}”</span>
+                </span>
+              </CommandItem>
             </CommandGroup>
           ) : null}
         </CommandList>

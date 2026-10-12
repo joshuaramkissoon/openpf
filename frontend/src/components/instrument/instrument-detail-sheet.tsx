@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import dayjs from "dayjs"
-import { Loader2, MessageSquareText, Star } from "lucide-react"
+import { Loader2, MessageSquareText, Star, Telescope } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -63,6 +63,7 @@ export function InstrumentDetailSheet({
   onOpenChange,
   hint,
   onAskArchie,
+  onDeepAnalysis,
   onWatchlistChanged,
 }: {
   ticker: string | null
@@ -71,6 +72,7 @@ export function InstrumentDetailSheet({
   onOpenChange: (open: boolean) => void
   hint?: InstrumentHint | null
   onAskArchie?: (ticker: string, name?: string | null) => void
+  onDeepAnalysis?: (ticker: string, name?: string | null) => void
   onWatchlistChanged?: () => void
 }) {
   const [detail, setDetail] = useState<InstrumentDetail | null>(null)
@@ -237,6 +239,20 @@ export function InstrumentDetailSheet({
                   >
                     <MessageSquareText className="size-3.5" />
                     Ask Archie
+                  </Button>
+                ) : null}
+                {onDeepAnalysis ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    title="Archie runs a full workup: live data, fundamentals, forecast and a verdict"
+                    onClick={() => {
+                      onDeepAnalysis(displayTicker, name)
+                      onOpenChange(false)
+                    }}
+                  >
+                    <Telescope className="size-3.5" />
+                    Deep analysis
                   </Button>
                 ) : null}
               </div>
