@@ -97,12 +97,11 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
     [paper, onExecuted, reload],
   )
 
-  /** The one-tap path from Home: approve (if still proposed) then execute. */
+  /** The one-tap path from Home: execute with `approve: true` — one audited call. */
   const approveAndExecute = useCallback(
     async (intent: TradeIntent, account: ExecAccount) => {
       setWorking(intent.id)
       try {
-        if (intent.status === 'proposed') await approveIntent(intent.id)
         await executeIntent(intent.id, false, account)
         toast.success(paper ? 'Paper fill recorded' : 'Order sent to broker', {
           description: `${intent.side.toUpperCase()} ${intent.symbol} · ${accountName(account)}`,

@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
+import { LockKeyhole } from 'lucide-react'
 
 import { UNAUTHORIZED_EVENT, getApiToken, setApiToken } from '../../api/auth'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
-/** Minimal unlock prompt shown when the API answers 401 (OPENPF_API_TOKEN set). */
+/** Unlock screen shown when the API answers 401 (OPENPF_API_TOKEN set). */
 export function TokenGate() {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
@@ -19,34 +22,38 @@ export function TokenGate() {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 p-4 backdrop-blur-sm">
       <form
-        className="w-full max-w-sm space-y-3 rounded-lg border border-border bg-background p-5 shadow-xl"
+        className="w-full max-w-sm space-y-5"
         onSubmit={(e) => {
           e.preventDefault()
           setApiToken(value.trim())
           window.location.reload()
         }}
       >
-        <h2 className="text-sm font-semibold">Unlock OpenPF</h2>
-        <p className="text-xs text-muted-foreground">
-          This server requires an API token (OPENPF_API_TOKEN). It is stored in this browser only.
-        </p>
-        <input
+        <div className="space-y-3">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <LockKeyhole className="size-4" />
+          </span>
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold tracking-tight">Unlock OpenPF</h2>
+            <p className="text-sm text-muted-foreground">
+              This server needs its API token (<span className="font-mono text-xs">OPENPF_API_TOKEN</span>). It's kept in
+              this browser only.
+            </p>
+          </div>
+        </div>
+        <Input
           type="password"
           autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="API token"
-          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          aria-label="API token"
         />
-        <button
-          type="submit"
-          disabled={!value.trim()}
-          className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-        >
+        <Button type="submit" className="w-full" disabled={!value.trim()}>
           Unlock
-        </button>
+        </Button>
       </form>
     </div>
   )

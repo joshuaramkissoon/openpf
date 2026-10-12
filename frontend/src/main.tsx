@@ -1,7 +1,6 @@
 import ReactDOM from 'react-dom/client'
 
 import App from './App'
-import { TokenGate } from './components/auth/token-gate'
 import { Toaster } from './components/ui/sonner'
 import { ThemeProvider, useTheme } from './lib/theme'
 import './index.css'
@@ -16,7 +15,6 @@ function ThemedToaster() {
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <ThemeProvider>
     <App />
-    <TokenGate />
     <ThemedToaster />
   </ThemeProvider>
 )
