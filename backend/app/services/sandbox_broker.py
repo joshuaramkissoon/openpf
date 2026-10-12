@@ -137,10 +137,11 @@ def price(code: str) -> float:
 def _price_on(code: str, on: date) -> float:
     try:
         frame = _history(_ticker_for_code(code), 420)
-        idx = [d.date() if hasattr(d, "date") else d for d in frame.index]
+        dates = frame["date"] if "date" in frame.columns else frame.index
         best = None
-        for i, d in enumerate(idx):
-            if d <= on:
+        for i, d in enumerate(dates):
+            day = d.date() if hasattr(d, "date") else date.fromisoformat(str(d)[:10])
+            if day <= on:
                 best = i
         if best is not None:
             return float(frame["close"].iloc[best])
