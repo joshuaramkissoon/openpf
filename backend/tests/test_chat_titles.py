@@ -103,8 +103,14 @@ def test_retitle_noop_when_not_due_skips_model(db, monkeypatch):
     assert calls["n"] == 0  # gated out before calling the model
 
 
-def test_retitle_noop_without_api_key(db, monkeypatch):
+def test_retitle_without_api_key_uses_first_message(db, monkeypatch):
     session = _seed(db, turns=1)
     monkeypatch.setattr(cts.settings, "gemini_api_key", "")
+    before = session.title
     changed = asyncio.run(cts.maybe_retitle_session(db, session))
-    assert changed is False
+    if cts.is_placeholder_title(before or ""):
+        assert changed is True and session.title and not cts.is_placeholder_title(session.title)
+    else:
+        assert changed is False
+    # Second call is a no-op once the chat has a real title.
+    assert asyncio.run(cts.maybe_retitle_session(db, session)) is False
