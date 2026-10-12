@@ -28,8 +28,13 @@ import type { SignalGroup } from "./use-signals"
 
 dayjs.extend(relativeTime)
 
+/** The API stores naive UTC timestamps; read a zone-less ISO string as UTC. */
+function utc(iso: string) {
+  return /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`
+}
+
 export function ago(iso: string | null | undefined): string {
-  return iso ? dayjs(iso).fromNow(true) : ""
+  return iso ? dayjs(utc(iso)).fromNow(true) : ""
 }
 
 /** Plain-English check of a proposal against the configured risk rails. */
@@ -125,7 +130,7 @@ export function ProposalRow({
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-full font-mono text-[11px] tabular-nums text-muted-foreground sm:mr-auto sm:w-auto">
-          {intent.quantity > 0 ? `${+intent.quantity.toFixed(4)} sh · ` : ""}conf {formatPercent(intent.confidence, 0)} · {ago(intent.created_at)} ago
+          {intent.quantity > 0 ? `${+intent.quantity.toFixed(4)} sh · ` : ""}{intent.confidence > 0 ? `conf ${formatPercent(intent.confidence, 0)} · ` : ""}{ago(intent.created_at)} ago
         </span>
         <div className="ml-auto flex items-center gap-1.5">
           {!preset ? (
