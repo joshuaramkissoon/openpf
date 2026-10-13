@@ -245,6 +245,11 @@ def test_snapshot_rows_put_crypto_in_the_book(db, broker, monkeypatch):
     (pos,) = positions
     assert (pos.ticker, pos.instrument_code, pos.average_price) == ("BTC", "BTC/GBP", 50000.0)
     assert pos.ppl == pytest.approx(0.002 * 10000)
+    # Connecting isn't a gain: what was already on the exchange is an opening contribution.
+    from app.models.entities import CashflowEvent
+
+    (opening,) = db.query(CashflowEvent).filter(CashflowEvent.account_kind == "crypto").all()
+    assert opening.type == "DEPOSIT" and opening.amount == pytest.approx(620.0)
 
     db.add(AccountSnapshot(fetched_at=now, account_kind="invest", currency="GBP", free_cash=100, invested=900, total=1000))
     db.add_all(accounts + positions)

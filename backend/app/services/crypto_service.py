@@ -265,18 +265,38 @@ def snapshot_rows(db: Session, store: ConfigStore, fetched_at: datetime) -> tupl
     account = AccountSnapshot(fetched_at=fetched_at, account_kind=CRYPTO_ACCOUNT, currency=ccy, free_cash=cash,
                               invested=invested, pie_cash=0.0, total=invested + cash, ppl=ppl)
     global _last_cashflow_sync
-    if time.time() - _last_cashflow_sync > _CASHFLOW_INTERVAL:
-        _last_cashflow_sync = time.time()
-        try:
-            sync_cashflows(db, client)
-        except Exception:  # noqa: BLE001 — contributions are best-effort
-            logger.info("crypto cashflow sync failed", exc_info=True)
+    try:
+        first = db.execute(select(AccountSnapshot.fetched_at).where(AccountSnapshot.account_kind == CRYPTO_ACCOUNT)
+                           .order_by(AccountSnapshot.fetched_at).limit(1)).scalar_one_or_none()
+        if first is None:
+            # First time the exchange joins the book: whatever is already there
+            # arrives as an opening contribution, so the return curve doesn't
+            # read connecting an account as a gain.
+            record_opening_balance(db, account.total, ccy, fetched_at)
+        if time.time() - _last_cashflow_sync > _CASHFLOW_INTERVAL:
+            _last_cashflow_sync = time.time()
+            sync_cashflows(db, client, since=first or fetched_at)
+    except Exception:  # noqa: BLE001 — contributions are best-effort
+        logger.info("crypto cashflow sync failed", exc_info=True)
     return [account], positions, f"crypto-{'sandbox' if client.sandbox else client.exchange_id}"
 
 
-def sync_cashflows(db: Session, client: CryptoBroker) -> int:
+def record_opening_balance(db: Session, total: float, currency: str, when: datetime) -> None:
+    ref = "crypto-opening-balance"
+    if db.execute(select(CashflowEvent.id).where(CashflowEvent.account_kind == CRYPTO_ACCOUNT,
+                                                 CashflowEvent.reference == ref)).first() is not None:
+        return
+    if total > 0:
+        db.add(CashflowEvent(account_kind=CRYPTO_ACCOUNT, reference=ref, type="DEPOSIT", amount=float(total),
+                             currency=currency, occurred_at=when))
+        db.commit()
+
+
+def sync_cashflows(db: Session, client: CryptoBroker, *, since: datetime | None = None) -> int:
     """Fiat deposits/withdrawals on the exchange → CashflowEvent rows, so the
-    return curve nets out money moved onto the exchange (it isn't a gain)."""
+    return curve nets out money moved onto the exchange (it isn't a gain).
+    Only flows after ``since`` (when the exchange joined the book) count —
+    earlier money is already inside the opening balance."""
     existing = set(db.execute(select(CashflowEvent.reference).where(CashflowEvent.account_kind == CRYPTO_ACCOUNT)).scalars())
     added = 0
     for d in client.fiat_deposits():
@@ -286,6 +306,8 @@ def sync_cashflows(db: Session, client: CryptoBroker) -> int:
         try:
             when = datetime.fromisoformat(str(d["timestamp"]).replace("Z", "+00:00")).replace(tzinfo=None)
         except ValueError:
+            continue
+        if since is not None and when <= since:
             continue
         amount = abs(float(d.get("amount") or 0.0)) * (-1 if d.get("type") == "WITHDRAW" else 1)
         db.add(CashflowEvent(account_kind=CRYPTO_ACCOUNT, reference=ref, type=d.get("type") or "DEPOSIT", amount=amount,
