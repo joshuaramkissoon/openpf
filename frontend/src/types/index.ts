@@ -41,6 +41,8 @@ export interface PortfolioMetrics {
   top_position_weight: number
   estimated_beta: number
   estimated_volatility: number
+  /** Share of the book on the crypto exchange (0 when none is connected). */
+  crypto_weight?: number
 }
 
 export interface PortfolioSnapshot {
@@ -55,6 +57,8 @@ export interface RiskConfig {
   max_daily_notional: number
   max_position_weight: number
   duplicate_order_window_seconds: number
+  /** Max share of the whole book in crypto (0.05 = 5%). */
+  max_crypto_pct_of_book?: number
 }
 
 export interface BrokerConfig {
@@ -319,6 +323,24 @@ export interface TradeIntent {
   broker_order_id?: string | null
   execution_price?: number | null
   failure_reason?: string | null
+  /** Crypto proposals: exchange + cost estimates shown on the card. */
+  crypto?: CryptoEstimate | null
+}
+
+export interface CryptoEstimate {
+  exchange: string
+  label: string
+  quote: string
+  market: string
+  price: number
+  price_gbp: number
+  fee_rate: number
+  fee_source: string
+  slippage_pct: number
+  fee_gbp?: number
+  slippage_gbp?: number
+  all_in_cost_gbp?: number
+  all_in_cost_pct?: number
 }
 
 export interface ExecutionEvent {

@@ -42,6 +42,7 @@ function validateRisk(formData: FormData): AppConfig['risk'] | string {
   const daily = num('max_daily_notional')
   const weight = num('max_position_weight')
   const window = num('duplicate_order_window_seconds')
+  const cryptoPct = num('max_crypto_pct')
   if (!Number.isFinite(single) || single < 0 || single > MAX_NOTIONAL)
     return `Max single order must be a number between 0 and ${MAX_NOTIONAL.toLocaleString()}.`
   if (!Number.isFinite(daily) || daily < 0 || daily > MAX_NOTIONAL)
@@ -51,7 +52,10 @@ function validateRisk(formData: FormData): AppConfig['risk'] | string {
     return 'Max position weight is a fraction between 0 and 1 (e.g. 0.25 for 25%).'
   if (!Number.isInteger(window) || window < 15 || window > 86_400)
     return 'Duplicate window must be a whole number of seconds between 15 and 86400.'
+  if (!Number.isFinite(cryptoPct) || cryptoPct < 0 || cryptoPct > 100)
+    return 'Max crypto share is a percentage between 0 and 100 (e.g. 5).'
   return {
+    max_crypto_pct_of_book: Math.round(cryptoPct * 100) / 10_000,
     max_single_order_notional: single,
     max_daily_notional: daily,
     max_position_weight: weight,
@@ -101,6 +105,7 @@ export function SettingsPanel({
       max_daily_notional: config?.risk.max_daily_notional ?? 1500,
       max_position_weight: config?.risk.max_position_weight ?? 0.25,
       duplicate_order_window_seconds: config?.risk.duplicate_order_window_seconds ?? 90,
+      max_crypto_pct: +((config?.risk.max_crypto_pct_of_book ?? 0.05) * 100).toFixed(2),
     }),
     [config]
   )
@@ -453,6 +458,18 @@ export function SettingsPanel({
                 defaultValue={riskDefaults.duplicate_order_window_seconds}
                 className="font-mono tabular-nums"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="max_crypto_pct">Max crypto share of the book (%)</Label>
+              <Input
+                id="max_crypto_pct"
+                name="max_crypto_pct"
+                defaultValue={riskDefaults.max_crypto_pct}
+                className="font-mono tabular-nums"
+              />
+              <p className="text-xs text-muted-foreground">
+                Crypto buys that would take crypto above this share of your whole book are refused. Default 5%.
+              </p>
             </div>
             <Separator />
             <Button type="submit" size="sm" disabled={working}>

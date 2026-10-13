@@ -234,7 +234,7 @@ function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => vo
               <OverlapCallout play={play} />
             </div>
           </Block>
-          <Block title="Entry plan" description={`Max loss at a 40% drawdown: £${Math.round(play.sizing.max_loss_gbp ?? 0).toLocaleString()}`}>
+          <Block title="Entry plan" description={`Max loss at a ${Math.round(((play.sizing as { stress_drawdown?: number }).stress_drawdown ?? 0.4) * 100)}% drawdown: £${Math.round(play.sizing.max_loss_gbp ?? 0).toLocaleString()}`}>
             <TranchePlan play={play} staged={play.sizing.staged ?? []} />
           </Block>
         </div>

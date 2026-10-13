@@ -4,14 +4,15 @@ import { toast } from 'sonner'
 import { approveIntent, executeIntent, getEvents, getIntents, rejectIntent } from '@/api/client'
 import { toastApiError } from '@/lib/api-error'
 import type { AppConfig, ExecutionEvent, PositionItem, TradeIntent } from '@/types'
+import { accountLabel } from '@/utils/format'
 import type { BrokerMode } from './use-app-config'
 
-export type ExecAccount = 'invest' | 'stocks_isa'
+export type ExecAccount = 'invest' | 'stocks_isa' | 'crypto'
 
 export const PENDING_STATUSES = ['proposed', 'approved', 'executing'] as const
 
 function accountName(kind?: string | null) {
-  return kind === 'stocks_isa' ? 'Stocks ISA' : kind === 'invest' ? 'Invest' : undefined
+  return kind === 'stocks_isa' ? 'Stocks ISA' : kind === 'invest' ? 'Invest' : kind === 'crypto' ? accountLabel('crypto') : undefined
 }
 
 /**

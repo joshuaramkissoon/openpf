@@ -9,6 +9,7 @@ import { useAppActions } from '@/lib/app-actions'
 import { navigate as routerNavigate } from '@/lib/router'
 import { cn } from '@/lib/utils'
 import { getDraftJob, retryDraft, startDraft } from './api'
+import { StarterCryptoCard } from './starter-crypto'
 import type { Conviction, DraftJob, PlayAccount } from './types'
 import { Eyebrow, Segmented } from './ui'
 
@@ -176,6 +177,11 @@ export function NewPlay({ initialIdea, jobId }: { initialIdea?: string; jobId?: 
           Draft the play
           <ArrowRight className="size-4" />
         </Button>
+      </div>
+
+      <div className="space-y-3 pt-4">
+        <Eyebrow>Or start from a template</Eyebrow>
+        <StarterCryptoCard />
       </div>
     </div>
   )

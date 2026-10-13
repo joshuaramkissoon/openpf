@@ -51,9 +51,18 @@ export function formatNumber(value?: number | null, decimals = 2): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: decimals, minimumFractionDigits: 0 })
 }
 
+// The crypto account is labelled by its exchange ("Kraken"); set once the
+// connection status loads (see lib/crypto-status).
+let cryptoAccountLabel = 'Crypto'
+
+export function setCryptoAccountLabel(label: string) {
+  cryptoAccountLabel = label || 'Crypto'
+}
+
 export function accountLabel(kind: string): string {
   if (kind === 'stocks_isa') return 'Stocks ISA'
   if (kind === 'invest') return 'Invest'
+  if (kind === 'crypto') return cryptoAccountLabel
   if (kind === 'all') return 'All Accounts'
   return kind.toUpperCase()
 }
@@ -61,5 +70,13 @@ export function accountLabel(kind: string): string {
 export function accountTag(kind: string): string {
   if (kind === 'stocks_isa') return 'ISA'
   if (kind === 'invest') return 'INVEST'
+  if (kind === 'crypto') return cryptoAccountLabel.toUpperCase()
   return 'BOTH'
+}
+
+/** Coins need more decimals than shares (0.0018 BTC, not 0.00). */
+export function formatQuantity(quantity: number, accountKind?: string | null): string {
+  if (!Number.isFinite(quantity)) return '—'
+  if (accountKind === 'crypto') return (+quantity.toPrecision(4)).toLocaleString(undefined, { maximumFractionDigits: 8 })
+  return quantity.toFixed(2)
 }

@@ -7,6 +7,7 @@ import { CostsWorkspace } from "@/components/CostsWorkspace"
 import { RuntimeDiagnosticsPanel } from "@/components/RuntimeDiagnosticsPanel"
 import { SettingsPanel, type SettingsSection } from "@/components/SettingsPanel"
 import { HelpGuide } from "@/components/help/help-guide"
+import { CryptoSettings } from "./crypto"
 import { PageHeader, Section, Segmented, TabNav } from "@/components/kit"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -17,11 +18,12 @@ import { useTheme, type ThemePreference } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import type { AppConfig } from "@/types"
 
-type Tab = "general" | "broker" | "risk" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
+type Tab = "general" | "broker" | "crypto" | "risk" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
 
 const TABS: { value: Tab; label: string; description: string }[] = [
   { value: "general", label: "General", description: "Theme and privacy." },
   { value: "broker", label: "Broker & keys", description: "Execution mode, Trading 212 environment and API keys." },
+  { value: "crypto", label: "Crypto", description: "Connect a crypto exchange with a trade-only key." },
   { value: "risk", label: "Risk rails", description: "Hard limits checked on every order." },
   { value: "notifications", label: "Notifications", description: "Telegram alerts and commands." },
   { value: "usage", label: "Usage", description: "Estimated model usage on your Claude account." },
@@ -89,6 +91,7 @@ export function SettingsPage({
           </div>
 
           {tab === "general" ? <AppearanceSection /> : null}
+          {tab === "crypto" ? <CryptoSettings /> : null}
           {sections ? (
             <SettingsPanel
               config={config}
