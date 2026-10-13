@@ -57,7 +57,11 @@ def portfolio_returns(returns: pd.DataFrame, weights: Mapping[str, float]) -> pd
     if not cols:
         raise QuantDataError("none of the weighted tickers have return data")
     w = np.array([float(weights[c]) for c in cols])
-    return pd.Series(returns[cols].to_numpy() @ w, index=returns.index, name="portfolio")
+    with np.errstate(all="ignore"):  # Accelerate (macOS) raises spurious FP warnings in matmul
+        out = returns[cols].to_numpy() @ w
+    if not np.all(np.isfinite(out)):
+        raise QuantDataError("portfolio returns are not finite — check the price data")
+    return pd.Series(out, index=returns.index, name="portfolio")
 
 
 def equity_curve(returns: pd.Series, start: float = 1.0) -> pd.Series:

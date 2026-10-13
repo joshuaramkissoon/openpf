@@ -10,11 +10,11 @@ import pandas as pd
 from ._helpers import TRADING_DAYS, QuantDataError
 
 
-def annualized_volatility(returns: pd.Series) -> float:
-    """Annualized volatility (population std * sqrt(252))."""
+def annualized_volatility(returns: pd.Series, *, ddof: int = 0) -> float:
+    """Annualized volatility (std * sqrt(252); population std unless ``ddof=1``)."""
     if returns.empty:
         return 0.0
-    return float(returns.std(ddof=0) * np.sqrt(TRADING_DAYS))
+    return float(returns.std(ddof=ddof) * np.sqrt(TRADING_DAYS))
 
 
 def max_drawdown(equity_curve: pd.Series) -> float:
@@ -87,7 +87,8 @@ def tail_contributions(returns: pd.DataFrame, weights: dict[str, float], confide
     cols = [c for c in returns.columns if c in weights]
     w = np.array([weights[c] for c in cols], dtype="float64")
     x = returns[cols].to_numpy()
-    port = x @ w
+    with np.errstate(all="ignore"):  # Accelerate (macOS) raises spurious FP warnings in matmul
+        port = x @ w
     k = max(1, int(np.ceil(len(port) * (1.0 - confidence) - 1e-9)))
     worst = np.argsort(port, kind="stable")[:k]
     contrib = w * x[worst].mean(axis=0)

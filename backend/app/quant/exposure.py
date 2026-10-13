@@ -32,8 +32,11 @@ def ols_exposure(asset: pd.Series, factors: pd.DataFrame | pd.Series, *, min_obs
     y = data["__y__"].to_numpy()
     x = data.drop(columns="__y__").to_numpy()
     xd = np.column_stack([np.ones(len(x)), x])
-    coef, *_ = np.linalg.lstsq(xd, y, rcond=None)
-    resid = y - xd @ coef
+    with np.errstate(all="ignore"):  # Accelerate (macOS) raises spurious FP warnings in matmul
+        coef, *_ = np.linalg.lstsq(xd, y, rcond=None)
+        resid = y - xd @ coef
+    if not np.all(np.isfinite(resid)):
+        raise QuantDataError("factor regression produced non-finite values — check the price data")
     ss_tot = float(((y - y.mean()) ** 2).sum())
     r2 = 1.0 - float((resid**2).sum()) / ss_tot if ss_tot > 0 else 0.0
     dof = max(len(y) - xd.shape[1], 1)

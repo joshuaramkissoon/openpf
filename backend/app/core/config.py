@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # Reasoning-heavy runtimes default to Opus 4.8; routine/structured work
     # (and any task with no explicit model) falls back to claude_model.
     claude_chat_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_CHAT_MODEL")
+    # MCP tool search (Claude Code ENABLE_TOOL_SEARCH): "true" defers every MCP tool
+    # except always-load servers (quant, trading212, marketdata, proposals, plays)
+    # behind ToolSearch; "false" loads all upfront; "auto"/"auto:N" = threshold mode.
+    claude_tool_search: str = Field(default="true", alias="CLAUDE_TOOL_SEARCH")
     claude_agent_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_AGENT_MODEL")
     claude_memory_model: str = Field(default="claude-haiku-4-5", alias="CLAUDE_MEMORY_MODEL")
     claude_plays_model: str = Field(default="claude-sonnet-4-6", alias="CLAUDE_PLAYS_MODEL")

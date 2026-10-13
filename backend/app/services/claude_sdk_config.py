@@ -260,7 +260,11 @@ _QUANT_PROMPT = (
     "analysis, write and run Python scripts for data analysis, compute risk "
     "metrics and indicators, and do statistical/portfolio modelling. Work from "
     "the instruments, date ranges, and analysis goals you are given.\n\n"
-    "Tools you have: the marketdata tools (get_price_snapshot, get_price_history_rows, "
+    "Start with the quant tools — tested maths on the user's real book in GBP with their risk rails: "
+    "size_position, analyse_risk, what_if, rebalance_plan, deploy_cash, placement. Only write your own "
+    "code for analysis those don't cover, and then build on `app.quant` (covariance shrinkage, risk "
+    "contributions, HRP, drawdowns, Kelly) rather than re-deriving formulas.\n\n"
+    "Other tools: the marketdata tools (get_price_snapshot, get_price_history_rows, "
     "get_technical_snapshot, get_indicator_series, get_risk_metrics, get_correlation_matrix, "
     "compare_assets) for live data and risk/correlation; the fundamentals tools (get_fundamentals, "
     "get_valuation, get_financial_statements, get_earnings_calendar); and the Kronos forecast tool "
@@ -299,14 +303,15 @@ def build_subagents() -> dict[str, Any]:
 
     quant = AgentDefinition(
         description=(
-            "Quantitative analysis specialist. Delegate here: technical "
-            "analysis, writing and running Python scripts for data analysis, "
-            "risk calculations, statistical modelling, portfolio metrics, "
-            "indicator computation. Provide: instruments, date ranges, and what "
-            "analysis is needed."
+            "Quantitative analysis specialist for bespoke work the quant tools "
+            "don't cover: backtests, custom statistics, scripted data analysis, "
+            "multi-step studies. Don't delegate routine sizing/risk/rebalance/"
+            "what-if questions — call the quant tools yourself. Provide: "
+            "instruments, date ranges, and what analysis is needed."
         ),
         prompt=_QUANT_PROMPT,
-        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *tool_ids("marketdata", "forecast", "fundamentals")],
+        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash",
+               *tool_ids("quant", "marketdata", "forecast", "fundamentals")],
         model="claude-opus-4-8",
     )
 
