@@ -685,6 +685,11 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
     )
     sizing["budget_override"] = bool(override)
     sizing["staged"] = (play.sizing or {}).get("staged", [])
+    prior = play.sizing or {}
+    if prior.get("adopted") and not override:
+        # Adopted from holdings: the target stays at least what was adopted.
+        sizing["adopted"] = True
+        sizing["target_pct_of_book"] = max(float(prior.get("target_pct_of_book") or 0.0), sizing["target_pct_of_book"])
     if sizing["budget_gbp"] < MIN_LEG_NOTIONAL_GBP and not sizing["staged"]:
         # Already at (or past) target with what you hold — nothing to stage.
         sizing["tranches"] = []
@@ -827,9 +832,10 @@ def stage_tranche(
             reason = "already held" if leg["ticker"] in alloc and alloc[leg["ticker"]] == 0 else "below minimum order size"
             skipped.append({"ticker": leg["ticker"], "reason": reason})
             continue
+        # The play itself is carried in meta (play_id / play_title) and shown as the owner.
         rationale = (
-            f"[play] {play.title} — {tranche['label']} tranche: {leg.get('role', 'core')} leg "
-            f"({float(leg.get('target_weight') or 0):.0%} of play). {leg.get('rationale', '')}"
+            f"{tranche['label']} tranche · {leg.get('role', 'core')} leg, "
+            f"{float(leg.get('target_weight') or 0):.0%} of the play. {leg.get('rationale', '')}"
         ).strip()
         res = proposal_service.propose_trade(
             db, side="buy", account_kind=play.account_kind, rationale=rationale,

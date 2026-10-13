@@ -60,7 +60,10 @@ mcp = FastMCP(
     instructions=(
         "Plays are theme bets: a thesis turned into a sized basket with staged entry and kill criteria. "
         "When the user wants to bet on a theme, draft_play it (you choose the legs and kill rules; the app "
-        "sizes it against their book). Staging a tranche only creates proposals the user must approve."
+        "sizes it against their book). Staging a tranche only creates proposals the user must approve. "
+        "Every holding has one owner — a play, Core or Unsorted (get_book_by_play); plays also list related "
+        "holdings owned elsewhere and a bench of not-held ideas. suggest_plays groups Unsorted holdings "
+        "into suggestions the user accepts in the app; assign_owner only when the user agrees."
     ),
 )
 

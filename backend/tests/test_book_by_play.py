@@ -143,7 +143,7 @@ def test_deleting_a_play_sends_its_holdings_to_unsorted(db, monkeypatch):
     bs.assign_owner(db, "MSFT", ai.id, book=BOOK)
     monkeypatch.setattr(ps, "book_context", lambda db: BOOK)
     moved = ps.delete_play(db, ai)
-    assert moved >= 3  # NVDA, AVGO (derived) + MSFT (explicit)
+    assert moved == 3  # NVDA, AVGO (derived) + MSFT (explicit), each counted once
     book = bs.compute_book(db, book=BOOK)
     unsorted = {h["ticker"] for h in _group(book, "unsorted")["owned"]}
     assert {"NVDA", "AVGO", "MSFT"} <= unsorted  # NVDA does NOT silently jump to "Chips"
@@ -298,6 +298,9 @@ def test_accept_and_dismiss_suggestions(db, store):
     bs.accept_suggestion(db, core["id"], book=BOOK)
     book = bs.compute_book(db, book=BOOK)
     assert {h["ticker"] for h in _group(book, play)["owned"]} == {"NVDA", "AVGO"}
+    # Adopting what you hold must not instantly read as "too big" or "kill rule tripped".
+    assert _group(book, play)["target_pct"] == pytest.approx(0.30)
+    assert not [n for n in _group(book, play)["needs"] if n["kind"] in {"kill_tripped", "kill_near", "drift_over"}]
     assert {h["ticker"] for h in _group(book, "core")["owned"]} == {"MSFT", "SPY"}
     left = bs.get_suggestions(db, book=BOOK)["items"]
     assert all(i["id"] not in {ai["id"], core["id"]} for i in left)

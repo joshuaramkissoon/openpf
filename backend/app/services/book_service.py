@@ -166,7 +166,7 @@ def play_needs(play: Play, *, owned_value: float, total: float, positions: list[
     today = today or date.today()
     needs: list[dict[str, Any]] = []
     if play.status == "draft":
-        return [{"kind": "draft", "tone": "info", "text": "Draft — review and activate"}]
+        return [{"kind": "draft", "tone": "info", "text": "Draft to review"}]
     if play.status != "active":
         return []
 
@@ -184,40 +184,39 @@ def play_needs(play: Play, *, owned_value: float, total: float, positions: list[
             tripped.append(c.get("text") or st["detail"])
         elif st["state"] == "near":
             near.append(c.get("text") or st["detail"])
+    # Short, crafted phrases only — the play page carries the detail.
     verdict = (play.review or {}).get("verdict")
-    if tripped:
-        needs.append({"kind": "kill_tripped", "tone": "critical", "text": f"Kill rule tripped: {tripped[0]}"})
-    elif verdict == "broken":
-        needs.append({"kind": "kill_tripped", "tone": "critical", "text": "Last check: a kill rule tripped"})
-    if near and not tripped:
-        needs.append({"kind": "kill_near", "tone": "warn", "text": f"Kill rule near: {near[0]}"})
-    elif verdict == "watch" and not tripped and not near:
-        needs.append({"kind": "kill_near", "tone": "warn", "text": "Last check: worth a look"})
+    if tripped or verdict == "broken":
+        n = max(len(tripped), 1)
+        needs.append({"kind": "kill_tripped", "tone": "critical",
+                      "text": "A kill rule tripped" if n == 1 else f"{n} kill rules tripped"})
+    elif near or verdict == "watch":
+        needs.append({"kind": "kill_near", "tone": "warn", "text": "A kill rule is close to tripping"})
 
     sizing = play.sizing or {}
     tranches = sizing.get("tranches") or []
     staged = sizing.get("staged") or []
     nxt = _next_tranche(play, today)
-    if nxt and nxt["is_due"] and nxt["index"] > 0:
-        needs.append({"kind": "tranche_due", "tone": "warn", "text": f"{nxt['label']} tranche is due"})
+    if nxt and nxt["is_due"] and nxt["index"] > 0 and not pending:
+        needs.append({"kind": "tranche_due", "tone": "warn", "text": f"Tranche {nxt['index'] + 1} of {len(tranches)} is due"})
     elif nxt and nxt["index"] == 0 and not pending:
-        needs.append({"kind": "tranche_due", "tone": "warn", "text": "Ready to stage the starter tranche"})
+        needs.append({"kind": "tranche_due", "tone": "warn", "text": "Starter tranche ready to stage"})
 
     if pending:
         needs.append({"kind": "awaiting", "tone": "info",
-                      "text": f"{pending} proposal{'s' if pending != 1 else ''} awaiting your approval"})
+                      "text": f"{pending} order{'s' if pending != 1 else ''} to approve"})
 
     built = len(staged) >= len(tranches)
     target_pct = float(sizing.get("target_pct_of_book") or 0.0)
     if built and staged and owned_value <= 0 and not pending:
-        needs.append({"kind": "empty", "tone": "warn", "text": "Nothing held any more — close it or restage"})
+        needs.append({"kind": "empty", "tone": "warn", "text": "Nothing held any more"})
     elif built and target_pct > 0 and owned_value > 0:
         if owned_pct > target_pct * (1 + SIZE_DRIFT_BAND) and owned_pct - target_pct > 0.005:
             needs.append({"kind": "drift_over", "tone": "warn",
-                          "text": f"Above target size: {owned_pct:.0%} of book vs {target_pct:.0%}"})
+                          "text": f"Over target size ({owned_pct:.0%} vs {target_pct:.0%})"})
         elif owned_pct < target_pct * (1 - SIZE_DRIFT_BAND) and staged and not pending:
             needs.append({"kind": "drift_under", "tone": "warn",
-                          "text": f"Below target size: {owned_pct:.1%} of book vs {target_pct:.0%}"})
+                          "text": f"Under target size ({owned_pct:.1%} vs {target_pct:.0%})"})
     order = {"critical": 0, "warn": 1, "info": 2}
     return sorted(needs, key=lambda n: order.get(n["tone"], 3))
 
@@ -451,23 +450,25 @@ def assign_owner(db: Session, ticker: str, owner: str, *, account_kind: str | No
 
 def release_play(db: Session, play: Play, *, book: dict[str, Any] | None = None) -> int:
     """Send everything a play owns to Unsorted (used when it's deleted)."""
-    moved = 0
+    moved: set[tuple[str, str]] = set()
     try:
         book = book or ps.book_context(db)
+        rows = explicit_rows(db)
         for pos in owned_positions(db, play, book["positions"]):
             key = _pos_key(pos)
-            row = explicit_rows(db).get(key) or HoldingOwner(account_kind=key[0], ticker=key[1])
+            row = rows.get(key) or HoldingOwner(account_kind=key[0], ticker=key[1])
             row.owner_kind, row.play_id, row.source, row.updated_at = "unsorted", None, "system", _now()
             db.add(row)
-            moved += 1
+            moved.add(key)
     except Exception as exc:  # noqa: BLE001 — no portfolio: fall back to explicit rows only
         logger.info("release_play without a portfolio snapshot: %s", exc)
+    db.flush()
     for row in db.execute(select(HoldingOwner).where(HoldingOwner.play_id == play.id)).scalars().all():
         row.owner_kind, row.play_id, row.source, row.updated_at = "unsorted", None, "system", _now()
         db.add(row)
-        moved += 1
+        moved.add((row.account_kind, norm_ticker(row.ticker)))
     db.commit()
-    return moved
+    return len(moved)
 
 
 # ── Rings: related + bench edits ─────────────────────────────────────────────
@@ -848,6 +849,14 @@ def accept_suggestion(db: Session, sid: str, *, title: str | None = None, ticker
             if norm_ticker(p.get("ticker")) in held_value:
                 accounts[p["account_kind"]] = accounts.get(p["account_kind"], 0.0) + float(p.get("value") or 0.0)
         name = (title or item.get("title") or "Untitled play").strip()[:80]
+        total_book = float(book.get("total_gbp") or 0.0)
+        weight_now = (sum(held_value.values()) / total_book) if total_book else 0.0
+        # An adopted play describes what you already hold: its target is today's
+        # weight, and the concentration cap sits comfortably above it.
+        cap = round(max(0.25, min(0.9, weight_now * 1.25 + 0.02)), 2)
+        kills = [DEFAULT_ADOPTED_KILLS[0],
+                 {"text": f"This bet grows past {cap:.0%} of the book",
+                  "rule": {"type": "weight_above", "ticker": None, "value": cap}}]
         play = ps.create_play(db, {
             "title": name,
             "thesis": item.get("thesis") or item.get("why") or "",
@@ -855,10 +864,17 @@ def accept_suggestion(db: Session, sid: str, *, title: str | None = None, ticker
             "account_kind": max(accounts, key=accounts.get) if accounts else "stocks_isa",
             "legs": [{"ticker": t, "name": pool[t]["name"], "role": "core", "target_weight": held_value[t] / total_v,
                       "rationale": ""} for t in chosen],
-            "kill_criteria": DEFAULT_ADOPTED_KILLS,
+            "kill_criteria": kills,
             "what_would_change_my_mind": "",
             "origin": "adopted",
         }, book=book)
+        play.budget_gbp = 0.0
+        play.budget_pct_of_book = 0.0
+        step = (f"Built from holdings you already own ({weight_now:.0%} of your book), so no new money is planned. "
+                "Raise the budget to add to it in tranches.")
+        play.sizing = {**(play.sizing or {}), "budget_gbp": 0.0, "suggested_gbp": 0.0, "tranches": [], "staged": [],
+                       "allocations": [], "target_pct_of_book": round(weight_now, 4), "adopted": True,
+                       "steps": [step], "rationale": step, "warnings": []}
         ps.set_status(play, "active")
         db.add(play)
         db.commit()
