@@ -161,6 +161,8 @@ const STATUS_TONE: Record<string, string> = {
 
 function HistoryRow({ intent }: { intent: TradeIntent }) {
   const auto = (intent.approved_by ?? "").startsWith("permission:")
+  // Placed by hand from a stock sheet: no proposal, the user decided and approved it.
+  const manual = intent.approved_by === "user"
   return (
     <li className="flex items-baseline gap-3 py-2 text-sm">
       <span className="w-24 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
@@ -178,6 +180,10 @@ function HistoryRow({ intent }: { intent: TradeIntent }) {
             title="Placed under a standing permission you granted"
           >
             auto · {intent.permission_label ?? "permission"}
+          </span>
+        ) : manual ? (
+          <span className="mr-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground" title="You placed this trade yourself from the stock sheet">
+            You · manual
           </span>
         ) : null}
         {intent.failure_reason || intent.rationale}

@@ -10,6 +10,7 @@ import {
   ExternalLink,
   type LucideIcon,
   Newspaper,
+  OctagonAlert,
   ShieldAlert,
   Target,
   TriangleAlert,
@@ -66,34 +67,92 @@ export function SectionHeader({ title, icon: Icon, aside }: { title: React.React
 
 /** Bullet meter: a track to the cap, a fill for the current weight, a tick for
  *  the target, and an optional ghost for the post-trade weight. */
-export function WeightMeter({
+/**
+ * Position size against the cap, where the cap *is* the scale: full width is
+ * the cap, so 12.7% of a 25% cap fills about half. The tone shifts as it
+ * nears the cap (neutral → warning from 80% of it → critical over it), always
+ * with an icon and a word, never colour alone. A play target sits on the same
+ * scale as a marker; `next` (the trade sizer) shows the post-trade size as a
+ * lighter extension (buy) or the part that goes (sell).
+ */
+export function CapMeter({
   weight,
-  target,
   cap,
+  target,
   next,
+  className,
 }: {
   weight: number
-  target?: number | null
   cap?: number | null
+  target?: number | null
   next?: number | null
+  className?: string
 }) {
-  const max = Math.max(cap ?? 0, weight, next ?? 0, target ?? 0) * 1.08 || 0.1
-  const pct = (v: number) => `${Math.min(100, (v / max) * 100)}%`
-  const over = cap != null && Math.max(weight, next ?? 0) > cap
+  const after = next ?? weight
+  const scale = cap ?? (Math.max(weight, after, target ?? 0) * 1.25 || 0.1)
+  const at = (v: number) => Math.max(0, Math.min(1, v / scale)) * 100
+  const peak = Math.max(weight, after)
+  const pctOfCap = cap ? Math.round((peak / cap) * 100) : 0 // judged on the shown (rounded) figure, so "80%" always reads as near
+  const status = cap == null ? "none" : peak > cap ? "over" : pctOfCap >= 80 ? "near" : "ok"
+  const fill = status === "over" ? "bg-negative" : status === "near" ? "bg-warning" : "bg-chart-2"
+  const ghost = status === "over" ? "bg-negative/35" : status === "near" ? "bg-warning/35" : "bg-chart-2/35"
+  const lo = Math.min(weight, after)
+  const shown = next != null ? after : weight
   return (
-    <div className="relative h-2 w-full rounded-full bg-muted" aria-hidden>
-      {next != null && next > weight ? (
-        <div className="absolute inset-y-0 left-0 rounded-full bg-chart-2/35" style={{ width: pct(next) }} />
-      ) : null}
+    <div className={cn("flex flex-col gap-1.5", className)}>
+      <div className={cn("flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs", num)}>
+        <span>
+          <span className="font-medium text-foreground">{fmtPct(shown)}</span>
+          <span className="text-muted-foreground"> of book{next != null && Math.abs(after - weight) > 1e-6 ? ` after (now ${fmtPct(weight)})` : ""}</span>
+        </span>
+        {cap != null ? (
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            {status === "over" ? (
+              <span className="inline-flex items-center gap-1 font-medium text-negative">
+                <OctagonAlert className="size-3.5" aria-hidden />
+                Over your cap
+              </span>
+            ) : status === "near" ? (
+              <span className="inline-flex items-center gap-1 font-medium text-warning">
+                <TriangleAlert className="size-3.5" aria-hidden />
+                Near your cap
+              </span>
+            ) : null}
+            <span>
+              <span className="text-foreground">{fmtPct(shown / cap, 0)}</span> of your {fmtPct(cap, 0)} cap
+            </span>
+          </span>
+        ) : null}
+      </div>
       <div
-        className={cn("absolute inset-y-0 left-0 rounded-full", over ? "bg-negative" : "bg-chart-2")}
-        style={{ width: pct(next != null && next < weight ? next : weight) }}
-      />
-      {next != null && next < weight ? (
-        <div className="absolute inset-y-0 rounded-r-full bg-chart-2/35" style={{ left: pct(next), width: `calc(${pct(weight)} - ${pct(next)})` }} />
+        className="relative h-2.5 w-full rounded-full bg-muted"
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={scale}
+        aria-valuenow={shown}
+        aria-label={cap != null ? `Position size: ${fmtPct(shown)} of your book, ${fmtPct(shown / cap, 0)} of your ${fmtPct(cap, 0)} cap` : `Position size: ${fmtPct(shown)} of your book`}
+      >
+        <div className="absolute inset-0 overflow-hidden rounded-full">
+          <div className={cn("absolute inset-y-0 left-0 transition-[width] duration-300", fill)} style={{ width: `${at(lo)}%` }} />
+          {/* The change a trade makes: a lighter run after a 2px gap (more on a buy, the part sold on a sell). */}
+          {Math.abs(after - weight) > 1e-6 ? (
+            <div
+              className={cn("absolute inset-y-0 transition-[left,width] duration-300", ghost)}
+              style={{ left: `calc(${at(lo)}% + 2px)`, width: `max(0px, calc(${at(peak) - at(lo)}% - 2px))` }}
+            />
+          ) : null}
+        </div>
+        {target != null ? (
+          <div className="absolute -inset-y-1 w-0.5 -translate-x-1/2 rounded-full bg-foreground ring-2 ring-background" style={{ left: `${at(target)}%` }} />
+        ) : null}
+      </div>
+      {target != null ? (
+        <p className={cn("text-[11px] text-muted-foreground", num)}>
+          <i className="mr-1.5 inline-block h-2.5 w-0.5 translate-y-0.5 rounded-full bg-foreground" aria-hidden />
+          Play target {fmtPct(target)}
+          {cap != null && target > cap ? " (above your cap)" : ""}
+        </p>
       ) : null}
-      {target != null ? <div className="absolute -inset-y-1 w-0.5 rounded bg-foreground/80" style={{ left: pct(target) }} /> : null}
-      {cap != null ? <div className="absolute -inset-y-1 w-px bg-negative/70" style={{ left: pct(cap) }} /> : null}
     </div>
   )
 }

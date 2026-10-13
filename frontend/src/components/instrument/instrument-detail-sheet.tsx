@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowLeftRight, Loader2, MessageSquareText, Sparkles, Star, Telescope } from "lucide-react"
+import { ArrowLeftRight, ChevronDown, Loader2, MessageSquareText, Sparkles, Star, Telescope } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -11,7 +13,7 @@ import { toastApiError } from "@/lib/api-error"
 import { getInstrumentInsight, type InstrumentInsight, type InsightPlay } from "@/api/instruments"
 import { createWatchlistItem, deleteWatchlistItem } from "@/api/client"
 import { InsightChartView } from "./insight-chart"
-import { EventsSection, FundamentalsSection, NewsSection, RiskSection, ThesisSection, WeightMeter } from "./insight-sections"
+import { CapMeter, EventsSection, FundamentalsSection, NewsSection, RiskSection, ThesisSection } from "./insight-sections"
 import { TradeSizer } from "./trade-sizer"
 import { SmartMoneySection } from "@/features/smart-money"
 import { fmtMoney, fmtPct, fmtPrice, num } from "./insight-format"
@@ -118,6 +120,44 @@ export function InstrumentDetailSheet({
   const name = data?.name ?? hint?.name ?? null
   const display = data?.display_ticker ?? ticker ?? ""
 
+  const ask = useCallback(
+    (prompt: string) => {
+      if (onAskArchieSend) onAskArchieSend(prompt)
+      else onAskArchie?.(display, name)
+      onOpenChange(false)
+    },
+    [onAskArchieSend, onAskArchie, onOpenChange, display, name],
+  )
+
+  // Sheet shortcuts: A asks Archie, T opens the trade panel. Bare keys only, never
+  // while typing or with a menu/dialog open (the shell owns P, / and ⌘K).
+  useEffect(() => {
+    if (!open || !data) return
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return
+      if (document.querySelector('[role="menu"], [role="alertdialog"]')) return
+      const k = e.key.toLowerCase()
+      if (k === "a") {
+        e.preventDefault()
+        ask(readPrompt(data!, name))
+      } else if (k === "t") {
+        e.preventDefault()
+        setSizerOpen(true)
+        window.setTimeout(() => {
+          const input = document.getElementById("sizer-amount") as HTMLInputElement | null
+          input?.scrollIntoView({ block: "center", behavior: "smooth" })
+          input?.focus()
+          input?.select()
+        }, 60)
+      }
+    }
+    // Capture phase: the sheet's focus trap stops bubbling key events from reaching window.
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [open, data, name, ask])
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -137,18 +177,14 @@ export function InstrumentDetailSheet({
             />
 
             {data ? (
-              <div className="flex flex-col gap-7 px-5 pb-10 sm:px-7">
+              <div className="flex flex-col gap-6 px-5 pb-10 sm:px-7">
                 <ForMe data={data} />
                 <Actions
                   data={data}
                   name={name}
                   sizerOpen={sizerOpen}
                   onToggleSizer={() => setSizerOpen((v) => !v)}
-                  onAsk={(prompt) => {
-                    if (onAskArchieSend) onAskArchieSend(prompt)
-                    else onAskArchie?.(display, name)
-                    onOpenChange(false)
-                  }}
+                  onAsk={ask}
                   onDeepAnalysis={
                     onDeepAnalysis
                       ? () => {
@@ -158,7 +194,25 @@ export function InstrumentDetailSheet({
                       : undefined
                   }
                 />
-                {sizerOpen ? <TradeSizer insight={data} onDone={() => setSizerOpen(false)} /> : null}
+                {sizerOpen ? (
+                  <TradeSizer
+                    insight={data}
+                    onDone={(placed) => {
+                      setSizerOpen(false)
+                      // A placed trade changes the position, weight and cap meter: refresh them.
+                      if (placed && ticker) {
+                        window.dispatchEvent(new Event("openpf:portfolio-changed"))
+                        // Once now, and again after the portfolio refresh has landed.
+                        for (const ms of [0, 3500]) {
+                          window.setTimeout(() => {
+                            reqRef.current++
+                            void load(ticker, MAX_POLLS)
+                          }, ms)
+                        }
+                      }
+                    }}
+                  />
+                ) : null}
 
                 {data.chart ? (
                   <InsightChartView
@@ -219,11 +273,11 @@ function Hero({
   const up = (q?.change_pct ?? hint?.change_pct ?? 0) >= 0
   const watching = Boolean(data?.watchlist)
   return (
-    <header className="flex flex-col gap-3 px-5 pt-6 pb-6 sm:px-7">
+    <header className="flex flex-col gap-2.5 px-5 pt-6 pb-5 sm:px-7">
       <div className="flex items-start gap-3 pr-10">
         <div className="min-w-0 flex-1">
           <SheetTitle className="truncate text-xl font-semibold tracking-tight">{name || display}</SheetTitle>
-          <SheetDescription className="text-sm text-muted-foreground">
+          <SheetDescription className="truncate text-sm text-muted-foreground">
             {display}
             {data?.fundamentals?.industry ? ` · ${data.fundamentals.industry}` : ""}
           </SheetDescription>
@@ -245,33 +299,38 @@ function Hero({
       {error ? (
         <p className="text-sm text-muted-foreground">{error}</p>
       ) : q ? (
-        <div className="flex flex-col gap-1">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className={cn("text-4xl font-semibold tracking-tight", num)}>{fmtPrice(q.price, q.currency)}</span>
-            {q.change_pct != null ? (
-              <span className={cn("text-base font-medium", num, up ? "text-positive" : "text-negative")}>
-                {q.change != null ? `${q.change >= 0 ? "+" : "−"}${fmtPrice(Math.abs(q.change), q.currency)} ` : ""}(
-                {fmtPct(q.change_pct, 2, { signed: true })})
-                <span className="ml-1.5 font-normal text-muted-foreground">today</span>
-              </span>
-            ) : null}
-          </div>
-          {q.currency !== "GBP" && q.price_gbp != null ? (
-            <span className={cn("text-xs text-muted-foreground", num)}>
-              {fmtPrice(q.price_gbp, "GBP")} in pounds · priced in {q.currency}
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className={cn("text-[2rem] leading-none font-semibold tracking-tight", num)}>{fmtPrice(q.price, q.currency)}</span>
+          {q.change_pct != null ? (
+            <span className={cn("text-sm font-medium", num, up ? "text-positive" : "text-negative")}>
+              {fmtPct(q.change_pct, 2, { signed: true })}
+              {q.change != null ? <span className="font-normal opacity-80"> ({`${q.change >= 0 ? "+" : "−"}${fmtPrice(Math.abs(q.change), q.currency)}`})</span> : null}
+              <span className="ml-1 font-normal text-muted-foreground">today</span>
             </span>
+          ) : null}
+          {q.currency !== "GBP" && q.price_gbp != null ? (
+            // The pounds price is secondary: a quiet figure with the currency story in a tooltip.
+            <Tooltip>
+              <TooltipTrigger
+                className={cn("cursor-help text-sm text-muted-foreground underline decoration-dotted decoration-muted-foreground/40 underline-offset-4", num)}
+                aria-label={`${fmtPrice(q.price_gbp, "GBP")} in pounds; priced in ${q.currency}`}
+              >
+                ≈ {fmtPrice(q.price_gbp, "GBP")}
+              </TooltipTrigger>
+              <TooltipContent>Priced in {q.currency}. In pounds at today’s rate.</TooltipContent>
+            </Tooltip>
           ) : null}
         </div>
       ) : data && !data.pending.includes("chart") ? (
         <span className="text-sm text-muted-foreground">No live price</span>
       ) : (
-        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-9 w-48" />
       )}
 
       {data?.why_moved?.text ? (
-        <p className="flex items-start gap-2 text-sm leading-snug">
-          <Sparkles className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-          <span>{data.why_moved.text}.</span>
+        <p className="flex items-start gap-2 text-sm leading-snug text-muted-foreground">
+          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+          <span className="text-foreground/90">{data.why_moved.text}.</span>
         </p>
       ) : null}
     </header>
@@ -293,8 +352,8 @@ function ForMe({ data }: { data: InstrumentInsight }) {
   if (!pos) {
     const probe = Math.max(50, Math.round(Math.min(book?.max_order_gbp ?? 500, (book?.total_gbp ?? 0) * 0.01 || 500) / 50) * 50)
     return (
-      <div className="flex flex-col gap-2 text-sm">
-        <p className={cn("text-[15px] leading-relaxed", num)}>
+      <div className="flex flex-col gap-1 text-sm">
+        <p className={cn("leading-relaxed", num)}>
           <span className="font-medium">Not in your book</span>
           {book?.total_gbp ? (
             <span className="text-muted-foreground">
@@ -310,43 +369,22 @@ function ForMe({ data }: { data: InstrumentInsight }) {
   }
 
   const pplUp = pos.ppl_gbp >= 0
+  // One line for the money (weight lives on the meter), one for the play, then the meter.
   return (
     <div className="flex flex-col gap-3">
-      <p className={cn("text-[15px] leading-relaxed", num)}>
-        <span className={cn("font-semibold", blur)}>{fmtMoney(pos.value_gbp)}</span>
-        <span className="text-muted-foreground"> · </span>
-        <span className="font-medium">{fmtPct(pos.weight)}</span>
-        <span className="text-muted-foreground"> of your money · </span>
-        <span className={cn("font-medium", pplUp ? "text-positive" : "text-negative", blur)}>
-          {fmtMoney(pos.ppl_gbp, "GBP", { signed: true })}
-          {pos.ppl_pct != null ? ` (${fmtPct(pos.ppl_pct, 1, { signed: true })})` : ""}
-        </span>
-        <span className="text-muted-foreground"> since you bought</span>
-      </p>
-      <PlayLine owner={owner} others={others} />
-      {target != null || cap != null ? (
-        <div className="flex flex-col gap-1.5">
-          <WeightMeter weight={pos.weight} target={target} cap={cap} />
-          <div className={cn("flex flex-wrap gap-x-4 text-xs text-muted-foreground", num)}>
-            <span>
-              <span className="text-foreground">{fmtPct(pos.weight)}</span> now
-            </span>
-            {target != null ? (
-              <span>
-                <i className="mr-1 inline-block h-2.5 w-0.5 translate-y-0.5 rounded bg-foreground/80" />
-                {fmtPct(target)} play target
-              </span>
-            ) : null}
-            {cap != null ? (
-              <span>
-                <i className="mr-1 inline-block h-2.5 w-px translate-y-0.5 bg-negative/70" />
-                {fmtPct(cap, 0)} position cap
-              </span>
-            ) : null}
-            {cap != null && pos.weight > cap ? <span className="text-negative">Over your cap</span> : null}
-          </div>
-        </div>
-      ) : null}
+      <div className="flex flex-col gap-0.5">
+        <p className={cn("text-[15px] leading-relaxed", num)}>
+          <span className={cn("font-semibold", blur)}>{fmtMoney(pos.value_gbp)}</span>
+          <span className="text-muted-foreground"> held · </span>
+          <span className={cn("font-medium", pplUp ? "text-positive" : "text-negative", blur)}>
+            {fmtMoney(pos.ppl_gbp, "GBP", { signed: true })}
+            {pos.ppl_pct != null ? ` (${fmtPct(pos.ppl_pct, 1, { signed: true })})` : ""}
+          </span>
+          <span className="text-muted-foreground"> since you bought</span>
+        </p>
+        <PlayLine owner={owner} others={others} />
+      </div>
+      <CapMeter weight={pos.weight} cap={cap} target={target} />
     </div>
   )
 }
@@ -398,6 +436,24 @@ function contextLine(d: InstrumentInsight): string {
   return bits.join("; ")
 }
 
+function whoOf(data: InstrumentInsight, name: string | null) {
+  return `${data.display_ticker}${name ? ` (${name})` : ""}`
+}
+
+/** The general question Ask Archie (and its A shortcut) sends. */
+function readPrompt(data: InstrumentInsight, name: string | null) {
+  return `What's your read on ${whoOf(data, name)}? Context: ${contextLine(data)}. Anything I should act on?`
+}
+
+/** A key hint inside a button; hidden on touch screens, where there's no keyboard. */
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="ml-0.5 hidden rounded border border-current/25 px-1 font-mono text-[10px] leading-4 font-normal opacity-70 [@media(hover:hover)]:inline">
+      {children}
+    </kbd>
+  )
+}
+
 function Actions({
   data,
   name,
@@ -413,9 +469,9 @@ function Actions({
   onAsk: (prompt: string) => void
   onDeepAnalysis?: () => void
 }) {
-  const who = `${data.display_ticker}${name ? ` (${name})` : ""}`
+  const who = whoOf(data, name)
   const ctx = contextLine(data)
-  const chips: { label: string; prompt: string }[] = [
+  const prompts: { label: string; prompt: string }[] = [
     data.held
       ? { label: "Should I trim?", prompt: `Should I trim ${who}? Context: ${ctx}. Weigh concentration, risk contribution and the play's target, and give a clear answer with a size if yes.` }
       : { label: "Should I buy?", prompt: `Should I buy ${who}? Context: ${ctx}. Consider how it would fit my book (overlap, correlation, sizing) and give a clear answer with a size if yes.` },
@@ -423,34 +479,40 @@ function Actions({
     { label: "Bull vs bear case", prompt: `Give me the bull and bear case for ${who} in a few lines each. Context: ${ctx}. End with what would decide it.` },
   ]
   return (
-    <div className="flex flex-col gap-2.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => onAsk(`What's your read on ${who}? Context: ${ctx}. Anything I should act on?`)}>
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="flex">
+        <Button size="sm" className="rounded-r-none" onClick={() => onAsk(readPrompt(data, name))} title="Ask Archie (A)">
           <MessageSquareText className="size-3.5" />
           Ask Archie
+          <Kbd>A</Kbd>
         </Button>
-        <Button size="sm" variant={sizerOpen ? "secondary" : "outline"} onClick={onToggleSizer} aria-expanded={sizerOpen}>
-          <ArrowLeftRight className="size-3.5" />
-          Propose a trade
-        </Button>
-        {onDeepAnalysis ? (
-          <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={onDeepAnalysis} title="Archie runs a full workup and finishes with a verdict">
-            <Telescope className="size-3.5" />
-            Deep analysis
-          </Button>
-        ) : null}
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {chips.map((c) => (
-          <button
-            key={c.label}
-            onClick={() => onAsk(c.prompt)}
-            className="rounded-full border border-border/80 px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className="inline-flex h-7 items-center rounded-r-[min(var(--radius-md),12px)] border-l border-primary-foreground/25 bg-primary px-1.5 text-primary-foreground hover:bg-primary/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            aria-label="More questions for Archie"
           >
-            {c.label}
-          </button>
-        ))}
+            <ChevronDown className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-52">
+            {prompts.map((c) => (
+              <DropdownMenuItem key={c.label} onClick={() => onAsk(c.prompt)}>
+                {c.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+      <Button size="sm" variant={sizerOpen ? "secondary" : "outline"} onClick={onToggleSizer} aria-expanded={sizerOpen} title="Trade (T)">
+        <ArrowLeftRight className="size-3.5" />
+        Trade
+        <Kbd>T</Kbd>
+      </Button>
+      {onDeepAnalysis ? (
+        <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={onDeepAnalysis} title="Archie runs a full workup and finishes with a verdict">
+          <Telescope className="size-3.5" />
+          Deep analysis
+        </Button>
+      ) : null}
     </div>
   )
 }
