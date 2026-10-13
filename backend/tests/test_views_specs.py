@@ -59,6 +59,21 @@ def run(coro):
 
 
 # ── schema ──────────────────────────────────────────────────────────────
+def test_spec_accepts_movers_split_and_hero_breadth():
+    spec = {
+        "version": 1, "title": "Today", "data": {"pf": {"source": "portfolio"}, "hist": {"source": "history", "params": {"range": "1m"}}},
+        "blocks": [
+            {"type": "hero", "label": "Today", "from": "pf.positions", "value": {"agg": "sum", "field": "day_change"}, "format": "signedMoney",
+             "trend": {"from": "hist.points", "field": "total", "last": 14}, "breadth": {"field": "day_change"}},
+            {"type": "bars", "from": "pf.positions", "label": "ticker", "value": "day_change", "format": "signedMoney", "split": "sign", "limit": 5},
+        ],
+    }
+    out, problems = validate_spec(spec)
+    assert problems == [] and out["blocks"][1]["split"] == "sign" and out["blocks"][0]["breadth"] == {"field": "day_change"}
+    _, p = validate_spec({**spec, "blocks": [{**spec["blocks"][1], "split": "both"}]})
+    assert p
+
+
 def test_spec_validation_accepts_good_and_names_problems():
     spec, problems = validate_spec(GOOD)
     assert problems == [] and spec["blocks"][1]["colorFormat"] == "signedPct"  # defaults filled

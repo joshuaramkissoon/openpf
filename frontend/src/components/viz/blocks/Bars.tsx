@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { num } from '../engine'
@@ -43,6 +44,112 @@ export function detailRows(details: Detail[] | undefined, r: Row, fmt: ReturnTyp
 }
 
 export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
+  return block.split === 'sign' ? <SplitBars block={block} rows={rows} /> : <RankedBars block={block} rows={rows} />
+}
+
+/**
+ * Both sides of a signed value: the top `limit` up and the top `limit` down as
+ * two labelled groups on one shared scale, so a red day still shows what held
+ * up (and a green day what lagged). Side by side when there's room, stacked when not.
+ */
+function SplitBars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
+  const fmt = useFmt()
+  const blur = useBlur()
+  const env = useVizEnv()
+  const [ref, width] = useWidth<HTMLDivElement>()
+  const { tip, show, hide, hostRef } = useTooltip()
+  const n = block.limit ?? 5
+  const valued = rows.map((r) => ({ r, v: num(r[block.value]) })).filter((x): x is { r: Row; v: number } => x.v != null)
+  const ups = valued.filter((x) => x.v > 0)
+  const downs = valued.filter((x) => x.v < 0)
+  const best = [...ups].sort((a, b) => b.v - a.v).slice(0, n)
+  const worst = [...downs].sort((a, b) => a.v - b.v).slice(0, n)
+  if (!best.length && !worst.length) return <EmptyNote>{block.empty ?? 'Nothing moved yet today.'}</EmptyNote>
+  const scale = Math.max(...[...best, ...worst].map((x) => Math.abs(x.v))) || 1
+  const sideBySide = width >= 380
+  // Widgets keep the bar readable: compact amounts, and the % column only where there's room (it's in the tooltip).
+  const compact = env.size === 'S' || env.size === 'M'
+  const showSec = !compact && (!sideBySide || width >= 640)
+  const roomy = env.size === 'L' || !env.size
+  // Whole pounds read faster in a ranked list; pennies only under £10.
+  const amount = (v: number) => (money && Math.abs(v) >= 10 ? fmt(Math.round(v), block.format, compact).replace(/\.00$/, '') : fmt(v, block.format, compact))
+  // Fixed value columns: every bar track is the same width, so bars share one scale.
+  const cols = `3.25rem minmax(0,1fr) ${compact ? '4rem' : '4.75rem'}${showSec ? ' 3rem' : ''}`
+  const labelOf = (r: Row) => prettyLabel(r[block.label])
+  const money = block.format?.toLowerCase().includes('money')
+
+  const group = (kind: 'up' | 'down', items: { r: Row; v: number }[], total: number) => (
+    <section className="min-w-0" aria-label={kind === 'up' ? 'Best' : 'Worst'}>
+      <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+        {kind === 'up' ? <ArrowUp className="size-3 text-positive" aria-hidden /> : <ArrowDown className="size-3 text-negative" aria-hidden />}
+        <span className="text-foreground">{kind === 'up' ? 'Best' : 'Worst'}</span>
+        <span>
+          · {total} {kind === 'up' ? 'up' : 'down'}
+        </span>
+      </p>
+      {items.length ? (
+        <ul>
+          {items.map(({ r, v }) => {
+            const sec = block.secondary ? r[block.secondary] : null
+            const drillable = typeof r.ticker === 'string' && !r.__other
+            return (
+              <li key={labelOf(r)}>
+                <button
+                  type="button"
+                  disabled={!drillable}
+                  onClick={() => drillable && env.openTicker(String(r.ticker))}
+                  onPointerMove={(e) =>
+                    show(e, {
+                      title: String(r.name && r.name !== r[block.label] ? `${labelOf(r)} · ${r.name}` : labelOf(r)),
+                      rows: [
+                        { label: block.valueLabel || fieldLabel(block.value), value: fmt(v, block.format), color: v > 0 ? 'var(--viz-gain)' : 'var(--viz-loss)', money },
+                        ...(sec != null ? [{ label: block.secondaryLabel || fieldLabel(block.secondary!), value: fmt(sec, block.secondaryFormat) }] : []),
+                      ],
+                    })
+                  }
+                  onPointerLeave={hide}
+                  style={{ gridTemplateColumns: cols }}
+                  className={cn(
+                    'grid w-full items-center gap-2.5 rounded-md px-1 text-left',
+                    roomy ? 'py-3 text-sm' : env.size === 'S' ? 'py-0.5 text-[13px]' : 'py-[3px] text-sm',
+                    drillable && 'hover:bg-muted/50',
+                  )}
+                >
+                  <span className="truncate font-medium" title={labelOf(r)}>
+                    {labelOf(r)}
+                  </span>
+                  {/* Bars grow from a zero hairline, on one scale across both groups. */}
+                  <span className={cn('relative border-l border-[var(--viz-axis)]', roomy ? 'h-3.5' : 'h-2.5')}>
+                    <span
+                      className="absolute inset-y-0 left-0 rounded-r-[4px]"
+                      style={{ width: `${Math.max(3, (Math.abs(v) / scale) * 100)}%`, background: v > 0 ? 'var(--viz-gain)' : 'var(--viz-loss)' }}
+                    />
+                  </span>
+                  <span className={cn('whitespace-nowrap text-right tabular-nums', blur(block.format))}>{amount(v)}</span>
+                  {showSec ? <span className="text-right text-xs tabular-nums text-muted-foreground">{sec != null ? fmt(sec, block.secondaryFormat) : ''}</span> : null}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="px-1 py-1 text-xs text-muted-foreground">{kind === 'up' ? 'Nothing rose today.' : 'Nothing fell today.'}</p>
+      )}
+    </section>
+  )
+
+  return (
+    <div ref={hostRef} className="relative">
+      <div ref={ref} className={cn(sideBySide ? 'grid grid-cols-2 gap-x-6' : 'flex flex-col gap-2.5')}>
+        {group('up', best, ups.length)}
+        {group('down', worst, downs.length)}
+      </div>
+      <Tooltip tip={tip} hostWidth={width} />
+    </div>
+  )
+}
+
+function RankedBars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const fmt = useFmt()
   const blur = useBlur()
   const env = useVizEnv()

@@ -37,6 +37,9 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
   const [drill, setDrill] = useState<Slice | null>(null)
   const slices = slicesFor(block, rows, env.size === 'S' ? 4 : block.style === 'donut' ? 6 : 7)
   const legendCap = env.size === 'S' ? 3 : env.size === 'M' ? 4 : env.size === 'L' ? 6 : 99
+  const donutL = block.style === 'donut' && env.size === 'L'
+  // Values beside names only when the legend has room; the share and the tooltip carry it otherwise.
+  const showValue = !env.size || (donutL && width >= 640)
   if (!slices.length) return <EmptyNote>{block.empty ?? 'Nothing to show yet.'}</EmptyNote>
   const total = slices.reduce((a, s) => a + s.value, 0)
 
@@ -80,11 +83,11 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
   }
 
   const legend = (
-    <ul className={cn('grid gap-y-0.5', block.style === 'donut' && !env.size ? 'min-w-0 flex-1' : env.size === 'S' ? 'mt-3' : env.size ? 'mt-4 gap-x-6 sm:grid-cols-2' : 'mt-5')}>
-      {env.size ? null : (
+    <ul className={cn('grid gap-y-0.5', donutL ? 'min-w-0 flex-1 basis-44 grid-cols-[minmax(0,1fr)]' : block.style === 'donut' && !env.size ? 'min-w-0 flex-1 basis-56' : env.size === 'S' ? 'mt-3' : env.size ? 'mt-4 gap-x-6 sm:grid-cols-2' : 'mt-5')}>
+      {env.size && !donutL ? null : (
         <li className="flex items-end gap-2 px-1.5 pb-1" aria-hidden>
           <span className="flex-1" />
-          <span className="viz-colhead">Value</span>
+          {showValue ? <span className="viz-colhead">Value</span> : null}
           <span className="viz-colhead w-16 text-right">% of total</span>
         </li>
       )}
@@ -96,12 +99,12 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
               type="button"
               disabled={!drillable}
               onClick={() => open(s)}
-              className={cn('flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm', drillable && 'hover:bg-muted/60')}
+              className={cn('flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left', donutL && !showValue ? 'text-[13px]' : 'text-sm', drillable && 'hover:bg-muted/60')}
             >
               <span className="size-2.5 shrink-0 rounded-[3px]" style={{ background: s.color }} />
               <span className="min-w-0 flex-1 truncate">{s.label}</span>
-              {env.size ? null : <span className={cn('tabular-nums text-muted-foreground', blur(block.format))}>{fmt(s.value, block.format)}</span>}
-              <span className={cn('text-right font-medium tabular-nums', env.size ? 'w-12' : 'w-16')}>{fmt(s.value / total, 'pct')}</span>
+              {showValue ? <span className={cn('tabular-nums text-muted-foreground', blur(block.format))}>{fmt(s.value, block.format)}</span> : null}
+              <span className={cn('text-right font-medium tabular-nums', env.size && !showValue ? 'w-12' : 'w-16')}>{fmt(s.value / total, 'pct')}</span>
             </button>
           </li>
         )
@@ -110,43 +113,63 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
   )
 
   if (block.style === 'donut' && !(env.size === 'S' || env.size === 'M')) {
-    const size = 168
-    const r = 70
-    const stroke = 18
+    // Part-to-whole at a glance: ≤ 6 slices (the rest fold into Other), the
+    // total in the centre, a direct % on each slice big enough to hold one,
+    // and the legend beside it carrying names and values.
+    const big = env.size === 'L'
+    const r = big ? 76 : 70
+    const stroke = big ? 22 : 18
+    const pad = 40 // room for the direct % labels outside the ring
+    const size = (r + stroke / 2 + pad) * 2
+    const c = size / 2
     const circ = 2 * Math.PI * r
     const gapLen = slices.length > 1 ? 2 : 0
     let acc = 0
+    const arcs = slices.map((s) => {
+      const len = (s.value / total) * circ
+      const mid = (acc + len / 2) / circ
+      const a = { s, len, offset: acc, mid }
+      acc += len
+      return a
+    })
     return (
-      <div ref={hostRef} className="relative flex flex-wrap items-center gap-6">
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0" role="img" aria-label={block.title ?? 'Allocation'}>
-          <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
-            {slices.map((s) => {
-              const len = (s.value / total) * circ
-              const el = (
-                <circle
-                  key={s.label}
-                  cx={size / 2}
-                  cy={size / 2}
-                  r={r}
-                  fill="none"
-                  stroke={s.color}
-                  strokeWidth={stroke}
-                  strokeDasharray={`${Math.max(0, len - gapLen)} ${circ - Math.max(0, len - gapLen)}`}
-                  strokeDashoffset={-acc}
-                  className="cursor-pointer transition-opacity hover:opacity-85"
-                  onPointerMove={(e) => show(e, tipFor(s))}
-                  onPointerLeave={hide}
-                  onClick={() => open(s)}
-                />
-              )
-              acc += len
-              return el
-            })}
+      <div ref={hostRef} className={cn('relative flex flex-wrap items-center', big ? 'h-full content-center gap-x-4 gap-y-2' : 'gap-6')}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-my-4 shrink-0" role="img" aria-label={block.title ?? 'Allocation'}>
+          <g transform={`rotate(-90 ${c} ${c})`}>
+            {arcs.map(({ s, len, offset }) => (
+              <circle
+                key={s.label}
+                cx={c}
+                cy={c}
+                r={r}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={stroke}
+                strokeDasharray={`${Math.max(0, len - gapLen)} ${circ - Math.max(0, len - gapLen)}`}
+                strokeDashoffset={-offset}
+                className="cursor-pointer transition-opacity hover:opacity-85"
+                onPointerMove={(e) => show(e, tipFor(s))}
+                onPointerLeave={hide}
+                onClick={() => open(s)}
+              />
+            ))}
           </g>
-          <text x="50%" y="47%" textAnchor="middle" className={cn('fill-foreground text-[15px] font-semibold', blur(block.format))}>
+          {arcs.map(({ s, mid }) => {
+            if (s.value / total < 0.06) return null
+            const ang = mid * Math.PI * 2 - Math.PI / 2
+            const lr = r + stroke / 2 + 13
+            const x = c + Math.cos(ang) * lr
+            const y = c + Math.sin(ang) * lr
+            return (
+              <text key={s.label} x={x} y={y} dy="0.32em" textAnchor={Math.abs(Math.cos(ang)) < 0.3 ? 'middle' : Math.cos(ang) > 0 ? 'start' : 'end'} className="viz-axis-text" style={{ fill: 'var(--foreground)', fontWeight: 500 }} pointerEvents="none">
+                {fmt(s.value / total, 'pct')}
+              </text>
+            )
+          })}
+          <text x="50%" y="47%" textAnchor="middle" className={cn('fill-foreground font-semibold', big ? 'text-[17px]' : 'text-[15px]', blur(block.format))}>
             {fmt(total, 'moneyCompact')}
           </text>
-          <text x="50%" y="59%" textAnchor="middle" className="fill-muted-foreground text-[11px]">
+          <text x="50%" y="57%" textAnchor="middle" className="fill-muted-foreground text-[11px]">
             total
           </text>
         </svg>

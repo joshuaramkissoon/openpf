@@ -14,7 +14,7 @@ import { DataTable, type TableColumn } from './blocks/Table'
 import { Timeseries } from './blocks/Timeseries'
 import { Treemap } from './blocks/Treemap'
 
-type Loaded = { rows: Row[]; measures: { value: number | null; delta: number | null }[]; trend?: number[] }
+type Loaded = { rows: Row[]; measures: { value: number | null; delta: number | null }[]; trend?: number[]; breadth?: { up: number; down: number } }
 
 const SKELETON_H: Record<Block['type'], number> = {
   hero: 92,
@@ -117,14 +117,17 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
     const run = async (): Promise<Loaded> => {
       if (block.type === 'note') return { rows: [], measures: [] }
       if (block.type === 'hero') {
-        const [value, delta, trendRows, nameRows] = await Promise.all([
+        const [value, delta, trendRows, blockRows] = await Promise.all([
           resolveMeasure(spec, block.value, block.from, block.transform, ctx),
           block.delta ? resolveMeasure(spec, block.delta, block.from, block.transform, ctx) : Promise.resolve(null),
           block.trend ? resolveRows(spec, block.trend.from, undefined, ctx).catch(() => []) : Promise.resolve([] as Row[]),
-          block.name && block.from ? resolveRows(spec, block.from, block.transform, ctx).catch(() => []) : Promise.resolve([] as Row[]),
+          (block.name || block.breadth) && block.from ? resolveRows(spec, block.from, block.transform, ctx).catch(() => []) : Promise.resolve([] as Row[]),
         ])
-        const trend = block.trend ? trendRows.map((r) => num(r[block.trend!.field])).filter((v): v is number => v != null) : undefined
-        return { rows: nameRows.slice(0, 1), measures: [{ value, delta }], trend }
+        const trendAll = block.trend ? trendRows.map((r) => num(r[block.trend!.field])).filter((v): v is number => v != null) : undefined
+        const trend = trendAll && block.trend?.last ? trendAll.slice(-block.trend.last) : trendAll
+        const moves = block.breadth ? blockRows.map((r) => num(r[block.breadth!.field])).filter((v): v is number => v != null) : null
+        const breadth = moves ? { up: moves.filter((v) => v > 0).length, down: moves.filter((v) => v < 0).length } : undefined
+        return { rows: block.name ? blockRows.slice(0, 1) : [], measures: [{ value, delta }], trend, breadth }
       }
       if (block.type === 'meter') {
         const [value, max, mark] = await Promise.all([
@@ -170,6 +173,7 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
             value={data.measures[0]?.value ?? null}
             delta={data.measures[0]?.delta ?? null}
             trend={data.trend}
+            breadth={data.breadth}
             name={block.name && data.rows[0] ? prettyLabel(data.rows[0][block.name]) : undefined}
           />
         )
@@ -188,7 +192,17 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
         break
       case 'bars':
         // Widgets cap ranked (horizontal) bars; vertical bars are a time series and keep every period.
-        body = <Bars block={env.size && block.orientation !== 'vertical' ? { ...block, limit: Math.min(block.limit ?? 12, env.size === 'L' ? 8 : env.size === 'M' ? 4 : 3) } : block} rows={data.rows} />
+        // A split chart's limit is per side (best and worst), so its cap is smaller.
+        body = (
+          <Bars
+            block={
+              env.size && block.orientation !== 'vertical'
+                ? { ...block, limit: Math.min(block.limit ?? 12, block.split ? (env.size === 'L' ? 6 : env.size === 'M' ? 3 : 2) : env.size === 'L' ? 10 : env.size === 'M' ? 4 : 3) }
+                : block
+            }
+            rows={data.rows}
+          />
+        )
         break
       case 'timeseries':
         body = <Timeseries block={block} rows={data.rows} />
@@ -216,10 +230,11 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
   }
 
   const bare = block.type === 'hero' || block.type === 'kpis' || block.type === 'note' || block.type === 'meter'
-  const inner = <div className={cn('transition-opacity duration-200', loading && data && 'opacity-50')}>{body}</div>
+  // In a widget the block fills its tile, so figures can spread out (a hero's sparkline takes the rest).
+  const inner = <div className={cn('transition-opacity duration-200', env.size && 'h-full', loading && data && 'opacity-50')}>{body}</div>
   const header = !bare && (chrome || block.title || block.subtitle) ? <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} /> : null
   return (
-    <section className="group/block viz-in min-w-0">
+    <section className={cn('group/block viz-in min-w-0', env.size && 'h-full')}>
       {header}
       {inner}
     </section>

@@ -121,8 +121,9 @@ export function Treemap({ block, rows }: { block: TreemapBlock; rows: Row[] }) {
       const w = t.w - GAP
       const h = t.h - GAP
       const label = String(t.data[block.label] ?? '')
-      const showLabel = w > 34 && h > 22
-      const showSub = w > 46 && h > 40
+      // Only where the label fits inside its padding (p-2 + one line); otherwise the tooltip carries it.
+      const showLabel = w > 34 && h >= 32
+      const showSub = w > 46 && h >= 46
       const big = w > 120 && h > 80
       const ticker = typeof t.data.ticker === 'string' && !t.data.__other ? t.data.ticker : null
       return (

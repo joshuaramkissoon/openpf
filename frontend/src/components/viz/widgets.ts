@@ -31,7 +31,8 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     spec: {
       version: 1,
       title: 'Today',
-      data: pf,
+      // No intraday series exists, so the line is the book's recent path (history is daily, weekends included).
+      data: { ...pf, hist: { source: 'history', params: { range: '1m' } } },
       blocks: [
         {
           type: 'hero',
@@ -42,6 +43,9 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
           delta: { agg: 'sum', field: 'day_change', per: { from: 'pf.account', field: 'invested' } },
           deltaFormat: 'signedPct',
           deltaLabel: 'on invested',
+          caption: 'Book value, 2 weeks',
+          trend: { from: 'hist.points', field: 'total', last: 14 },
+          breadth: { field: 'day_change' },
         },
       ],
     },
@@ -80,20 +84,21 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
   },
   {
     id: 'movers',
-    title: 'Top movers',
-    description: 'Biggest contributors to today’s move',
+    title: 'Today’s movers: best and worst',
+    description: 'The holdings that added most and cost most today',
     sizes: ['S', 'M', 'L'],
     defaultSize: 'M',
     spec: {
       version: 1,
-      title: 'Top movers',
+      title: 'Today’s movers: best and worst',
       data: pf,
       blocks: [
         {
           type: 'bars',
-          title: 'Top movers',
+          title: 'Today’s movers: best and worst',
           from: 'pf.positions',
-          transform: [{ compute: { as: 'abs_move', op: 'abs', field: 'day_change' } }, { sort: { by: 'abs_move', dir: 'desc' } }, { top: { n: 8 } }],
+          split: 'sign',
+          limit: 6,
           label: 'ticker',
           value: 'day_change',
           format: 'signedMoney',
@@ -113,7 +118,8 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
       version: 1,
       title: 'Sector mix',
       data: pf,
-      blocks: [{ type: 'allocation', title: 'Sector mix', from: 'pf.positions', transform: [{ enrich: ['sector'] }, { groupBy: 'sector' }, { sort: { by: 'value' } }], label: 'sector', value: 'value' }],
+      // A bar at S/M (reads at a glance); a donut at L, where part-to-whole has room (≤ 6 slices, the rest fold into Other).
+      blocks: [{ type: 'allocation', title: 'Sector mix', from: 'pf.positions', transform: [{ enrich: ['sector'] }, { groupBy: 'sector' }, { sort: { by: 'value' } }], label: 'sector', value: 'value', style: 'donut' }],
     },
   },
   {

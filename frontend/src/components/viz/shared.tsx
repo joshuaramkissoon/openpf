@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import { privacyBlurClass, type PrivacyMode } from '@/lib/privacy'
 import { cn } from '@/lib/utils'
@@ -83,17 +83,22 @@ export function isSigned(rows: Row[], field: string) {
 }
 
 // ── layout ──────────────────────────────────────────────────────────────
+/**
+ * Measures a node's width. A callback ref, not a mount-time effect: blocks
+ * swap layouts by widget size (a sparkline at M, a full chart at L), so the
+ * measured node can appear after the first render and must be observed then.
+ */
 export function useWidth<T extends HTMLElement>() {
-  const ref = useRef<T>(null)
+  const [el, setEl] = useState<T | null>(null)
   const [width, setWidth] = useState(0)
+  const ref = useCallback((node: T | null) => setEl(node), [])
   useLayoutEffect(() => {
-    const el = ref.current
     if (!el) return
     setWidth(el.clientWidth)
     const ro = new ResizeObserver(() => setWidth(el.clientWidth))
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [el])
   return [ref, width] as const
 }
 
