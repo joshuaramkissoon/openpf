@@ -107,6 +107,7 @@ export function SettingsPage({
               onError={(m) => onError(m)}
               hideHeader
               sections={sections}
+              focus={tab === "risk" ? route.query.get("focus") : null}
               privacyMode={privacyMode}
               onPrivacyModeChange={onPrivacyModeChange}
             />

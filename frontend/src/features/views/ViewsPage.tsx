@@ -7,7 +7,6 @@ import {
   ChevronRight,
   History,
   LayoutDashboard,
-  LayoutGrid,
   LoaderCircle,
   MoreHorizontal,
   Pin,
@@ -15,12 +14,12 @@ import {
   Plus,
   RotateCcw,
   ShieldCheck,
-  Sparkles,
   Trash2,
   TriangleAlert,
   Undo2,
   X,
 } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 
 import {
   deleteView,
@@ -36,7 +35,7 @@ import {
   retryView,
   revertView,
 } from '@/api/views'
-import { addToHome } from '@/api/home'
+import { HomeToggle } from './on-home'
 import { ViewSpecRenderer, VizBlock, WIDGET_PRESETS, type VizBlockSpec } from '@/components/viz'
 import {
   AlertDialog,
@@ -149,7 +148,7 @@ function BuildPreview({ prompt, at, code }: { prompt: string; at: number; code: 
     <div className="space-y-6">
       <div className="flex items-start gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/20">
-          <Sparkles className="size-4 text-primary" />
+          <ArchieIcon className="size-4 text-primary" />
         </span>
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Building your view</h1>
@@ -307,7 +306,7 @@ function Composer({ initialPrompt, autoFocus }: { initialPrompt: string; autoFoc
             <ShieldCheck className="size-3.5" /> Read-only · can’t trade · usually ready in seconds
           </span>
           <Button type="submit" disabled={!prompt.trim() || busy}>
-            {busy ? <LoaderCircle className="animate-spin" /> : <Sparkles />} Build view
+            {busy ? <LoaderCircle className="animate-spin" /> : <ArchieIcon />} Build view
           </Button>
         </div>
       </form>
@@ -614,7 +613,7 @@ function EditComposer({
         }}
         className="flex items-start gap-2 pl-1"
       >
-        <Sparkles className="mt-2 size-4 shrink-0 text-primary" />
+        <ArchieIcon className="mt-2 size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           {target ? (
             <span className="mb-1 inline-flex max-w-full items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
@@ -935,7 +934,7 @@ function ViewDetail({ viewId }: { viewId: string }) {
         <div className="flex min-w-0 items-start gap-3">
           {isNew ? (
             <span className={cn('flex size-9 shrink-0 items-center justify-center rounded-lg', failed ? 'bg-negative/10' : 'bg-primary/10 ring-1 ring-primary/20')}>
-              {failed ? <TriangleAlert className="size-4 text-negative" /> : <Sparkles className="size-4 text-primary" />}
+              {failed ? <TriangleAlert className="size-4 text-negative" /> : <ArchieIcon className="size-4 text-primary" />}
             </span>
           ) : (
             <IconTile icon={meta.icon} />
@@ -969,22 +968,17 @@ function ViewDetail({ viewId }: { viewId: string }) {
           {!isNew && !composer ? (
             <>
             <Button variant="outline" size="sm" className="rounded-full" disabled={building} onClick={() => setComposer({ target: null })}>
-              <Sparkles className="text-primary" /> Edit
+              <ArchieIcon className="text-primary" /> Edit
               <kbd className="ml-0.5 hidden rounded border border-border px-1 font-mono text-[10px] text-muted-foreground sm:inline">E</kbd>
             </Button>
-              {doc?.kind === 'spec' && doc.spec ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Add to Home"
-                  aria-label="Add to Home"
-                  onClick={() => {
-                    const block = Math.max(0, doc.spec!.blocks.findIndex((b) => b.type !== 'note'))
-                    void addToHome({ kind: 'view', ref: meta.id, block, size: 'M' }, meta.title, navigate)
-                  }}
-                >
-                  <LayoutGrid className="text-muted-foreground" />
-                </Button>
+              {doc && meta.current_version ? (
+                <HomeToggle
+                  viewId={meta.id}
+                  starter={meta.starter}
+                  title={meta.title}
+                  block={doc.kind === 'spec' && doc.spec ? Math.max(0, doc.spec.blocks.findIndex((b) => b.type !== 'note')) : 0}
+                  navigate={navigate}
+                />
               ) : null}
             </>
           ) : null}

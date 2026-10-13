@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Loader2, MessageCircle, MoreHorizontal, Sparkles } from 'lucide-react'
+import { ArrowLeft, Loader2, MoreHorizontal } from 'lucide-react'
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { toast } from 'sonner'
 
-import { Money, PctDelta } from '@/components/kit'
+import { ArchieIcon, Money, PctDelta } from '@/components/kit'
 import { RichMarkdown } from '@/components/RichMarkdown'
 import {
   AlertDialog,
@@ -247,7 +247,7 @@ function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => vo
               Discard
             </Button>
             <Button variant="ghost" size="sm" onClick={() => askArchie(playContextPrompt(play))}>
-              <MessageCircle className="size-4" />
+              <ArchieIcon className="size-4" />
               <span className="hidden sm:inline">Discuss with Archie</span>
               <span className="sm:hidden">Discuss</span>
             </Button>
@@ -388,7 +388,7 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
               </Button>
             ) : null}
             <Button size="sm" variant="outline" onClick={() => askArchie(playContextPrompt(play))}>
-              <MessageCircle className="size-4" />
+              <ArchieIcon className="size-4" />
               <span className="hidden sm:inline">Ask Archie</span>
             </Button>
             <DropdownMenu>
@@ -400,7 +400,7 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-44">
                 <DropdownMenuItem onClick={() => void review()} disabled={reviewing}>
-                  <Sparkles className="size-4" />
+                  <ArchieIcon className="size-4" />
                   Run review
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setEditing(true)} disabled={play.status === 'closed'}>
@@ -549,7 +549,7 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
           className="lg:col-span-2"
           action={
             <Button size="sm" variant="ghost" onClick={() => void review()} disabled={reviewing}>
-              {reviewing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+              {reviewing ? <Loader2 className="size-3.5 animate-spin" /> : <ArchieIcon className="size-3.5" />}
               Run review
             </Button>
           }

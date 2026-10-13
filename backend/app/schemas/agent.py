@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -73,6 +73,11 @@ class TradeIntentItem(BaseModel):
     read_only: bool = False
     place_in: str | None = None
     account_label: str | None = None
+    # Staged for a later day's limit window: can't be placed before this (UTC) day.
+    not_before: date | None = None
+    # status "held": the part of an ask a notional limit stopped ({blocked, reason,
+    # requested_gbp, for_day}); kept with "staged": true once it's re-proposed.
+    held: dict[str, Any] | None = None
 
 
 class IntentDecisionRequest(BaseModel):

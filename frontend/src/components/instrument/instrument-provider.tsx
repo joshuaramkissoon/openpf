@@ -27,6 +27,11 @@ export function useHeldPositions(): PositionItem[] {
 }
 const EMPTY_POSITIONS: PositionItem[] = []
 
+/** ``openInstrument`` without throwing outside the provider (null there). */
+export function useOpenInstrument(): InstrumentContextValue["openInstrument"] | null {
+  return useContext(InstrumentContext)?.openInstrument ?? null
+}
+
 const RECENT_KEY = "openpf:recent-instruments"
 const RECENT_LIMIT = 8
 

@@ -82,7 +82,14 @@ export function VizBlock({ spec, pinnable = true, compact = true, size, fluid = 
     const first = s.blocks[0]
     const res = await addToHome({ kind: 'spec', spec: s, title: s.title, size: first.type === 'hero' || first.type === 'meter' ? 'S' : 'M' }, s.title, actions.navigate)
     setHoming(false)
-    if (res) setHomed(true)
+    if (res) {
+      setHomed(true)
+      // Home saved the chart as a view (so the widget links to a page): show it in Views.
+      if (res.widget.kind === 'view') {
+        setPinned(res.widget.ref)
+        window.dispatchEvent(new CustomEvent('openpf:views-changed'))
+      }
+    }
   }
 
   return (

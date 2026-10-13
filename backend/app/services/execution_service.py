@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.entities import AccountSnapshot, ExecutionEvent, PositionSnapshot, TradeIntent
@@ -43,8 +43,13 @@ def _log_event(db: Session, intent_id: str, level: str, message: str, payload: d
     db.commit()
 
 
+def utc_today() -> date:
+    """The daily caps run on UTC days (midnight UTC resets them)."""
+    return datetime.utcnow().date()
+
+
 def _daily_executed_notional(db: Session) -> float:
-    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = datetime.combine(utc_today(), time.min)
     total = db.execute(
         select(func.sum(TradeIntent.estimated_notional)).where(
             TradeIntent.status == "executed",
@@ -52,6 +57,38 @@ def _daily_executed_notional(db: Session) -> float:
         )
     ).scalar_one_or_none()
     return float(total or 0.0)
+
+
+# Proposals that still hold a claim on a day's daily notional cap.
+_OPEN_STATUSES = ("proposed", "approved", "executing")
+
+
+def daily_notional_used(
+    db: Session,
+    day: date | None = None,
+    *,
+    include_pending: bool = False,
+    exclude_intent_id: str | None = None,
+) -> float:
+    """GBP already counted against ``day``'s daily notional cap.
+
+    Today: what has been placed, plus (``include_pending``) open proposals
+    that could still be placed today. A later day: the proposals already
+    staged for it (``not_before`` that day) — nothing can be placed yet.
+    """
+    today = utc_today()
+    day = day or today
+    total = _daily_executed_notional(db) if day <= today else 0.0
+    if day > today or include_pending:
+        q = select(func.sum(TradeIntent.estimated_notional)).where(TradeIntent.status.in_(_OPEN_STATUSES))
+        if day > today:
+            q = q.where(TradeIntent.not_before == day)
+        else:
+            q = q.where(or_(TradeIntent.not_before.is_(None), TradeIntent.not_before <= today))
+        if exclude_intent_id:
+            q = q.where(TradeIntent.id != exclude_intent_id)
+        total += float(db.execute(q).scalar_one_or_none() or 0.0)
+    return total
 
 
 def _latest_account_cash(db: Session, account_kind: str | None = None) -> float | None:
@@ -124,6 +161,14 @@ def expire_stale_intents(db: Session, ttl_hours: int = _INTENT_TTL_HOURS) -> int
     # Play tranches are deliberate, staged plans — give them longer to be acted on.
     play_cutoff = datetime.utcnow() - timedelta(hours=_PLAY_INTENT_TTL_HOURS)
     stale = [i for i in stale if not _is_play_intent(i) or i.created_at < play_cutoff]
+    # A proposal staged for a later day only starts its clock on that day.
+    stale = [i for i in stale if not i.not_before or datetime.combine(i.not_before, time.min) < cutoff]
+    # Held-back asks (over a limit, kept for the user to stage or drop) go stale too.
+    stale += (
+        db.execute(select(TradeIntent).where(TradeIntent.status == "held", TradeIntent.created_at < cutoff))
+        .scalars()
+        .all()
+    )
     if not stale:
         return 0
     for intent in stale:
@@ -145,7 +190,8 @@ def supersede_open_proposals(db: Session) -> int:
     )
     # A new analyst run only replaces the previous run's batch — never a play's
     # staged tranche, which the user asked for explicitly.
-    open_proposals = [i for i in open_proposals if not _is_play_intent(i)]
+    # Nor one the user staged for a later day.
+    open_proposals = [i for i in open_proposals if not _is_play_intent(i) and not i.not_before]
     for intent in open_proposals:
         intent.status = "expired"
         if not intent.failure_reason:
@@ -183,7 +229,8 @@ def recover_stuck_executing(db: Session, older_than_minutes: int = _STUCK_EXECUT
 def list_intents(db: Session, limit: int = 100) -> list[TradeIntent]:
     expire_stale_intents(db)
     recover_stuck_executing(db)
-    q = select(TradeIntent).order_by(desc(TradeIntent.created_at)).limit(limit)
+    # Held-back asks only live on the chat card that raised them.
+    q = select(TradeIntent).where(TradeIntent.status != "held").order_by(desc(TradeIntent.created_at)).limit(limit)
     return list(db.execute(q).scalars().all())
 
 
@@ -194,7 +241,17 @@ def list_events(db: Session, limit: int = 300) -> list[ExecutionEvent]:
 
 def _status_message(intent: TradeIntent, action: str) -> str:
     reason = f" ({intent.failure_reason})" if intent.failure_reason and intent.status in {"expired", "failed"} else ""
+    if intent.status == "held":
+        return f"This order was held back by a limit, so it can't be {action} — stage it for tomorrow or change your limits."
     return f"This proposal can't be {action} — it is already {intent.status}{reason}."
+
+
+def _not_yet(intent: TradeIntent) -> str | None:
+    """Why a proposal staged for a later day can't be placed yet, else None."""
+    if intent.not_before and intent.not_before > utc_today():
+        when = "tomorrow" if intent.not_before == utc_today() + timedelta(days=1) else f"{intent.not_before:%a %-d %b}"
+        return f"This proposal is staged for {when} (that day's limits) — it can't be placed before then."
+    return None
 
 
 def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: str = "human") -> TradeIntent:
@@ -206,6 +263,8 @@ def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: 
         raise ExecutionError(f"Intent {intent_id} not found")
     if intent.status not in {"proposed", "approved"}:
         raise ExecutionError(_status_message(intent, "approved"))
+    if reason := _not_yet(intent):
+        raise ExecutionError(reason)
 
     intent.status = "approved"
     intent.approved_at = datetime.utcnow()
@@ -226,7 +285,7 @@ def reject_intent(db: Session, intent_id: str, note: str | None = None) -> Trade
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
-    if intent.status not in {"proposed", "approved"}:
+    if intent.status not in {"proposed", "approved", "held"}:
         # Rejecting an executed/executing intent would rewrite the audit trail.
         raise ExecutionError(_status_message(intent, "rejected"))
 
@@ -252,6 +311,71 @@ def _paper_fill_price(symbol: str) -> float:
         return 0.0
 
 
+# The limits the user sets so Archie's proposals stay inside them. On a trade the
+# user places by hand (``rails_mode="advisory"``) they are warnings, not refusals.
+# Everything else (duplicates, cash, selling more than held, no exchange key) stays hard.
+_ADVISORY_RAILS = (
+    "risk-guard: order exceeds max single-order notional",
+    "risk-guard: order exceeds max daily notional",
+    "crypto-guard: crypto would be",
+    "crypto-guard: no portfolio snapshot",
+)
+# A hand-placed order only needs protecting from a double click, not from the
+# user deliberately buying the same thing again a minute later.
+MANUAL_DUPLICATE_WINDOW_SECONDS = 15
+MANUAL_SOURCE = "user"
+MANUAL_ACTOR = "user"
+
+
+def _sandbox() -> bool:
+    from app.core.sandbox import is_sandbox
+
+    return is_sandbox()
+
+
+def _sandbox_top_up(db: Session, intent: TradeIntent, account_kind: str) -> None:
+    """Sandbox only: make sure the mock broker/exchange holds enough fake cash for
+    this buy, logging "demo cash added" on the intent when it had to."""
+    if intent.side != "buy":
+        return
+    need = float(intent.estimated_notional or 0.0) * 1.02  # fees + price drift since sizing
+    try:
+        if broker_router.is_crypto(account_kind):
+            from app.services import crypto_sandbox
+
+            added = crypto_sandbox.top_up(need)
+        else:
+            from app.services import sandbox_broker
+
+            added = sandbox_broker.top_up(account_kind, need)
+    except Exception:  # noqa: BLE001 — the mock tops up at fill time anyway
+        logger.warning("sandbox top-up failed for intent %s", intent.id, exc_info=True)
+        return
+    if added:
+        _log_event(db, intent.id, "info", "demo cash added", {"amount_gbp": added, "account_kind": account_kind})
+
+
+def is_advisory_rail(violation: str) -> bool:
+    return violation.startswith(_ADVISORY_RAILS)
+
+
+def split_advisory(violations: list[str]) -> tuple[list[str], list[str]]:
+    """(hard, advisory) for a trade the user places by hand."""
+    return [v for v in violations if not is_advisory_rail(v)], [v for v in violations if is_advisory_rail(v)]
+
+
+def is_manual_intent(intent: TradeIntent) -> bool:
+    """Created by the manual-trade service for the user and approved as the user.
+    Only such an intent may execute with advisory limits. Agents can't create
+    one: proposals coerce source "user" away and never set ``manual_trade``."""
+    meta = intent.meta or {}
+    return (
+        meta.get("source") == MANUAL_SOURCE
+        and meta.get("manual_trade") is True
+        and intent.approved_by == MANUAL_ACTOR
+    )
+
+
 def rail_violations(
     db: Session,
     *,
@@ -263,23 +387,33 @@ def rail_violations(
     risk: dict | None = None,
     account_kind: str | None = None,
     instrument_code: str | None = None,
+    not_before: date | None = None,
+    daily_used: float | None = None,
+    duplicate_window_seconds: int | None = None,
 ) -> list[str]:
     """Every execution rail an order of this shape would trip right now.
 
     Shared by ``execute_intent`` (which refuses on any violation) and the agent's
     ``propose_trade`` tool (which reports them up front so the agent sizes within
     the caps). Messages are stable ``<guard>: <reason>`` strings.
+
+    ``not_before``: the day the order is for. A later day's daily cap counts
+    what is already staged for that day; ``daily_used`` overrides the figure
+    (``propose_trade`` passes one that also counts today's open proposals).
     """
     risk = risk or ConfigStore(db).get_risk()
     out: list[str] = []
 
-    cutoff = datetime.utcnow() - timedelta(seconds=int(risk["duplicate_order_window_seconds"]))
+    window = int(risk["duplicate_order_window_seconds"]) if duplicate_window_seconds is None else duplicate_window_seconds
+    cutoff = datetime.utcnow() - timedelta(seconds=window)
     dup_q = select(TradeIntent.id).where(
         TradeIntent.created_at >= cutoff,
         TradeIntent.symbol == symbol,
         TradeIntent.side == side,
         TradeIntent.quantity == quantity,
         TradeIntent.status.in_(["proposed", "approved", "executed"]),
+        # The same order for another day is that day's order, not a repeat.
+        TradeIntent.not_before.is_(None) if not_before is None else TradeIntent.not_before == not_before,
     )
     if exclude_intent_id:
         dup_q = dup_q.where(TradeIntent.id != exclude_intent_id)
@@ -289,10 +423,18 @@ def rail_violations(
     if estimated_notional > float(risk["max_single_order_notional"]):
         out.append("risk-guard: order exceeds max single-order notional")
 
-    if _daily_executed_notional(db) + estimated_notional > float(risk["max_daily_notional"]):
+    if daily_used is None:
+        future = not_before is not None and not_before > utc_today()
+        daily_used = (
+            daily_notional_used(db, not_before, exclude_intent_id=exclude_intent_id)
+            if future
+            else _daily_executed_notional(db)
+        )
+    if daily_used + estimated_notional > float(risk["max_daily_notional"]):
         out.append("risk-guard: order exceeds max daily notional")
 
-    if side == "buy":
+    # A sandbox's cash is fake and tops itself up at order time (``_sandbox_top_up``).
+    if side == "buy" and not _sandbox():
         cash = _latest_account_cash(db, account_kind)
         if cash is None or estimated_notional > cash:
             out.append("risk-guard: insufficient available cash")
@@ -319,12 +461,19 @@ def execute_intent(
     account_kind: str | None = None,
     approve: bool = False,
     approved_via: str = "ui",
+    rails_mode: str = "enforce",
 ) -> TradeIntent:
     """Execute an APPROVED intent. This is the single gate for live orders.
 
     ``approve=True`` is a human-UI convenience: it approves a ``proposed``
     intent and executes it in one call, recording a human approval in the audit
     log. Agent code paths must never pass it — the agent can only propose.
+
+    ``rails_mode="advisory"``: the user's own trade from the stock sheet. The
+    notional and crypto-cap limits (which bind Archie's proposals) become
+    warnings recorded on the intent; every other check stays hard. Honoured only
+    for an intent the manual-trade service created and the user approved
+    (``is_manual_intent``); anything else is checked as usual.
     """
     intent = db.get(TradeIntent, intent_id)
     if not intent:
@@ -337,6 +486,9 @@ def execute_intent(
     refused = broker_router.refusal_for(db, intent, account_kind)
     if refused:
         raise ExecutionError(refused)
+
+    if reason := _not_yet(intent):
+        raise ExecutionError(reason)
 
     if approve and intent.status == "proposed":
         intent = approve_intent(db, intent_id, note=f"human approval via {approved_via}", actor="human")
@@ -368,6 +520,9 @@ def execute_intent(
     risk = config.get_risk()
     broker = config.get_broker()
 
+    advisory = rails_mode == "advisory" and is_manual_intent(intent)
+    if rails_mode == "advisory" and not advisory:
+        logger.warning("advisory rails refused for intent %s (not a manual trade by the user)", intent.id)
     violations = rail_violations(
         db,
         symbol=intent.symbol,
@@ -378,7 +533,12 @@ def execute_intent(
         risk=risk,
         account_kind=resolved_account,
         instrument_code=intent.instrument_code,
+        not_before=intent.not_before,
+        duplicate_window_seconds=MANUAL_DUPLICATE_WINDOW_SECONDS if advisory else None,
     )
+    rail_warnings: list[str] = []
+    if advisory:
+        violations, rail_warnings = split_advisory(violations)
     if violations:
         raise ExecutionError(violations[0])
 
@@ -393,12 +553,16 @@ def execute_intent(
         probe = build_t212_client(config, account_kind=resolved_account, purpose="execute")  # type: ignore[arg-type]
         if broker.get("t212_base_env") != "sandbox" or not is_sandbox_url(probe.base_url):
             raise ExecutionError("sandbox mode: refusing to execute against a non-sandbox broker")
+    if is_sandbox() and mode != "paper":
+        _sandbox_top_up(db, intent, resolved_account)
 
     # Atomically claim the intent (approved -> executing). Two concurrent
     # executes (double-click, UI + Telegram) both pass the checks above; only
     # the one whose UPDATE matches places the order.
     meta = dict(intent.meta or {})
     meta["account_kind"] = resolved_account
+    if rail_warnings:
+        meta["rail_warnings"] = rail_warnings
     claimed = db.execute(
         update(TradeIntent)
         .where(TradeIntent.id == intent.id, TradeIntent.status == "approved")
@@ -409,6 +573,8 @@ def execute_intent(
     db.refresh(intent)
     if not claimed:
         raise ExecutionError(_status_message(intent, "executed"))
+    if rail_warnings:
+        _log_event(db, intent.id, "warn", "placed by the user past their limits (advisory)", {"warnings": rail_warnings})
 
     try:
         if broker_router.is_crypto(resolved_account):

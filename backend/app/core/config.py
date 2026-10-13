@@ -219,6 +219,11 @@ def _sqlite_path(url: str) -> Path | None:
     return Path(url[len(prefix):]).expanduser().resolve()
 
 
+# Sandbox-only risk-rail defaults (see _apply_sandbox_isolation).
+SANDBOX_MAX_SINGLE_ORDER = 2500.0
+SANDBOX_MAX_DAILY = 7500.0
+
+
 def _apply_sandbox_isolation(settings: "Settings") -> None:
     """Sandbox runs get their own data folders and can never reuse the live
     instance's. Only the *process* env can relocate them — a live ``.env``
@@ -245,6 +250,13 @@ def _apply_sandbox_isolation(settings: "Settings") -> None:
     if not os.environ.get("AGENT_WORKSPACE"):
         settings.agent_workspace = str(Path(settings.openpf_runtime_dir) / "agent_workspace")
     os.environ.setdefault("OPENPF_SANDBOX_STATE", str(demo / "sandbox_state.json"))
+    # The demo book is ~£83k: the real-account defaults (£500 / £1,500) would make
+    # every ordinary ask trip a limit. Realistic rails for it, unless the process
+    # env sets them (only the sandbox seed changes; real accounts keep theirs).
+    if not os.environ.get("MAX_SINGLE_ORDER_NOTIONAL"):
+        settings.max_single_order_notional = SANDBOX_MAX_SINGLE_ORDER
+    if not os.environ.get("MAX_DAILY_NOTIONAL"):
+        settings.max_daily_notional = SANDBOX_MAX_DAILY
 
     backend = repo_root() / "backend"
     db_path = _sqlite_path(settings.database_url)

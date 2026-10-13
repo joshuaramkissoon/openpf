@@ -303,6 +303,8 @@ export interface TradeFees {
   commission_gbp: number
   fx_fee_rate: number
   fx_fee_gbp: number
+  /** Crypto: the exchange's taker fee. */
+  exchange_fee_gbp?: number
 }
 
 export interface TradePreview {
@@ -312,6 +314,8 @@ export interface TradePreview {
   fees?: TradeFees
   violations: string[]
   warnings: string[]
+  /** Limits this order is over. Advisory on the user's own trade: they can place it anyway. */
+  over_limits?: string[]
   error?: string
   caps?: { max_single_order_notional_gbp: number; max_daily_notional_gbp: number; executed_today_gbp: number }
 }
@@ -322,6 +326,7 @@ export interface TradeResult {
   fill_price: number | null
   broker_mode: string
   fees: TradeFees
+  rail_warnings?: string[]
 }
 
 /** Size, fees and every rail for the review step. Records nothing. */

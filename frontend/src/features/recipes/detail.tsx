@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
-  ArrowRight,
   ArrowUp,
   Check,
   ChevronRight,
@@ -13,11 +12,11 @@ import {
   Play,
   RotateCcw,
   ShieldCheck,
-  Sparkles,
   Trash2,
   Undo2,
   X,
 } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 
 import { getArtifact } from '@/api/client'
 import {
@@ -240,7 +239,7 @@ export function RecipeDetailPage({ slug }: { slug: string }) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem onClick={() => setRevising(true)}>
-                  <Sparkles /> Change with a sentence
+                  <ArchieIcon /> Change with a sentence
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setEditing(true)}>
                   <Pencil /> Edit by hand
@@ -281,7 +280,7 @@ export function RecipeDetailPage({ slug }: { slug: string }) {
               onClick={() => setRevising(true)}
               className="group inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              <Sparkles className="size-3 text-primary/80 transition-colors group-hover:text-primary" /> Change it
+              <ArchieIcon className="size-3 text-primary/80 transition-colors group-hover:text-primary" /> Change it
               <kbd className="ml-0.5 hidden rounded border border-border px-1 font-mono text-[10px] text-muted-foreground/70 sm:inline">E</kbd>
             </button>
           ) : null}
@@ -392,7 +391,7 @@ function ReviseComposer({ slug, onApplied, onClose }: { slug: string; onApplied:
         }}
         className="flex items-center gap-2 pl-1"
       >
-        {busy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-primary" /> : <Sparkles className="size-4 shrink-0 text-primary" />}
+        {busy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-primary" /> : <ArchieIcon className="size-4 shrink-0 text-primary" />}
         <input
           ref={ref}
           value={instruction}

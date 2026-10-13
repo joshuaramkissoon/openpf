@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ExternalLink, Landmark, MessageSquareText } from 'lucide-react'
+import { ExternalLink, Landmark } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 
 import { Section } from '@/components/instrument/insight-sections'
 import { Button } from '@/components/ui/button'
@@ -243,7 +244,7 @@ export function SmartMoneySection({ ticker }: { ticker: string }) {
       </p>
       <div className="flex items-center justify-between gap-3">
         <Button variant="outline" size="sm" onClick={() => askArchie(smartMoneyPrompt(data.ticker, data.line))}>
-          <MessageSquareText className="size-3.5" />
+          <ArchieIcon className="size-3.5" />
           Ask Archie what it means
         </Button>
         {data.attribution ? (

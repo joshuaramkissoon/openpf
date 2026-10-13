@@ -168,6 +168,10 @@ class TradeIntent(Base):
     broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     execution_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Not to be placed before this (UTC) day: a proposal staged for a later
+    # daily-limit window. execute_intent refuses it until then, and it counts
+    # against that day's daily notional cap, not today's.
+    not_before: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
 
 
 class ExecutionEvent(Base):

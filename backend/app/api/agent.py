@@ -190,9 +190,23 @@ def intents(
             read_only=bool((r.meta or {}).get("read_only")) if isinstance(r.meta, dict) else False,
             place_in=(r.meta or {}).get("place_in") if isinstance(r.meta, dict) else None,
             account_label=(r.meta or {}).get("account_label") if isinstance(r.meta, dict) else None,
+            not_before=r.not_before,
+            held=(r.meta or {}).get("held") if isinstance(r.meta, dict) else None,
         )
         for r in rows
     ]
+
+
+@router.post("/intents/{intent_id}/stage-tomorrow")
+def stage_tomorrow(intent_id: str, db: Session = Depends(get_db)) -> dict:
+    """Re-propose a held-back ask for tomorrow's limit window. Changes no limit;
+    the proposal still needs the user's approval, and only from tomorrow."""
+    from app.services import proposal_service
+
+    result = proposal_service.stage_held(db, intent_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "; ".join(result.get("violations") or []) or "couldn't stage it")
+    return result
 
 
 @router.post("/intents/{intent_id}/approve", response_model=IntentActionResponse)

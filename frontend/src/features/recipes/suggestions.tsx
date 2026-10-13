@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Check, ChevronRight, LoaderCircle, Sparkles, X } from 'lucide-react'
+import { Check, ChevronRight, LoaderCircle, X } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 
 import { resolveSuggestion } from '@/api/recipes'
 import { Button } from '@/components/ui/button'
@@ -25,7 +26,7 @@ export function SuggestionList({ suggestions, onResolved }: { suggestions: Recip
   return (
     <section className="space-y-2">
       <div className="flex items-center gap-2">
-        <Sparkles className="size-3.5 text-primary" />
+        <ArchieIcon className="size-3.5 text-primary" />
         <h2 className="text-sm font-semibold tracking-tight">
           Archie suggests {suggestions.length === 1 ? 'a change' : `${suggestions.length} changes`}
         </h2>

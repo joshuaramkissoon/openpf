@@ -583,17 +583,98 @@ def test_manual_trade_preview_records_nothing(sheet_client, session_factory):
         assert s.query(TradeIntent).count() == 0
 
 
-def test_manual_trade_rail_failure_is_refused_and_leaves_nothing_pending(sheet_client, session_factory):
+def _tight_limits(session_factory, single=40.0, daily=45.0):
     with session_factory() as s:
         store = ConfigStore(s)
-        store.set_risk({**store.get_risk(), "max_single_order_notional": 40.0})
+        store.set_risk({**store.get_risk(), "max_single_order_notional": single, "max_daily_notional": daily})
+
+
+def test_manual_trade_over_the_limits_is_placed_with_warnings(sheet_client, session_factory):
+    _tight_limits(session_factory)
+    preview = sheet_client.post("/api/instruments/AAPL/trade/preview", json={"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50}).json()
+    assert preview["ok"] and not preview["violations"]
+    assert any("single-order" in w for w in preview["over_limits"]) and any("daily" in w for w in preview["over_limits"])
     res = sheet_client.post(
         "/api/instruments/AAPL/trade",
         json={"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50, "user_action": _USER_ACTION},
     )
-    assert res.status_code == 400 and res.json()["detail"]["violations"]
+    assert res.status_code == 200, res.text
+    assert len(res.json()["rail_warnings"]) == 2
+    with session_factory() as s:
+        intent = s.query(TradeIntent).one()
+        assert intent.status == "executed" and intent.meta["manual_trade"] is True
+        assert len(intent.meta["rail_warnings"]) == 2
+        assert "placed by the user past their limits (advisory)" in [e.message for e in execution_service.list_events(s)]
+
+
+def test_manual_trade_hard_checks_still_refuse(sheet_client, session_factory, monkeypatch):
+    monkeypatch.setattr(execution_service, "_latest_account_cash", lambda db, account_kind: 10.0)
+    res = sheet_client.post(
+        "/api/instruments/AAPL/trade",
+        json={"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50, "user_action": _USER_ACTION},
+    )
+    assert 400 <= res.status_code < 500 and "cash" in res.text, res.text
     with session_factory() as s:
         assert s.query(TradeIntent).filter(TradeIntent.status.in_(["proposed", "approved"])).count() == 0
+
+
+def test_manual_trades_count_toward_archies_daily_limit(sheet_client, session_factory):
+    _tight_limits(session_factory, single=500.0, daily=60.0)
+    body = {"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50, "user_action": _USER_ACTION}
+    assert sheet_client.post("/api/instruments/AAPL/trade", json=body).status_code == 200
+    with session_factory() as s:
+        out = proposal_service.propose_trade(s, side="buy", account_kind="invest", symbol="AAPL", notional_gbp=20.0, rationale="x")
+        assert out["ok"] is False and any("daily notional" in v for v in out["violations"])
+
+
+def test_agent_proposal_over_the_limit_is_still_refused_even_asking_for_advisory(db, fake_market, monkeypatch):
+    store = ConfigStore(db)
+    store.set_broker({"broker_mode": "paper"})
+    store.set_risk({**store.get_risk(), "max_single_order_notional": 50.0})
+    monkeypatch.setattr(execution_service, "_latest_account_cash", lambda db, account_kind: 10_000.0)
+    intent = _intent(db, status="approved", side="buy", estimated_notional=80.0, approved_by="human",
+                     meta={"source": "chat", "account_kind": "invest"})
+    with pytest.raises(ExecutionError, match="max single-order notional"):
+        execute_intent(db, intent.id, rails_mode="advisory")
+
+
+def test_an_agent_cannot_spoof_a_user_trade(db, fake_market, monkeypatch):
+    from mcp_servers import proposals as proposals_mcp
+
+    assert proposals_mcp._source("user") == "agent" and proposals_mcp._source(" USER ") == "agent"
+    out = proposal_service.propose_trade(db, side="buy", account_kind="invest", symbol="AAPL", notional_gbp=40.0,
+                                         rationale="x", source="user")
+    assert out["ok"] and out["intent"]["source"] == "agent"
+    batch = proposal_service.propose_batch(db, [{"side": "buy", "account_kind": "invest", "symbol": "AAPL",
+                                                 "notional_gbp": 30.0, "rationale": "y"}], source="user")
+    assert batch["results"][0]["intent"]["source"] == "agent"
+    # Even approved "as the user" by some other path, it isn't a manual trade: the limits hold.
+    store = ConfigStore(db)
+    store.set_broker({"broker_mode": "paper"})
+    store.set_risk({**store.get_risk(), "max_single_order_notional": 35.0})
+    monkeypatch.setattr(execution_service, "_latest_account_cash", lambda db, account_kind: 10_000.0)
+    intent = db.get(TradeIntent, out["intent"]["id"])
+    assert not intent.meta.get("manual_trade")
+    execution_service.approve_intent(db, intent.id, actor="user")
+    with pytest.raises(ExecutionError, match="max single-order notional"):
+        execute_intent(db, intent.id, rails_mode="advisory")
+
+
+def test_the_permission_sweeper_never_gets_advisory_rails(db, monkeypatch):
+    import inspect
+
+    from app.services import permissions_service
+
+    assert "rails_mode" not in inspect.getsource(permissions_service)
+    store = ConfigStore(db)
+    store.set_broker({"broker_mode": "paper"})
+    store.set_risk({**store.get_risk(), "max_single_order_notional": 50.0})
+    # A user-looking intent approved by a permission is still not the user's own trade.
+    intent = _intent(db, status="approved", estimated_notional=80.0, approved_by="permission:p1",
+                     meta={"source": "user", "manual_trade": True, "account_kind": "invest"})
+    assert not execution_service.is_manual_intent(intent)
+    with pytest.raises(ExecutionError, match="max single-order notional"):
+        execute_intent(db, intent.id, rails_mode="advisory")
 
 
 def test_manual_trade_in_live_mode_needs_the_live_confirmation(sheet_client, session_factory, monkeypatch):

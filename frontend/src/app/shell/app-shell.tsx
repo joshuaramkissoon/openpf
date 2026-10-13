@@ -15,12 +15,12 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   Target,
   Wallet,
   Workflow,
   X,
 } from "lucide-react"
+import { ArchieIcon } from "@/components/kit"
 
 import { LeveragedWorkspace } from "@/components/LeveragedWorkspace"
 import { TokenGate } from "@/components/auth/token-gate"
@@ -209,7 +209,7 @@ function useCommands(actions: AppActions, cyclePrivacy: () => void, reload: (o?:
       onSelect: () => navigate(path),
     })
     return [
-      { id: "ask", label: "Ask Archie…", group: "Actions", icon: Sparkles, keywords: "chat question", onSelect: () => actions.askArchie("") },
+      { id: "ask", label: "Ask Archie…", group: "Actions", icon: ArchieIcon, keywords: "chat question", onSelect: () => actions.askArchie("") },
       { id: "new-play", label: "New play", group: "Actions", icon: Plus, keywords: "theme bet basket", onSelect: () => navigate("/plays?new=1") },
       { id: "new-view", label: "New view", group: "Actions", icon: LayoutGrid, keywords: "page build", onSelect: () => navigate("/views/new") },
       { id: "new-recipe", label: "New recipe", group: "Actions", icon: Workflow, keywords: "automation routine schedule skill", onSelect: () => navigate("/recipes/new") },

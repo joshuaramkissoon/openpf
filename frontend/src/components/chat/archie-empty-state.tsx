@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, CalendarClock, LayoutGrid, PieChart, Sparkles, Target, Wallet, Scale, TrendingDown, Activity } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 
 import { getSnapshot } from '@/api/client'
 import { useHeldPositions } from '@/components/instrument/instrument-provider'
@@ -131,7 +132,7 @@ export function ArchieEmptyState({
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-8 py-4">
       <div className="space-y-2">
         <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <Sparkles className="size-5" />
+          <ArchieIcon className="size-5" />
         </div>
         <p className="text-2xl font-semibold tracking-tight text-foreground">What should we work on?</p>
         <p className="max-w-[56ch] text-sm leading-relaxed text-muted-foreground">

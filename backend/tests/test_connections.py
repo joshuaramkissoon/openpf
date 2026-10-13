@@ -442,3 +442,33 @@ def test_snaptrade_v2_positions_parse_and_skip_derivatives_and_cash_equivalents(
     assert (stock.symbol, stock.quantity, stock.price, stock.currency, stock.yfinance) == ("SHOP", 3.0, 150.5, "CAD", "SHOP.TO")
     assert p({"instrument": {"kind": "option", "symbol": "AAPL 250117C00150000"}, "units": "1"}) is None
     assert p({"instrument": {"kind": "mutualfund", "symbol": "SPAXX"}, "units": "100", "cash_equivalent": True}) is None
+
+
+# ── manual trades (advisory rails) never bypass the read-only gate ───────
+
+def test_manual_trade_on_a_read_only_account_is_refused_before_advisory_rails(db, exchanges):
+    from app.services import manual_trade
+
+    crypto_service.connect(ConfigStore(db), "kraken", "READ-KRAKEN-KEY", "S", mode="read")
+    _book(db)
+    _refresh(db)
+    preview = manual_trade.preview(db, {"sym": "BTC"}, side="buy", account_kind="crypto", notional_gbp=50)
+    assert not preview["ok"] and "Place it in Kraken" in preview["error"]
+    with pytest.raises(execution_service.ExecutionError, match="Place it yourself in Kraken"):
+        manual_trade.place(db, {"sym": "BTC"}, side="buy", account_kind="crypto", notional_gbp=50)
+    assert not exchanges["kraken"].orders
+    intent = db.query(TradeIntent).one()
+    assert intent.status != "executed"
+
+
+def test_a_user_approved_manual_intent_for_ibkr_still_hits_the_read_only_gate(db, ibkr):
+    _connect_ibkr(db)
+    intent = TradeIntent(status="approved", symbol="MSFT", instrument_code="MSFT", side="buy", order_type="market",
+                         quantity=1.0, estimated_notional=300.0, approved_by=execution_service.MANUAL_ACTOR,
+                         meta={"account_kind": "ibkr:u1234567", "source": execution_service.MANUAL_SOURCE,
+                               "manual_trade": True})
+    db.add(intent)
+    db.commit()
+    assert execution_service.is_manual_intent(intent)
+    with pytest.raises(execution_service.ExecutionError, match="read-only"):
+        execution_service.execute_intent(db, intent.id, rails_mode="advisory")

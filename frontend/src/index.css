@@ -244,3 +244,24 @@
 @media (prefers-reduced-motion: reduce) {
   .ptile-bar::after { animation: none; width: 100%; opacity: 0.6; }
 }
+
+/* Proposal carousel: one row, snap, scrollbar hidden, edge fades only where there's more. */
+.pcar {
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent 100%);
+}
+.pcar::-webkit-scrollbar { display: none; }
+
+/* Settings → Risk rails: the field a "Change limits" link points at. */
+.field-spotlight {
+  border-radius: 0.75rem;
+  animation: field-spotlight 2.4s ease-out 1 forwards;
+}
+@keyframes field-spotlight {
+  0%, 35% { box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 45%, transparent); background: color-mix(in oklch, var(--primary) 7%, transparent); }
+  100% { box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--primary) 35%, transparent); background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field-spotlight { animation: none; box-shadow: 0 0 0 2px color-mix(in oklch, var(--primary) 45%, transparent); }
+}
