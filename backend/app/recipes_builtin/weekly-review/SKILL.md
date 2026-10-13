@@ -24,3 +24,4 @@ A calm, honest look back at the week and a short plan for the next. Data first, 
 - Never claim a trade happened unless it's in the order history.
 - Keep it to one screen. Tables only for genuinely tabular data.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: the week (signedPct, with a `spark` of daily values), vs the S&P 500 (signedPct), portfolio value (money), proposals (count). (In digest mode the app computes these itself.) Exact numbers only; leave a tile out rather than guess.

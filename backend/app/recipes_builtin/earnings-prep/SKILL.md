@@ -5,7 +5,7 @@ description: When a holding reports this week, prepares a short brief per name �
 Earnings are scheduled volatility. Prepare for each print rather than react to it.
 
 ## Steps
-1. The trigger context lists holdings reporting in the next 7 days. If it's missing, find them: `get_positions`, then `get_earnings` for the top 15 holdings.
+1. "Why it ran" lists holdings reporting in the next 7 days. If it's missing, find them: `get_positions`, then `get_earnings` for the top 15 holdings.
 2. For each reporting holding:
    - Date and timing (before open / after close).
    - Exposure: value, % of the book, which account.
@@ -17,10 +17,11 @@ Earnings are scheduled volatility. Prepare for each print rather than react to i
 
 ## Output
 - **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "This week: NVDA (Wed, after close) and SHEL (Thu, pre-open) — 18% of your book."
-- One compact block per name: date · exposure · usual move (±x%) · what to watch · verdict.
+- One `## TICKER` section per name with short bullets: `Exposure: …`, `Timing: …`, `Valuation: …`, `What to watch: …`, `Verdict: Hold through | Consider trimming | Opportunity` (the app turns these into holding cards).
 - If a trim is warranted you may `propose_trade` it with a rationale; otherwise just advise.
 
 ## Rules
 - Don't predict the result. Frame the risk and what would matter.
 - A few lines per name.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: names reporting (count, with `tickers`), exposure (money, sub '% of book', `bar`), next report (date, with a `timeline` of each date), gain on cost (signedPct); plus `holdings` with each name's date, timing, value, weight, gain_pct, forward_pe, verdict and 2-3 short `watch` items. (In digest mode the app computes these itself.) Exact numbers only; leave a tile out rather than guess.

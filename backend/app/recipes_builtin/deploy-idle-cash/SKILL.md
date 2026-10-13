@@ -27,3 +27,4 @@ Cash drag is a quiet cost. Check for idle cash and, if there's enough to matter,
 - Never push any single name above ~20% of the whole book.
 - If the market is in a sharp drawdown (VIX above 30 in `get_macro_snapshot`), propose smaller, staged sizes and say why.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: idle cash (money, with a `bar` of cash vs account value), the amount proposed (money), the proposals count (count). Exact numbers only; leave a tile out rather than guess.

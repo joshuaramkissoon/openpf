@@ -20,3 +20,4 @@ Each watchlist item's note is the *reason* it's being watched. That note is your
 - Don't flag routine noise. If nothing is material, flag nothing and say so.
 - A one-minute read.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: names watched (count), biggest mover (signedPct, with the ticker), reporting soon (count, with `tickers`). (In digest mode the app computes these itself.) Exact numbers only; leave a tile out rather than guess.
