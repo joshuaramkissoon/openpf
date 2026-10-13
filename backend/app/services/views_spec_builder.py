@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -32,12 +33,13 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
+from app.services import fast_llm
 from app.services.viz_spec import VizSpec, validate_spec
 from app.views_sdk import preset_specs, spec_doc
 
 logger = logging.getLogger(__name__)
 
-TOGETHER_URL = "https://api.together.xyz/v1/chat/completions"
+TOGETHER_URL = fast_llm.TOGETHER_URL
 
 
 class SpecReply(BaseModel):
@@ -127,10 +129,16 @@ def parse_reply(text: str) -> dict[str, Any]:
 
 
 # ── providers ───────────────────────────────────────────────────────────
+# Thin adapters over the shared fast_llm module (one HTTP call each, usage
+# recorded under the "view_spec" job).
 def together_key() -> str:
-    from app.services.intel_service import _key
+    return fast_llm.together_key()
 
-    return _key("TOGETHER_API_KEY", "together_api_key")
+
+def _record(provider: str, model: str, usage: "fast_llm.Usage", started: float) -> None:
+    res = fast_llm.LLMResult(data={}, provider=provider, model=model, duration_ms=int((time.monotonic() - started) * 1000),
+                             usage=usage, cost_usd=fast_llm.cost_of(provider, model, usage))
+    fast_llm._record("view_spec", "views", res)
 
 
 class TogetherProvider:
@@ -140,78 +148,55 @@ class TogetherProvider:
         self.key, self.model, self.timeout = key, model, timeout
 
     async def complete(self, messages: list[dict[str, str]], schema: dict[str, Any]) -> str:
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.2,
-            "max_tokens": 4000,
-            "response_format": {"type": "json_schema", "json_schema": {"name": "viz_spec_reply", "schema": schema}},
-        }
-        headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(TOGETHER_URL, json=body, headers=headers)
-            if resp.status_code == 400 and "schema" in resp.text.lower():
-                # Schema feature unsupported for this model → plain JSON mode.
-                body["response_format"] = {"type": "json_object"}
-                resp = await client.post(TOGETHER_URL, json=body, headers=headers)
-        if resp.status_code in (401, 403):
-            raise ProviderUnavailable(f"Together rejected the API key (HTTP {resp.status_code})")
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Together HTTP {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()
-        return str(((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        started = time.monotonic()
+        try:
+            text, usage = await fast_llm.together_chat(messages, schema=schema, model=self.model, timeout=self.timeout,
+                                                       name="viz_spec_reply", key=self.key)
+        except fast_llm.ProviderUnavailable as exc:
+            raise ProviderUnavailable(str(exc)) from exc
+        _record(self.name, self.model, usage, started)
+        return text
 
 
 class ClaudeProvider:
+    """Claude Haiku: the Messages API when ANTHROPIC_API_KEY is set (no CLI),
+    else the Agent SDK (slower cold start)."""
+
     name = "anthropic"
 
     def __init__(self, model: str, timeout: float):
         self.model, self.timeout = model, timeout
 
     async def complete(self, messages: list[dict[str, str]], schema: dict[str, Any]) -> str:
+        provider = "anthropic" if fast_llm.available("anthropic") else "claude_sdk"
+        started = time.monotonic()
         try:
-            from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
-
-            from app.services.claude_sdk_config import configure_sdk_auth
-        except ImportError as exc:  # pragma: no cover
-            raise ProviderUnavailable("Claude Agent SDK not installed") from exc
-        configure_sdk_auth()
-        system = next((m["content"] for m in messages if m["role"] == "system"), "")
-        convo = "\n\n".join(f"{m['role'].upper()}:\n{m['content']}" for m in messages if m["role"] != "system")
-        options = ClaudeAgentOptions(
-            system_prompt=system + "\n\nReturn only the JSON object, no prose, no code fences.",
-            model=self.model,
-            tools=[],
-            allowed_tools=[],
-            setting_sources=[],
-            max_turns=1,
-        )
-        out: list[str] = []
-        async for msg in query(prompt=convo, options=options):
-            if isinstance(msg, AssistantMessage):
-                out.extend(b.text for b in msg.content if isinstance(b, TextBlock))
-            elif isinstance(msg, ResultMessage) and getattr(msg, "is_error", False):
-                raise RuntimeError(str(getattr(msg, "result", "") or "Claude error"))
-        return "".join(out)
+            text, usage, _ = await fast_llm.chat(provider, messages, schema=schema, model=self.model, timeout=self.timeout)
+        except fast_llm.ProviderUnavailable as exc:
+            raise ProviderUnavailable(str(exc)) from exc
+        _record(provider, self.model, usage, started)
+        return text
 
 
 def claude_available() -> bool:
-    import os
-    import shutil
-
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or shutil.which("claude"))
+    return fast_llm.available("anthropic") or fast_llm.claude_sdk_available()
 
 
 def providers() -> list[Provider]:
-    """Configured providers, preferred first."""
+    """Configured providers, preferred first (Settings → Models, then VIEWS_SPEC_PROVIDER)."""
+    from app.services import model_routing
+
     s = get_settings()
-    out: list[Provider] = []
+    r = model_routing.route("view_spec")
     key = together_key()
-    together = TogetherProvider(key, s.views_spec_model, s.views_spec_timeout_s) if key else None
-    claude = ClaudeProvider(s.views_spec_claude_model, s.views_spec_timeout_s) if claude_available() else None
-    order = [claude, together] if s.views_spec_provider.lower() == "anthropic" else [together, claude]
-    out = [p for p in order if p is not None]
-    return out
+    together_model = r["model"] if r["provider"] == "together" else s.views_spec_model
+    claude_model = r["model"] if r["provider"] in ("anthropic", "claude_sdk") else s.views_spec_claude_model
+    timeout = s.views_spec_timeout_s
+    together = TogetherProvider(key, together_model, timeout) if key else None
+    claude = ClaudeProvider(claude_model, timeout) if claude_available() else None
+    prefer_claude = r["provider"] in ("anthropic", "claude_sdk") or s.views_spec_provider.lower() == "anthropic"
+    order = [claude, together] if prefer_claude else [together, claude]
+    return [p for p in order if p is not None]
 
 
 # ── build ───────────────────────────────────────────────────────────────
