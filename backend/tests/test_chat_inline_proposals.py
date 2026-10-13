@@ -108,3 +108,14 @@ def test_ids_from_stage_play_tranche():
     assert proposal_ids_from_tool_result("mcp__plays__stage_play_tranche", text) == ["a", "b"]
     assert proposal_ids_from_tool_result("mcp__plays__get_play", text) == []
     assert proposal_ids_from_tool_result("mcp__proposals__propose_trade", "not json") == []
+
+
+def test_scheduled_reports_share_the_report_frame():
+    """Scheduled reports open with TL;DR + Key numbers so the report reader can
+    show a TL;DR card and key-numbers strip."""
+    from app.services.task_scheduler_service import REPORT_FORMAT, _DEFAULT_TASKS
+
+    assert "## TL;DR" in REPORT_FORMAT and "## Key numbers" in REPORT_FORMAT
+    prompts = {t["name"]: t["prompt"] for t in _DEFAULT_TASKS}
+    for name in ("morning_brief", "weekly_review"):
+        assert "TL;DR" in prompts[name] and "Key numbers" in prompts[name]

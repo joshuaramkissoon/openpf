@@ -228,6 +228,21 @@ def _persist_goal_proposals(
     db.commit()
     return {"created": len(pending), "run_id": run.id}
 
+# How every LLM-written scheduled report is laid out. The app's report reader
+# turns this frame into a TL;DR card, a key-numbers strip and callouts, so the
+# same shape is asked of every scheduled task (including user-created ones).
+REPORT_FORMAT = (
+    "REPORT FORMAT (the app renders this richly — follow it exactly): "
+    "Start with '## TL;DR' — two or three plain sentences: what happened and what, if anything, to do. "
+    "Then '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- Week: +2.4%', '- Cash: £5,055'). "
+    "Then short '##' sections, most important first. Use '## What stands out' for highlights and "
+    "'## Risks' for risk notes (both render as callouts). Tables only for genuinely tabular data, with "
+    "numbers in their own columns and explicit signs on moves. Bold sparingly — never whole sentences. "
+    "No emoji traffic lights. Reference a proposal you created as '[label](proposal:<intent_id>)' on its own line. "
+    "If the task asks for a trailing JSON block, it still goes at the very end."
+)
+
+
 _DEFAULT_TASKS: list[dict[str, Any]] = [
     {
         "name": "morning_brief",
@@ -248,11 +263,13 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "3. Call `get_market_news` and `get_macro_snapshot` for the wider picture (yields, VIX, USD/GBP, "
             "Fed funds) and read the current market regime if available.\n"
             "4. Skim active theses/market_views in memory; flag any news that supports or threatens one.\n\n"
-            "Then CURATE hard. Output ONLY:\n"
-            "- **Top 3-5 things that matter today** — each: one-line what + why-it-matters-to-your-book + an "
+            "Then CURATE hard. Output ONLY, in this order:\n"
+            "- '## TL;DR' — one or two sentences: the single thing that matters most today and whether to act.\n"
+            "- '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- 10Y: 4.02%', '- VIX: 15.8', "
+            "'- GBP/USD: 1.342').\n"
+            "- '## What matters today' — the top 3-5 items, each: one-line what + why it matters to the book + an "
             "optional 'consider:' action. Tie each to a holding or a real macro move.\n"
-            "- **Macro line**: 10Y/2Y, VIX, USD/GBP with the day's direction.\n"
-            "- **On the radar**: earnings/events in the next 7 days for held names.\n\n"
+            "- '## On the radar' — earnings/events in the next 7 days for held names.\n\n"
             "RULES: portfolio-relevant only. Ignore aggregator/SEO filler (e.g. 'most active stocks today', "
             "generic listicles). If nothing is material, say so in one line — do NOT manufacture noise. No raw "
             "headline dumps. Keep it a genuine 2-minute read."
@@ -383,7 +400,9 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "description": "Weekly strategy review and policy suggestions",
         },
         "prompt": (
-            "Produce a weekly strategy review artifact. Follow these steps:\n\n"
+            "Produce a weekly strategy review artifact. Open with '## TL;DR' (two or three sentences: how the "
+            "week went and the one thing to do) and '## Key numbers' (3-4 '- Label: value' bullets: value, "
+            "week change, cash, top position), then cover the steps below as sections:\n\n"
             "1. **Portfolio snapshot**: Use T212 MCP tools to pull current ISA positions and account summary "
             "(balances, holdings). For current prices and technicals of held tickers, use marketdata MCP tools. "
             "Summarise total value, cash available, and top holdings.\n\n"
@@ -397,7 +416,8 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "and any suggested changes to position sizing, stop-loss levels, or strategy.\n\n"
             "6. **Policy updates** (optional): If risk rails or trading parameters should change, "
             "include a JSON block with key policy_updates.\n\n"
-            "Format your response as a clean, readable markdown report with headers and tables. "
+            "Use '## What stands out' for highlights and '## Risks' for risk notes; tables only for positions "
+            "and other genuinely tabular data. "
             "This is your final artifact — make it polished and information-dense, not a thinking log."
         ),
     },
@@ -716,7 +736,8 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
                 "Use mcp__trading212__ tools ONLY for account-specific reads: positions, balances, "
                 "pending/historical orders, dividends, and transaction history. "
                 "Never use T212 tools to look up prices or market data — T212 has strict API rate limits "
-                "(1 req/s for positions, 1 req/50s for instrument search)."
+                "(1 req/s for positions, 1 req/50s for instrument search). "
+                f"{REPORT_FORMAT}"
             ),
         },
         model=task.model or settings.claude_model,
