@@ -70,6 +70,9 @@ backend/data/views/
 # Recipes made by you or Archie (personal data; built-ins ship in backend/app/recipes_builtin)
 backend/data/recipes/
 
+# Company logo cache (fetched once by the server; see docs/logos.md)
+backend/data/logos/
+
 # Connection secrets key (encrypts broker/exchange keys at rest) — back it up with the DB, never commit it
 openpf-secrets.key
 *.secrets.key

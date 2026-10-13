@@ -1,9 +1,12 @@
+import { useLogo } from "@/lib/logos"
 import { cn } from "@/lib/utils"
 
 /**
- * One mark per asset: a bundled coin icon for common crypto, otherwise a
- * deterministic monogram tile tinted from the ticker. Nothing is fetched from a
- * third party: a logo CDN would learn what the owner holds and trades.
+ * One mark per asset: a bundled coin icon for common crypto; for equities the
+ * company logo when the "Company logos" setting is on, else a deterministic
+ * monogram tile tinted from the ticker. Logos come from our own server
+ * (`/api/logos`), which fetched each one once and cached it: the browser never
+ * contacts a logo service.
  */
 
 const COIN_URLS: Record<string, string> = Object.fromEntries(
@@ -72,13 +75,41 @@ export function AssetIcon({
       />
     )
   }
+  return <EquityIcon symbol={sym} crypto={crypto} size={size} className={className} />
+}
+
+function EquityIcon({ symbol, crypto, size, className }: { symbol: string; crypto: boolean; size: number; className?: string }) {
+  // Crypto without a bundled coin keeps its monogram: the logo services are for listed companies.
+  const logo = useLogo(crypto ? null : symbol)
+  const radius = crypto ? "rounded-full" : "rounded-[28%]"
+  if (logo === undefined) {
+    return (
+      <span
+        aria-hidden
+        className={cn("asset-logo-skeleton inline-block shrink-0 animate-pulse", radius, className)}
+        style={{ width: size, height: size }}
+      />
+    )
+  }
+  if (logo) {
+    return (
+      <span
+        aria-hidden
+        className={cn("asset-logo inline-flex shrink-0 select-none items-center justify-center overflow-hidden", radius, className)}
+        style={{ width: size, height: size, padding: logo.padded ? Math.max(2, Math.round(size * 0.14)) : 0 }}
+      >
+        <img src={logo.url} alt="" draggable={false} className="size-full object-contain" />
+      </span>
+    )
+  }
+  const sym = symbol
   const text = monogram(sym)
   return (
     <span
       aria-hidden
       className={cn(
         "asset-mono inline-flex shrink-0 select-none items-center justify-center font-semibold leading-none tracking-tight",
-        crypto ? "rounded-full" : "rounded-[28%]",
+        radius,
         className,
       )}
       style={
