@@ -608,6 +608,15 @@ export function blockPhrase(b: LimitBlock) {
 }
 
 /**
+ * When both limits cut an ask, the one that binds: the tighter room left
+ * (a per-order limit leaves its full size; the daily one what's left today).
+ */
+export function bindingBlock(blocks: LimitBlock[]): LimitBlock | null {
+  const room = (b: LimitBlock) => (b.rail === "max_single_order_notional" ? b.limit_gbp : b.remaining_gbp)
+  return blocks.reduce<LimitBlock | null>((best, b) => (best && room(best) <= room(b) ? best : b), null)
+}
+
+/**
  * The part of an ask a limit stopped, as a muted card with the honest options:
  * stage it for tomorrow's limit window, or go change the limit (the user's call;
  * Archie never touches it).
@@ -632,8 +641,9 @@ export function HeldTile({
   const amount = intent.estimated_notional
   // Tomorrow's window only helps if it fits one order there.
   const fitsTomorrow = !risk || (amount <= risk.max_single_order_notional && amount <= risk.max_daily_notional)
-  const fields = [...new Set(blocks.map((b) => RAIL_FIELD[b.rail]))]
-  const reason = blocks.length ? blocks.map(blockPhrase).join(" and ") : (intent.held?.reason ?? "over your limits")
+  const binding = bindingBlock(blocks)
+  const fields = binding ? [RAIL_FIELD[binding.rail]] : []
+  const reason = binding ? blockPhrase(binding) : (intent.held?.reason ?? "over your limits")
   const name = assetName(intent)
   const placeMyself = usePlaceMyself(intent)
 
