@@ -51,7 +51,7 @@ export function RebalanceCard({ accountView }: { accountView: "all" | "invest" |
   return (
     <SectionCard
       title="Rebalance"
-      description="Autopilot core-book risk check — Archie proposes, you approve."
+      description="Core-book risk check — Archie proposes, you approve (or a rebalance permission you granted does)."
       action={
         inBalance ? (
           <Badge variant="outline" className="text-positive">In balance</Badge>

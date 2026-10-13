@@ -24,7 +24,6 @@ RISK_DEFAULT = {
 
 BROKER_DEFAULT = {
     "broker_mode": settings.broker_mode,
-    "autopilot_enabled": settings.autopilot_enabled,
     "t212_base_env": settings.t212_base_env,
     # Runs the in-process scheduler (scheduled jobs incl. the alpha loop).
     # Defaults to the env flag so behaviour is unchanged until toggled in-app.
@@ -124,6 +123,9 @@ class ConfigStore:
         # Merge with defaults so newly-added keys (e.g. scheduler_enabled) are
         # always present even for broker_config rows saved before they existed.
         merged = {**BROKER_DEFAULT, **(self.get("broker_config", BROKER_DEFAULT) or {})}
+        # The old all-or-nothing autopilot is gone (standing permissions replace
+        # it). Older rows still carry the key: drop it so it reads as simply off.
+        merged.pop("autopilot_enabled", None)
         from app.core.sandbox import is_sandbox
 
         if is_sandbox():

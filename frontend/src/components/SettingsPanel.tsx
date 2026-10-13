@@ -108,7 +108,6 @@ export function SettingsPanel({
   const brokerDefaults = useMemo(
     () => ({
       broker_mode: config?.broker.broker_mode ?? 'paper',
-      autopilot_enabled: config?.broker.autopilot_enabled ?? false,
       t212_base_env: config?.broker.t212_base_env ?? 'demo',
       scheduler_enabled: config?.broker.scheduler_enabled ?? false,
       auto_execute_enabled: config?.leveraged?.auto_execute_enabled ?? false,
@@ -141,7 +140,6 @@ export function SettingsPanel({
       await updateBroker({
         broker_mode: String(formData.get('broker_mode')) as 'paper' | 'live',
         t212_base_env: String(formData.get('t212_base_env')) as 'demo' | 'live',
-        autopilot_enabled: formData.get('autopilot_enabled') === 'on',
         scheduler_enabled: formData.get('scheduler_enabled') === 'on',
       })
       await setLeveragedAutoExecute(formData.get('auto_execute_enabled') === 'on')
@@ -374,15 +372,13 @@ export function SettingsPanel({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 space-y-0.5">
-                <Label htmlFor="autopilot_enabled" className="text-sm font-medium">
-                  Autopilot execution
-                </Label>
-                <p className="text-xs text-muted-foreground">Allow the agent to place orders automatically.</p>
-              </div>
-              <Switch id="autopilot_enabled" name="autopilot_enabled" defaultChecked={brokerDefaults.autopilot_enabled} />
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Archie never places orders on his own unless you grant a standing permission in{' '}
+              <a href="#/settings/permissions" className="underline underline-offset-2 hover:text-foreground">
+                Settings → Permissions
+              </a>
+              .
+            </p>
             <Separator />
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 space-y-0.5">

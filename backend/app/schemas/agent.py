@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 class AgentRunRequest(BaseModel):
     include_watchlist: bool = True
-    execute_auto: bool = False
 
 
 class AgentRunResponse(BaseModel):

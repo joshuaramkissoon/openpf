@@ -137,8 +137,8 @@ export async function getSnapshot(
   return data
 }
 
-export async function runAgent(include_watchlist = true, execute_auto = false) {
-  const { data } = await api.post<AgentRunDetail>('/agent/run', { include_watchlist, execute_auto })
+export async function runAgent(include_watchlist = true) {
+  const { data } = await api.post<AgentRunDetail>('/agent/run', { include_watchlist })
   return data
 }
 

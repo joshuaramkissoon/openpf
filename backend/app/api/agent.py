@@ -72,7 +72,7 @@ def _message_item(row) -> ChatMessageItem:
 
 @router.post("/run", response_model=AgentRunResponse)
 def run(payload: AgentRunRequest, db: Session = Depends(get_db)) -> AgentRunResponse:
-    result = run_agent(db, include_watchlist=payload.include_watchlist, execute_auto=payload.execute_auto)
+    result = run_agent(db, include_watchlist=payload.include_watchlist)
     return AgentRunResponse(**result)
 
 

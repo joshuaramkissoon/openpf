@@ -219,7 +219,7 @@ Tools:
   "raise more cash"), record it in `memory/preferences.md` and point them to the rebalance policy
   settings (`max_position_weight`, `per_name_caps`, `turnover_budget_pct`, `redistribute`). You can't
   call the app's HTTP API; for a specific trim, use `propose_trade`.
-- A weekly `portfolio_rebalance_check` scheduled task exists (disabled by default) to put this on autopilot.
+- A weekly `portfolio_rebalance_check` scheduled task exists (disabled by default) to run this check weekly.
 
 ### Tool Routing Rule
 When you need a price, quote, candle data, technical indicator, risk metric, or correlation: **always use marketdata MCP**.
