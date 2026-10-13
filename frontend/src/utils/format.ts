@@ -1,3 +1,6 @@
+import { accountInfo, isCryptoAccount } from '@/lib/accounts'
+
+
 export function currencySymbol(code: string): string {
   const normalized = (code || '').toUpperCase()
   if (normalized === 'GBP') return '£'
@@ -62,21 +65,23 @@ export function setCryptoAccountLabel(label: string) {
 export function accountLabel(kind: string): string {
   if (kind === 'stocks_isa') return 'Stocks ISA'
   if (kind === 'invest') return 'Invest'
-  if (kind === 'crypto') return cryptoAccountLabel
+  if (kind === 'crypto') return accountInfo(kind)?.short ?? cryptoAccountLabel
   if (kind === 'all') return 'All Accounts'
-  return kind.toUpperCase()
+  return accountInfo(kind)?.short ?? kind.toUpperCase()
 }
 
 export function accountTag(kind: string): string {
   if (kind === 'stocks_isa') return 'ISA'
   if (kind === 'invest') return 'INVEST'
-  if (kind === 'crypto') return cryptoAccountLabel.toUpperCase()
+  if (kind === 'crypto') return (accountInfo(kind)?.short ?? cryptoAccountLabel).toUpperCase()
+  const info = accountInfo(kind)
+  if (info) return info.short.toUpperCase()
   return 'BOTH'
 }
 
 /** Coins need more decimals than shares (0.0018 BTC, not 0.00). */
 export function formatQuantity(quantity: number, accountKind?: string | null): string {
   if (!Number.isFinite(quantity)) return '—'
-  if (accountKind === 'crypto') return (+quantity.toPrecision(4)).toLocaleString(undefined, { maximumFractionDigits: 8 })
+  if (isCryptoAccount(accountKind)) return (+quantity.toPrecision(4)).toLocaleString(undefined, { maximumFractionDigits: 8 })
   return quantity.toFixed(2)
 }

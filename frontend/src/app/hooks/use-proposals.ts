@@ -12,7 +12,7 @@ export type ExecAccount = 'invest' | 'stocks_isa' | 'crypto'
 export const PENDING_STATUSES = ['proposed', 'approved', 'executing'] as const
 
 function accountName(kind?: string | null) {
-  return kind === 'stocks_isa' ? 'Stocks ISA' : kind === 'invest' ? 'Invest' : kind === 'crypto' ? accountLabel('crypto') : undefined
+  return kind === 'stocks_isa' ? 'Stocks ISA' : kind === 'invest' ? 'Invest' : kind ? accountLabel(kind) : undefined
 }
 
 /**

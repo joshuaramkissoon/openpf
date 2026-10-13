@@ -875,10 +875,21 @@ def get_portfolio_snapshot(
             for key in ("current_price", "value", "ppl", "weight"):
                 row.pop(key, None)
 
+    try:
+        from app.services.connections_service import account_directory
+
+        directory = account_directory(ConfigStore(db))
+    except Exception:  # noqa: BLE001 — labels are cosmetic
+        directory = {}
+
     def _account_item(a: Any) -> dict[str, Any]:
+        info = directory.get(a.account_kind) or {}
         item = {
             "fetched_at": a.fetched_at,
             "account_kind": a.account_kind,
+            "label": info.get("label"),
+            # Read-only connections (IBKR, SnapTrade, query-only crypto keys): analyse, never execute.
+            "read_only": bool(info.get("read_only")),
             "currency": target_currency,
             "free_cash": _to_target(a.free_cash, a.currency),
         }

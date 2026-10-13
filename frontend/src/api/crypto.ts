@@ -33,6 +33,9 @@ export interface CryptoStatus {
   enabled: boolean
   configured: boolean
   connected: boolean
+  account_kind?: string
+  mode?: 'read' | 'trade'
+  tradable?: boolean
   key_hint: string
   verified: { can_view?: boolean | null; can_trade?: boolean | null; can_withdraw?: boolean | null; method?: string; at?: string } | null
   needs_verification: boolean

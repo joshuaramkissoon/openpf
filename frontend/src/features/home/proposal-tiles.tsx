@@ -31,6 +31,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 import { accountLabel, formatMoney, formatPercent, formatQuantity } from "@/utils/format"
+import { ReadOnlyNote, readOnlyPlacement } from "@/components/kit"
+import { isCryptoAccount } from "@/lib/accounts"
 import type { AppConfig, PositionItem, TradeIntent } from "@/types"
 import { PENDING_STATUSES, type DecisionsContextValue, type ExecAccount, type ProposalsState } from "@/app/hooks/use-proposals"
 
@@ -49,11 +51,13 @@ type Rail = { ok: boolean; label: string }
 const isPending = (i: TradeIntent) => (PENDING_STATUSES as readonly string[]).includes(i.status)
 
 function presetAccount(i: TradeIntent): ExecAccount | null {
-  return i.account_kind === "stocks_isa" || i.account_kind === "invest" || i.account_kind === "crypto" ? i.account_kind : null
+  if (i.account_kind === "stocks_isa" || i.account_kind === "invest" || i.account_kind === "crypto") return i.account_kind
+  // Any other connected account (crypto:binance, ibkr:…) is fixed — never re-routed via the picker.
+  return i.account_kind ? (i.account_kind as ExecAccount) : null
 }
 
 function accountShort(kind?: string | null) {
-  return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : kind === "crypto" ? accountLabel("crypto") : null
+  return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : kind ? accountLabel(kind) : null
 }
 
 function assetName(i: TradeIntent) {
@@ -332,8 +336,8 @@ function LiveConfirm({
 }
 
 function liveDescription(intent: TradeIntent, account: ExecAccount | null) {
-  return intent.account_kind === "crypto"
-    ? `This sends a real market order to your ${accountLabel("crypto")} account.${intent.crypto?.fee_gbp != null ? ` Estimated fee ${formatMoney(intent.crypto.fee_gbp, "GBP", 2)}.` : ""} Crypto prices can move sharply; coins on an exchange are not FSCS-protected.`
+  return isCryptoAccount(intent.account_kind)
+    ? `This sends a real market order to your ${accountLabel(intent.account_kind ?? "crypto")} account.${intent.crypto?.fee_gbp != null ? ` Estimated fee ${formatMoney(intent.crypto.fee_gbp, "GBP", 2)}.` : ""} Crypto prices can move sharply; coins on an exchange are not FSCS-protected.`
     : `This sends a real order to your Trading 212 ${account === "stocks_isa" ? "Stocks ISA" : "Invest"} account.`
 }
 
@@ -446,6 +450,9 @@ export function ProposalTile({
         <IconAction label="Reject" onClick={() => void ctx.proposals.reject(intent.id)} disabled={disabled}>
           <X className="size-3.5" />
         </IconAction>
+        {readOnlyPlacement(intent) ? (
+          <ReadOnlyNote broker={readOnlyPlacement(intent)!} />
+        ) : (
         <div className="ml-auto flex items-center gap-1.5">
           {!preset ? (
             <Select value={account ?? undefined} onValueChange={(v) => setAccount(v as ExecAccount)}>
@@ -469,6 +476,7 @@ export function ProposalTile({
             {placing ? "Placing…" : "Approve"}
           </Button>
         </div>
+        )}
       </footer>
 
       <LiveConfirm
@@ -504,7 +512,9 @@ function TrancheGroup({
   const [running, setRunning] = useState(false)
   const rails = railChecksInSequence(group.intents, ctx.config, ctx.positions, ctx.total)
   const total = group.intents.reduce((s, i) => s + i.estimated_notional, 0)
-  const approvable = group.intents.filter((i) => i.status !== "executing" && presetAccount(i) && rails.get(i.id)?.ok)
+  const approvable = group.intents.filter(
+    (i) => i.status !== "executing" && presetAccount(i) && !readOnlyPlacement(i) && rails.get(i.id)?.ok,
+  )
   const all = approvable.length === group.intents.length
   const anyWorking = group.intents.some((i) => ctx.proposals.working === i.id || i.status === "executing")
   const n = group.intents.length

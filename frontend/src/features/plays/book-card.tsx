@@ -7,7 +7,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
 import { useCryptoStatus } from '@/lib/crypto-status'
-import { formatPercent, accountTag } from '@/utils/format'
+import { formatPercent } from '@/utils/format'
+import { AccountChip } from '@/components/kit'
+import { isCryptoAccount } from '@/lib/accounts'
 import { ArchieMark, OwnerMenu, Swatch, groupColor, ownerColor, useBook } from './book'
 import { SortHoldingsSheet } from './suggestions'
 import type { Book, BookGroup, Need } from './types'
@@ -210,14 +212,14 @@ function HoldingLine({ h }: { h: BookGroup['owned'][number] }) {
     <li className="flex items-center gap-2 rounded-md py-1 pr-2 text-sm">
       <button
         type="button"
-        onClick={() => openTicker(h.account_kind === 'crypto' ? `${h.ticker}-GBP` : h.ticker)}
+        onClick={() => openTicker(isCryptoAccount(h.account_kind) ? `${h.ticker}-GBP` : h.ticker)}
         className="w-12 shrink-0 text-left font-mono text-[13px] font-medium hover:underline sm:w-16"
       >
         {h.ticker}
       </button>
       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-        {h.account_kind === 'crypto' ? (
-          <span className="mr-1.5 rounded border border-border px-1 py-px text-[10px] font-medium tracking-wide">{accountTag('crypto')}</span>
+        {h.account_kind !== 'invest' && h.account_kind !== 'stocks_isa' ? (
+          <AccountChip kind={h.account_kind} className="mr-1.5 py-0 align-middle leading-[14px]" />
         ) : null}
         {h.name}
         {h.related_to.length ? <span className="text-muted-foreground/70"> · also {h.related_to.map((r) => r.title).join(', ')}</span> : null}

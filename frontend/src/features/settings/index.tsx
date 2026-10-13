@@ -9,6 +9,7 @@ import { SettingsPanel, type SettingsSection } from "@/components/SettingsPanel"
 import { HelpGuide } from "@/components/help/help-guide"
 import { PermissionsSettings } from "@/features/autonomy/permissions"
 import { CryptoSettings } from "./crypto"
+import { ConnectionsSettings } from "./connections"
 import { PageHeader, Section, Segmented, TabNav } from "@/components/kit"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -20,12 +21,13 @@ import { cn } from "@/lib/utils"
 import type { AppConfig } from "@/types"
 import { DataProvidersSection, ModelsSection } from "./models"
 
-type Tab = "general" | "broker" | "crypto" | "providers" | "models" | "risk" | "permissions" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
+type Tab = "general" | "connections" | "broker" | "crypto" | "providers" | "models" | "risk" | "permissions" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
 
 const TABS: { value: Tab; label: string; description: string }[] = [
   { value: "general", label: "General", description: "Theme and privacy." },
+  { value: "connections", label: "Connections", description: "Brokers, crypto exchanges and aggregators — read-only first, trading only where you add a trade key." },
   { value: "broker", label: "Broker & keys", description: "Execution mode, Trading 212 environment and API keys." },
-  { value: "crypto", label: "Crypto", description: "Connect a crypto exchange with a trade-only key." },
+  { value: "crypto", label: "Crypto", description: "The crypto cap, fees and UK notes. Exchanges are connected under Connections." },
   { value: "providers", label: "Data providers", description: "API keys for news, macro data and the fast model. Saved keys are never shown again." },
   { value: "models", label: "Models", description: "Which model does which job. Defaults are tuned for cost and speed." },
   { value: "risk", label: "Risk rails", description: "Hard limits checked on every order." },
@@ -96,6 +98,7 @@ export function SettingsPage({
           </div>
 
           {tab === "general" ? <AppearanceSection /> : null}
+          {tab === "connections" ? <ConnectionsSettings /> : null}
           {tab === "crypto" ? <CryptoSettings /> : null}
           {sections ? (
             <SettingsPanel

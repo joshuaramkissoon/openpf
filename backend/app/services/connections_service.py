@@ -180,7 +180,8 @@ def _short_label(provider: str | None, acct: dict[str, Any], institution: str) -
         return "IBKR"
     if provider == "alpaca":
         return "Alpaca paper" if acct.get("external_id") == "paper" else "Alpaca"
-    return institution
+    return {"Charles Schwab": "Schwab", "Interactive Brokers": "IBKR", "Fidelity Investments": "Fidelity",
+            "Vanguard US": "Vanguard"}.get(institution, institution)
 
 
 def account_info(store: ConfigStore, account_kind: str | None) -> dict[str, Any] | None:
