@@ -17,3 +17,9 @@ os.environ.setdefault("VIEWS_DATA_DIR", os.path.join(_TMP, "views"))
 os.environ["INPROC_SCHEDULER_ENABLED"] = "false"
 # No background permission sweeper / track-record backfill threads in tests.
 os.environ["OPENPF_AUTONOMY_BACKGROUND"] = "0"
+
+# Never read the developer's backend/.env (real broker/API keys) in tests.
+from app.core import config as _config  # noqa: E402
+
+_config.Settings.model_config["env_file"] = None
+_config.get_settings.cache_clear()
