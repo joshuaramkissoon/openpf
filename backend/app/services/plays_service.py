@@ -1225,12 +1225,20 @@ class DraftJob:
         except Exception:  # noqa: BLE001 — progress is best-effort; never kill the draft over it
             logger.debug("draft job update failed", exc_info=True)
 
-    def add(self, line: str) -> None:
+    def add(self, line: str | dict[str, Any], **meta: Any) -> None:
+        """Append one progress event. ``line`` is the text, or a ``{text, phase,
+        source, tickers}`` event from :func:`_tool_event`; ``meta`` adds fields
+        to a plain line. The UI groups events by ``phase``."""
+        event = dict(line) if isinstance(line, dict) else {"text": line}
+        event.update({k: v for k, v in meta.items() if v is not None})
+        if "phase" not in event:
+            event.update(_phase_for(event["text"]))
+
         def _fn(row: PlayDraftJob) -> None:
             progress = list(row.progress or [])
-            if progress and progress[-1].get("text") == line:
+            if progress and progress[-1].get("text") == event["text"]:
                 return
-            progress.append({"at": _now().isoformat(), "text": line})
+            progress.append({"at": _now().isoformat(), **event})
             row.progress = progress
         self._update(_fn)
 
@@ -1298,22 +1306,53 @@ def _mcp_servers() -> dict[str, Any]:
     return servers
 
 
-def _tool_line(name: str, args: dict[str, Any]) -> str:
-    target = args.get("ticker") or args.get("tickers") or args.get("query") or ""
-    if isinstance(target, list):
-        target = ", ".join(map(str, target))
-    target = str(target)[:80]
+# Draft progress phases, in order. Each tool call / step maps to one; the UI
+# shows one row per phase with its data source and the tickers it touched.
+DRAFT_PHASES = ("portfolio", "research", "prices", "fundamentals", "compare", "sizing", "done")
+
+_TOOL_PHASES: dict[str, tuple[str, str, str]] = {  # tool → (label, phase, source)
+    "get_price_snapshot": ("Checking price for", "prices", "market"),
+    "get_risk_metrics": ("Measuring risk for", "prices", "market"),
+    "compare_assets": ("Comparing", "compare", "quant"),
+    "get_correlation_matrix": ("Checking correlations across", "compare", "quant"),
+    "get_fundamentals": ("Reading fundamentals for", "fundamentals", "fundamentals"),
+    "get_valuation": ("Checking valuation for", "fundamentals", "fundamentals"),
+    "WebSearch": ("Searching the web:", "research", "web"),
+    "WebFetch": ("Reading", "research", "web"),
+}
+
+
+def _phase_for(text: str) -> dict[str, str]:
+    """Phase/source for the fixed lines the draft job writes itself."""
+    t = text.lower()
+    if t.startswith(("reading your portfolio", "book:")):
+        return {"phase": "portfolio", "source": "portfolio"}
+    if t.startswith(("researching", "searching")):
+        return {"phase": "research", "source": "web"}
+    if t.startswith(("basket:", "checking it's all", "sizing", "tightening")):
+        return {"phase": "sizing", "source": "quant"}
+    if t.startswith("draft ready"):
+        return {"phase": "done", "source": "portfolio"}
+    return {}
+
+
+def _tool_event(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """A progress event for one research tool call: text plus phase, source and
+    the tickers it touched (so the UI shows chips rather than a row per call)."""
+    raw = args.get("ticker") or args.get("tickers") or args.get("symbols") or args.get("query") or args.get("url") or ""
     short = name.split("__")[-1]
-    labels = {
-        "get_price_snapshot": "Checking price for",
-        "get_risk_metrics": "Measuring risk for",
-        "compare_assets": "Comparing",
-        "get_correlation_matrix": "Checking correlations across",
-        "get_fundamentals": "Reading fundamentals for",
-        "get_valuation": "Checking valuation for",
-        "WebSearch": "Searching the web:",
-    }
-    return f"{labels.get(short, 'Using ' + short)} {target}".strip()
+    label, phase, source = _TOOL_PHASES.get(short, ("Using " + short, "research", "web"))
+    tickers: list[str] = []
+    if short not in ("WebSearch", "WebFetch"):
+        items = raw if isinstance(raw, list) else re.split(r"[,\s]+", str(raw))
+        tickers = [str(t).strip().upper()[:16] for t in items if str(t).strip()][:12]
+    target = ", ".join(map(str, raw)) if isinstance(raw, list) else str(raw)
+    return {"text": f"{label} {target[:80]}".strip(), "phase": phase, "source": source,
+            **({"tickers": tickers} if tickers else {})}
+
+
+def _tool_line(name: str, args: dict[str, Any]) -> str:
+    return _tool_event(name, args)["text"]
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -1355,7 +1394,7 @@ async def _run_structured(prompt: str, *, system: str, schema: dict[str, Any], m
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ToolUseBlock) and on_progress and block.name not in {"StructuredOutput", "ToolSearch"}:
-                    on_progress(_tool_line(block.name, block.input or {}))
+                    on_progress(_tool_event(block.name, block.input or {}))
                 elif hasattr(block, "text"):
                     text_chunks.append(block.text)
         elif isinstance(message, ResultMessage):
@@ -1486,7 +1525,8 @@ async def _draft(job: DraftJob) -> str:
             raise RuntimeError(f"Draft was invalid twice: {error}")
         if out.unclear:
             raise DraftFailure(out.unclear.strip()[:400], "unclear_idea")
-        job.add(f"Basket: {', '.join(l.ticker.upper() for l in out.legs)}")
+        job.add(f"Basket: {', '.join(l.ticker.upper() for l in out.legs)}",
+                basket=[{"ticker": l.ticker.upper(), "name": l.name, "weight": l.weight, "role": l.role} for l in out.legs])
         job.add("Checking it's all on Trading 212")
         job.add("Sizing against your book and risk rails")
         play = _draft_to_play(db, req, out, book)
@@ -1515,7 +1555,8 @@ def start_draft_job(db: Session, request: dict[str, Any], *, retry_of: str | Non
     request = {**request, "idea": re.sub(r"\s+", " ", str(request["idea"])).strip()}
     validate_play_input({k: request.get(k) for k in ("conviction", "horizon_months", "account_kind", "budget_gbp")})
     row = PlayDraftJob(id=uuid.uuid4().hex[:12], status="running", request=request, retry_of=retry_of,
-                       progress=[{"at": _now().isoformat(), "text": "Reading your portfolio"}])
+                       progress=[{"at": _now().isoformat(), "text": "Reading your portfolio",
+                                  "phase": "portfolio", "source": "portfolio"}])
     db.add(row)
     db.commit()
     db.refresh(row)
