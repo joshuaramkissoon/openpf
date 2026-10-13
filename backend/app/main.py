@@ -55,9 +55,14 @@ def _warm_sandbox_history() -> None:
         from app.core.database import SessionLocal
         from app.services.cashflow_service import sync_all
         from app.services.equity_backfill import backfill_all
+        from app.services.portfolio_service import refresh_portfolio
 
         try:
             with SessionLocal() as db:
+                # The reconstruction anchors its right edge to today's holdings
+                # and cash, so record a live snapshot first — without one the
+                # warmed curve ends at the wrong value and starts in the wrong place.
+                refresh_portfolio(db, force=True)
                 sync_all(db)
                 backfill_all(db)
         except Exception:  # noqa: BLE001
