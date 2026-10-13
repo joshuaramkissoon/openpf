@@ -37,6 +37,7 @@ export function DecisionsCard({
   brokerMode,
   positions,
   total,
+  hideWhenEmpty = false,
 }: {
   proposals: ProposalsState
   signals: ReturnType<typeof useSignals>
@@ -44,6 +45,8 @@ export function DecisionsCard({
   brokerMode: BrokerMode | null
   positions: PositionItem[]
   total: number
+  /** Home pins Decisions but hides it while nothing needs the owner. */
+  hideWhenEmpty?: boolean
 }) {
   const { askArchie, openTicker, navigate } = useAppActions()
   const { suggestions, dismiss } = usePermissionSuggestions()
@@ -57,6 +60,7 @@ export function DecisionsCard({
   const loading = !proposals.loaded || signals.loading
   const empty = !loading && pending.length === 0 && signals.groups.length === 0 && shownSuggestions.length === 0
   const count = pending.length + signals.groups.length + shownSuggestions.length
+  if (hideWhenEmpty && (empty || loading)) return null
 
   return (
     <div className="rounded-xl border border-border bg-card">

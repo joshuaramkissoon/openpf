@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { ArrowUpRight, LoaderCircle, Pin } from 'lucide-react'
+import { ArrowUpRight, Check, LayoutGrid, LoaderCircle, Pin } from 'lucide-react'
 
+import { addToHome } from '@/api/home'
 import { pinSpecView } from '@/api/views'
 import { toastApiError } from '@/lib/api-error'
 import { useAppActions } from '@/lib/app-actions'
@@ -29,6 +30,8 @@ export function VizBlock({ spec, pinnable = true, compact = true, size, fluid = 
   const result = useMemo(() => validateVizSpec(spec), [spec])
   const [pinning, setPinning] = useState(false)
   const [pinned, setPinned] = useState<string | null>(null)
+  const [homing, setHoming] = useState(false)
+  const [homed, setHomed] = useState(false)
 
   if (size && result.ok) {
     // Widget: the spec's first block at a fixed size (S 1×1, M 2×1, L 2×2).
@@ -74,6 +77,14 @@ export function VizBlock({ spec, pinnable = true, compact = true, size, fluid = 
     }
   }
 
+  const addHome = async () => {
+    setHoming(true)
+    const first = s.blocks[0]
+    const res = await addToHome({ kind: 'spec', spec: s, title: s.title, size: first.type === 'hero' || first.type === 'meter' ? 'S' : 'M' }, s.title, actions.navigate)
+    setHoming(false)
+    if (res) setHomed(true)
+  }
+
   return (
     <VizProvider compact={compact}>
       <figure className="not-prose my-2 overflow-hidden rounded-xl border border-border bg-card">
@@ -83,24 +94,36 @@ export function VizBlock({ spec, pinnable = true, compact = true, size, fluid = 
             {s.description ? <p className="truncate text-xs text-muted-foreground">{s.description}</p> : null}
           </div>
           {pinnable ? (
-            pinned ? (
+            <div className="flex shrink-0 items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => actions.navigate(`/views/${pinned}`)}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/10"
+                onClick={homed ? () => actions.navigate('/home') : addHome}
+                disabled={homing}
+                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                title={homed ? 'On your Home — open it' : 'Add this chart to Home as a widget'}
               >
-                Open view <ArrowUpRight className="size-3.5" />
+                {homing ? <LoaderCircle className="size-3.5 animate-spin" /> : homed ? <Check className="size-3.5" /> : <LayoutGrid className="size-3.5" />}
+                {homed ? 'On Home' : 'Add to Home'}
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={pin}
-                disabled={pinning}
-                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-              >
-                {pinning ? <LoaderCircle className="size-3.5 animate-spin" /> : <Pin className="size-3.5" />} Pin as view
-              </button>
-            )
+              {pinned ? (
+                <button
+                  type="button"
+                  onClick={() => actions.navigate(`/views/${pinned}`)}
+                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/10"
+                >
+                  Open view <ArrowUpRight className="size-3.5" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={pin}
+                  disabled={pinning}
+                  className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                >
+                  {pinning ? <LoaderCircle className="size-3.5 animate-spin" /> : <Pin className="size-3.5" />} Pin as view
+                </button>
+              )}
+            </div>
           ) : null}
         </figcaption>
         <div className="space-y-5 p-4">

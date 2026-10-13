@@ -7,6 +7,7 @@ import {
   ChevronRight,
   History,
   LayoutDashboard,
+  LayoutGrid,
   LoaderCircle,
   MoreHorizontal,
   Pin,
@@ -35,6 +36,7 @@ import {
   retryView,
   revertView,
 } from '@/api/views'
+import { addToHome } from '@/api/home'
 import { ViewSpecRenderer, VizBlock, WIDGET_PRESETS, type VizBlockSpec } from '@/components/viz'
 import {
   AlertDialog,
@@ -965,10 +967,26 @@ function ViewDetail({ viewId }: { viewId: string }) {
         </div>
         <div className="flex items-center gap-1">
           {!isNew && !composer ? (
+            <>
             <Button variant="outline" size="sm" className="rounded-full" disabled={building} onClick={() => setComposer({ target: null })}>
               <Sparkles className="text-primary" /> Edit
               <kbd className="ml-0.5 hidden rounded border border-border px-1 font-mono text-[10px] text-muted-foreground sm:inline">E</kbd>
             </Button>
+              {doc?.kind === 'spec' && doc.spec ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Add to Home"
+                  aria-label="Add to Home"
+                  onClick={() => {
+                    const block = Math.max(0, doc.spec!.blocks.findIndex((b) => b.type !== 'note'))
+                    void addToHome({ kind: 'view', ref: meta.id, block, size: 'M' }, meta.title, navigate)
+                  }}
+                >
+                  <LayoutGrid className="text-muted-foreground" />
+                </Button>
+              ) : null}
+            </>
           ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More" disabled={building} />}>

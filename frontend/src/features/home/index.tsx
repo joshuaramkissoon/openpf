@@ -1,5 +1,5 @@
-import { useEffect } from "react"
-import { ArrowLeft, RefreshCw } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { ArrowLeft, Lock, RefreshCw } from "lucide-react"
 
 import { markAllAlertsSeen } from "@/api/client"
 import { PageHeader } from "@/components/kit"
@@ -8,8 +8,7 @@ import { AllocationCard } from "@/components/portfolio/allocation-card"
 import { RebalanceCard } from "@/components/portfolio/rebalance-card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { AutonomyDigest } from "@/features/autonomy/home"
-import { BookByPlay, OwnerMenu, holdingKey, useBook } from "@/features/plays"
+import { OwnerMenu, holdingKey, useBook } from "@/features/plays"
 import { useAppActions } from "@/lib/app-actions"
 import type { Route } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -20,10 +19,9 @@ import type { ProposalsState } from "@/app/hooks/use-proposals"
 
 import { DecisionsCard } from "./decisions-card"
 import { SignalRow } from "./decision-rows"
-import { RiskChips } from "./holdings-summary"
 import { HomeHero } from "./hero"
-import { TodayCard } from "./today-card"
 import { signalPrompt, useSignals } from "./use-signals"
+import { HomeWidgets } from "./widgets/home-widgets"
 
 export type HomeProps = {
   route: Route
@@ -44,38 +42,39 @@ export function HomePage(props: HomeProps) {
 function HomeOverview({ portfolio, proposals, config, brokerMode }: HomeProps) {
   const signals = useSignals()
   const { snapshot, positions } = portfolio
+  const [editing, setEditing] = useState(false)
+  const ctx = useMemo(() => ({ portfolio, config }), [portfolio, config])
 
   return (
     <div className="space-y-10">
       <HomeHero portfolio={portfolio} />
 
-      {/* The book by play leads: every holding has one owner — a play, Core or Unsorted. */}
-      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
-        <div className="min-w-0 lg:col-span-3">
-          <BookByPlay bump={portfolio.lastUpdate ? portfolio.lastUpdate.slice(0, 16) : null} />
-        </div>
-        <div className="min-w-0 lg:col-span-2">
-          <RiskChips snapshot={snapshot} positions={positions} config={config} />
-        </div>
-      </div>
-
-      <AutonomyDigest />
-
-      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
-        <div className="min-w-0 lg:col-span-3">
-          <DecisionsCard
-            proposals={proposals}
-            signals={signals}
-            config={config}
-            brokerMode={brokerMode}
-            positions={positions}
-            total={snapshot?.account.total ?? 0}
-          />
-        </div>
-        <div className="min-w-0 lg:col-span-2">
-          <TodayCard />
-        </div>
-      </div>
+      <HomeWidgets
+        ctx={ctx}
+        editing={editing}
+        onEditingChange={setEditing}
+        beforeGrid={
+          // Decisions is the safety surface: pinned above the widgets, never removable,
+          // and out of the way while nothing needs the owner.
+          <>
+            <DecisionsCard
+              proposals={proposals}
+              signals={signals}
+              config={config}
+              brokerMode={brokerMode}
+              positions={positions}
+              total={snapshot?.account.total ?? 0}
+              hideWhenEmpty
+            />
+            {editing ? (
+              <p className="flex items-center gap-2 rounded-xl border border-dashed border-border/80 px-3.5 py-2.5 text-xs text-muted-foreground">
+                <Lock className="size-3.5 shrink-0" aria-hidden />
+                Decisions are pinned here whenever something needs you, and can’t be removed.
+              </p>
+            ) : null}
+          </>
+        }
+      />
     </div>
   )
 }

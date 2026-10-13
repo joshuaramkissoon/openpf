@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { ShieldCheck, Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 
@@ -36,9 +36,9 @@ function usePoll<T>(fn: () => Promise<T>, ms = 60_000) {
  * Home: one line, only on days Archie placed something under a standing
  * permission — with a one-tap revoke per permission.
  */
-export function AutonomyDigest() {
+export function AutonomyDigest({ fallback = null }: { fallback?: ReactNode } = {}) {
   const { data, reload } = usePoll<Digest>(getDigest)
-  if (!data || !data.count) return null
+  if (!data || !data.count) return <>{fallback}</>
 
   async function revoke(id: string, label: string) {
     try {

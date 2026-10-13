@@ -94,7 +94,7 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
     const ticks = niceTicks(Math.min(0, ...values), Math.max(0, ...values))
     const y0 = ticks[0]
     const y1 = ticks[ticks.length - 1]
-    const h = env.compact ? 200 : 240
+    const h = env.size === 'S' || env.size === 'M' ? 140 : env.compact ? 200 : 240
     const m = { t: 8, r: 4, b: 26, l: 48 }
     const iw = Math.max(0, width - m.l - m.r)
     const ih = h - m.t - m.b
@@ -141,6 +141,27 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
         </div>
         <Tooltip tip={tip} hostWidth={width} />
       </div>
+    )
+  }
+
+  if (env.size === 'S') {
+    // Small widget: label + value over a thin bar per row, so it reads at a glance.
+    const vals = data.map((r) => num(r[block.value]) ?? 0)
+    const max = Math.max(...vals.map(Math.abs)) || 1
+    return (
+      <ul className="space-y-2.5" aria-label={block.title ?? 'Bar chart'}>
+        {data.map((r, i) => (
+          <li key={`${labelOf(r)}-${i}`}>
+            <div className="flex items-baseline justify-between gap-2 text-sm leading-none">
+              <span className="min-w-0 truncate font-medium">{labelOf(r)}</span>
+              <span className={cn('shrink-0 text-xs tabular-nums text-muted-foreground', blur(block.format))}>{fmt(vals[i], block.format, true)}</span>
+            </div>
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full" style={{ width: `${Math.max(2, (Math.abs(vals[i]) / max) * 100)}%`, background: colorOf(vals[i]) }} />
+            </div>
+          </li>
+        ))}
+      </ul>
     )
   }
 

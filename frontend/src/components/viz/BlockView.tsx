@@ -173,7 +173,8 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
         body = <Allocation block={block} rows={data.rows} />
         break
       case 'bars':
-        body = <Bars block={env.size ? { ...block, limit: Math.min(block.limit ?? 12, env.size === 'L' ? 8 : env.size === 'M' ? 4 : 3) } : block} rows={data.rows} />
+        // Widgets cap ranked (horizontal) bars; vertical bars are a time series and keep every period.
+        body = <Bars block={env.size && block.orientation !== 'vertical' ? { ...block, limit: Math.min(block.limit ?? 12, env.size === 'L' ? 8 : env.size === 'M' ? 4 : 3) } : block} rows={data.rows} />
         break
       case 'timeseries':
         body = <Timeseries block={block} rows={data.rows} />
