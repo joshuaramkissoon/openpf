@@ -228,33 +228,49 @@ def _seed_state() -> dict[str, Any]:
             "dividends": [],
             "transactions": [],
         }
+    # The book is built ~13 months ago (first tranche of every name within a
+    # few days of a common start), then topped up with second tranches funded
+    # by monthly-style deposits. Each account is funded the day before its
+    # first buy with exactly what that first wave costs plus the cash left over,
+    # so the equity curve starts at the funded value — no long flat stretch of
+    # idle cash and no later jump when the other account gets funded — and the
+    # contribution-netted return lines up (no phantom gains from unfunded fills).
+    start = today - timedelta(days=385)
     for account, ticker, qty in SEED_POSITIONS:
         code = code_for(ticker)
         acct = state["accounts"][account]
-        # Two buys per name at deterministic dates over the last ~13 months.
-        d1 = today - timedelta(days=int(120 + _rand(code + "a") * 260))
-        d2 = today - timedelta(days=int(20 + _rand(code + "b") * 90))
+        d1 = start + timedelta(days=int(_rand(code + "a") * 6))
+        d2 = today - timedelta(days=int(20 + _rand(code + "b") * 200))
         q1 = round(qty * (0.55 + 0.2 * _rand(code + "q")), 4)
         total_cost_usd = 0.0
-        for when, q in ((d1, q1), (d2, round(qty - q1, 4))):
+        for n, (when, q) in enumerate(((d1, q1), (d2, round(qty - q1, 4)))):
             px = _price_on(code, when)
             total_cost_usd += px * q
             filled_at = datetime.combine(when, datetime.min.time()) + timedelta(hours=15, minutes=int(_rand(code + str(when)) * 50))
-            acct["orders"].append(_order_record(code, "BUY", q, px, fx, filled_at, "MARKET"))
+            rec = _order_record(code, "BUY", q, px, fx, filled_at, "MARKET")
+            acct["orders"].append(rec)
+            if n == 1:  # top-ups are paid for by a deposit that morning
+                acct["transactions"].append({
+                    "type": "DEPOSIT", "amount": float(rec["fill"]["walletImpact"]["netValue"]), "currency": "GBP",
+                    "dateTime": _iso(filled_at - timedelta(hours=6)), "reference": f"sbx-dep-{account}-{code}",
+                })
         acct["positions"][code] = {"quantity": qty, "avg_price": total_cost_usd / qty, "opened_at": _iso(datetime.combine(d1, datetime.min.time()))}
     for account in ACCOUNTS:
         acct = state["accounts"][account]
         acct["orders"].sort(key=lambda o: o["order"]["createdAt"], reverse=True)
-        # Fund each account the day before its first buy with exactly what the buys
-        # cost plus the cash left over, so the reconstructed equity curve and the
-        # contribution-netted return line up (no phantom gains from unfunded fills).
         if acct["orders"]:
+            earliest: dict[str, dict[str, Any]] = {}
+            for o in acct["orders"]:
+                cur = earliest.get(o["order"]["ticker"])
+                if cur is None or o["order"]["createdAt"] < cur["order"]["createdAt"]:
+                    earliest[o["order"]["ticker"]] = o
             first = min(datetime.fromisoformat(o["order"]["createdAt"].rstrip("Z")) for o in acct["orders"])
-            spent = sum(float(o["fill"]["walletImpact"]["netValue"]) for o in acct["orders"])
+            spent = sum(float(o["fill"]["walletImpact"]["netValue"]) for o in earliest.values())
             acct["transactions"].append({
                 "type": "DEPOSIT", "amount": round(spent + acct["cash"], 2), "currency": "GBP",
                 "dateTime": _iso(first - timedelta(days=1)), "reference": f"sbx-dep-{account}",
             })
+        acct["transactions"].sort(key=lambda t: t["dateTime"], reverse=True)
     # A couple of dividends so income views have something to show.
     for account, ticker, amount, days_ago in (("stocks_isa", "MSFT", 9.12, 34), ("stocks_isa", "AAPL", 2.31, 58), ("stocks_isa", "V", 3.88, 75), ("stocks_isa", "COST", 2.02, 101), ("stocks_isa", "MSFT", 8.95, 125)):
         paid = datetime.combine(today - timedelta(days=days_ago), datetime.min.time()) + timedelta(hours=12)

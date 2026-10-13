@@ -22,6 +22,9 @@ class CostBySource(BaseModel):
     chat: float
     scheduled: float
     agent_run: float
+    # Everything else: quick one-shot jobs (titles, sorting, view specs, report
+    # summaries — fast_llm), play drafting, recipe authoring.
+    other: float = 0.0
 
 
 class CostSummary(BaseModel):

@@ -19,6 +19,7 @@ from app.api import autonomy as autonomy_api
 from app.api import crypto as crypto_api
 from app.api import recipes as recipes_api
 from app.api import smart_money as smart_money_api
+from app.api import model_settings
 from app.api import views
 from app.core.config import get_settings
 from app.core.database import init_db
@@ -57,9 +58,14 @@ def _warm_sandbox_history() -> None:
         from app.core.database import SessionLocal
         from app.services.cashflow_service import sync_all
         from app.services.equity_backfill import backfill_all
+        from app.services.portfolio_service import refresh_portfolio
 
         try:
             with SessionLocal() as db:
+                # The reconstruction anchors its right edge to today's holdings
+                # and cash, so record a live snapshot first — without one the
+                # warmed curve ends at the wrong value and starts in the wrong place.
+                refresh_portfolio(db, force=True)
                 sync_all(db)
                 backfill_all(db)
         except Exception:  # noqa: BLE001
@@ -277,6 +283,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(config.router, prefix=settings.api_prefix)
+app.include_router(model_settings.router, prefix=settings.api_prefix)
 app.include_router(broker.router, prefix=settings.api_prefix)
 app.include_router(portfolio.router, prefix=settings.api_prefix)
 app.include_router(agent.router, prefix=settings.api_prefix)

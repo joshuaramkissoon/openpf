@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.core.config import get_settings
+from app.services import model_routing
 from app.services import views_store as store
 from app.services.views_validate import parse_meta, syntax_check, validate_html
 from app.views_sdk import SDK_DIR, sdk_doc, starter
@@ -506,7 +507,7 @@ async def _run(job: Job) -> None:
 
     options = ClaudeAgentOptions(
         system_prompt=_system_prompt(),
-        model=settings.views_model,
+        model=model_routing.sdk_model("views_code"),
         cwd=str(draft.parent),
         tools=["Read", "Write", "Edit"],
         allowed_tools=["Read", "Write", "Edit", "mcp__views__sample_data"],

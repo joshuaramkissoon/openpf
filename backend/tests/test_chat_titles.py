@@ -114,3 +114,21 @@ def test_retitle_without_api_key_uses_first_message(db, monkeypatch):
         assert changed is False
     # Second call is a no-op once the chat has a real title.
     assert asyncio.run(cts.maybe_retitle_session(db, session)) is False
+
+
+def test_retitle_uses_the_fast_llm_chain_when_configured(db, monkeypatch):
+    from app.services import fast_llm
+
+    session = _seed(db, turns=1)
+    monkeypatch.setattr(cts.settings, "gemini_api_key", "")
+    monkeypatch.setattr(cts, "_fast_chain", lambda: [("together", "m")])
+    seen = {}
+
+    async def fake_complete(job, **kw):
+        seen["job"] = job
+        return fast_llm.LLMResult(data=kw["validate"]({"should_rename": True, "title": "ISA Top-Up Plan"}), provider="together", model="m")
+
+    monkeypatch.setattr(fast_llm, "complete_json", fake_complete)
+    monkeypatch.setattr(cts, "generate_structured", lambda **k: pytest.fail("Gemini should not be called"))
+    assert asyncio.run(cts.maybe_retitle_session(db, session)) is True
+    assert session.title == "ISA Top-Up Plan" and seen["job"] == "chat_title"

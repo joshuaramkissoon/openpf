@@ -176,3 +176,38 @@ def test_routing_update_validates(monkeypatch):
         model_routing.update(None, {"jobs": {"chat_title": {"provider": "openai"}}})
     model_routing.update(None, {"jobs": {"chat_title": {"provider": "", "model": ""}}})
     assert saved["model_routing"]["jobs"] == {}
+
+
+def test_settings_endpoints_never_return_keys(monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.api import model_settings
+    from app.core.database import Base, get_db
+    from app.main import app
+
+    eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(eng)
+    maker = sessionmaker(bind=eng)
+
+    def db():
+        with maker() as s:
+            yield s
+
+    monkeypatch.setattr(model_settings, "_env_value", lambda env, attr: "")
+    app.dependency_overrides[get_db] = db
+    try:
+        c = TestClient(app)
+        r = c.put("/api/config/data-providers", json={"together_api_key": "tg-secret-123"})
+        assert r.status_code == 200 and "tg-secret-123" not in r.text
+        assert r.json()["together_api_key"] == {"label": "Together AI", "configured": True, "source": "settings"}
+        assert "tg-secret-123" not in c.get("/api/config/data-providers").text
+        # blank keeps the stored key, clear removes it
+        assert c.put("/api/config/data-providers", json={"together_api_key": ""}).json()["together_api_key"]["configured"]
+        assert not c.put("/api/config/data-providers", json={"clear": ["together_api_key"]}).json()["together_api_key"]["configured"]
+        assert c.get("/api/config/models").status_code == 200
+        assert c.put("/api/config/models", json={"jobs": {"chat_title": {"provider": "nope"}}}).status_code == 422
+    finally:
+        app.dependency_overrides.clear()

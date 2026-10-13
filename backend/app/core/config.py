@@ -113,14 +113,19 @@ class Settings(BaseSettings):
     together_api_key: str = Field(default="", alias="TOGETHER_API_KEY")
     finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
-    claude_model: str = Field(default="claude-sonnet-4-6", alias="CLAUDE_MODEL")
-    # Reasoning-heavy runtimes default to Opus 4.8; routine/structured work
-    # (and any task with no explicit model) falls back to claude_model.
-    claude_chat_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_CHAT_MODEL")
-    claude_agent_model: str = Field(default="claude-opus-4-8", alias="CLAUDE_AGENT_MODEL")
-    claude_memory_model: str = Field(default="claude-haiku-4-5", alias="CLAUDE_MEMORY_MODEL")
-    claude_plays_model: str = Field(default="claude-sonnet-4-6", alias="CLAUDE_PLAYS_MODEL")
-    claude_plays_review_model: str = Field(default="claude-haiku-4-5", alias="CLAUDE_PLAYS_REVIEW_MODEL")
+    claude_model: str = Field(default="claude-sonnet-5-5", alias="CLAUDE_MODEL")
+    # Claude 5 family: Sonnet 5.5 for chat, plays and agent runs; Opus 5.5 only
+    # on explicitly deep paths (quant subagent); Haiku 5.5 for small jobs.
+    # Settings → Models overrides all of these per job (see model_routing).
+    claude_chat_model: str = Field(default="claude-sonnet-5-5", alias="CLAUDE_CHAT_MODEL")
+    claude_agent_model: str = Field(default="claude-sonnet-5-5", alias="CLAUDE_AGENT_MODEL")
+    claude_deep_model: str = Field(default="claude-opus-5-5", alias="CLAUDE_DEEP_MODEL")
+    claude_memory_model: str = Field(default="claude-haiku-5-5", alias="CLAUDE_MEMORY_MODEL")
+    claude_plays_model: str = Field(default="claude-sonnet-5-5", alias="CLAUDE_PLAYS_MODEL")
+    claude_plays_review_model: str = Field(default="claude-haiku-5-5", alias="CLAUDE_PLAYS_REVIEW_MODEL")
+    # Caps for scheduled agent-mode runs (recipes that investigate, alpha loop).
+    scheduled_max_turns: int = Field(default=20, alias="SCHEDULED_MAX_TURNS")
+    scheduled_max_budget_usd: float | None = Field(default=1.0, alias="SCHEDULED_MAX_BUDGET_USD")
     claude_setting_sources: str = Field(default="project", alias="CLAUDE_SETTING_SOURCES")
     claude_project_cwd: str = Field(default=".claude/runtime", alias="CLAUDE_PROJECT_CWD")
     claude_chat_allow_writes: bool = Field(default=True, alias="CLAUDE_CHAT_ALLOW_WRITES")
@@ -159,14 +164,14 @@ class Settings(BaseSettings):
     financial_datasets_api_key: str = Field(default="", alias="FINANCIAL_DATASETS_API_KEY")
 
     # Views — agent-built, sandboxed pages. The builder favours speed (Sonnet).
-    views_model: str = Field(default="claude-sonnet-4-6", alias="VIEWS_MODEL")
+    views_model: str = Field(default="claude-sonnet-5-5", alias="VIEWS_MODEL")
     # Spec builder (prompt → declarative viz spec, no code). Fast by design:
     # Together AI (JSON-schema constrained) first, Claude as the fallback, the
     # closest preset when neither is available. TOGETHER_API_KEY comes from the
     # env or Settings → data providers (config key data_providers.together_api_key).
     views_spec_provider: str = Field(default="together", alias="VIEWS_SPEC_PROVIDER")  # together | anthropic
     views_spec_model: str = Field(default="deepseek-ai/DeepSeek-V4.1-Flash", alias="VIEWS_SPEC_MODEL")
-    views_spec_claude_model: str = Field(default="claude-haiku-4-5", alias="VIEWS_SPEC_CLAUDE_MODEL")
+    views_spec_claude_model: str = Field(default="claude-haiku-5-5", alias="VIEWS_SPEC_CLAUDE_MODEL")
     views_spec_timeout_s: float = Field(default=40.0, alias="VIEWS_SPEC_TIMEOUT_S")
     # Where view HTML/versions/state live. Relative paths resolve from backend/.
     views_data_dir: str = Field(default="data/views", alias="VIEWS_DATA_DIR")
@@ -178,7 +183,7 @@ class Settings(BaseSettings):
     # Recipes — Archie's own harness (skills + triggers). User/Archie-made recipes
     # are personal data and live here (gitignored); built-ins ship in the repo.
     recipes_data_dir: str = Field(default="data/recipes", alias="RECIPES_DATA_DIR")
-    recipes_model: str = Field(default="claude-sonnet-4-6", alias="RECIPES_MODEL")
+    recipes_model: str = Field(default="claude-sonnet-5-5", alias="RECIPES_MODEL")
 
     @model_validator(mode="after")
     def _legacy_sqlite_fallback(self) -> "Settings":

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import dayjs from "dayjs"
 import { RefreshCw } from "lucide-react"
 
-import { getPortfolioHistory, type PortfolioHistory } from "@/api/client"
+import { getPortfolioHistory, getTodayMove, type PortfolioHistory, type TodayMove } from "@/api/client"
 import { Money, MoneyDelta, PctDelta, Segmented } from "@/components/kit"
 import { Skeleton } from "@/components/ui/skeleton"
 import { scrambleMoney, usePrivacyMode } from "@/lib/privacy"
@@ -39,6 +39,20 @@ function useHistory(account: string, currency: "GBP" | "USD", days: number, bump
   return { data, loading }
 }
 
+function useTodayMove(account: string, currency: "GBP" | "USD", bump: string | null) {
+  const [data, setData] = useState<TodayMove | null>(null)
+  useEffect(() => {
+    let active = true
+    getTodayMove(account, currency)
+      .then((d) => active && setData(d))
+      .catch(() => active && setData(null))
+    return () => {
+      active = false
+    }
+  }, [account, currency, bump])
+  return data
+}
+
 /**
  * The one big number: total value, today's move and the period move, over a
  * compact equity curve. Account + currency are quiet controls on the right.
@@ -53,14 +67,12 @@ export function HomeHero({ portfolio }: { portfolio: PortfolioState }) {
   const bump = lastUpdate ? lastUpdate.slice(0, 16) : null
   const history = useHistory(accountView, currency, days, bump)
 
-  const pts = history.data?.points ?? []
-  const last = pts[pts.length - 1]
-  const prev = pts[pts.length - 2]
-  // Day move net of deposits/withdrawals (gain is contribution-adjusted).
-  const dayMove = last && prev ? last.gain - prev.gain : null
-  const dayBase = prev ? prev.total : 0
-  const dayPct = dayMove !== null && dayBase > 0 ? dayMove / dayBase : null
-  const dayLabel = last && last.date === dayjs().format("YYYY-MM-DD") ? "today" : last ? `since ${dayjs(prev?.date).format("ddd")}` : ""
+  // Today's move: per-holding moves since the previous close, summed on the
+  // server by the same function the Views data source uses.
+  const today = useTodayMove(accountView, currency, bump)
+  const dayMove = today?.day_change ?? null
+  const dayPct = today?.day_change_pct ?? null
+  const dayLabel = !today?.session ? "" : today.is_today ? "today" : `${dayjs(today.session).format("ddd")} session`
 
   const hp = history.data?.points ?? []
   const periodGain = hp.length >= 2 ? hp[hp.length - 1].gain - hp[0].gain : null

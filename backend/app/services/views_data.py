@@ -309,27 +309,11 @@ def _prices(db: Session, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _attach_day_change(positions: list[dict[str, Any]]) -> None:
-    """Today's move per holding, so views never have to derive money from quotes
-    (quote prices are in the instrument's currency, not the display currency)."""
-    from concurrent.futures import ThreadPoolExecutor
+    """Today's move per holding — the shared definition Home uses too
+    (``day_move``), so the two can never disagree."""
+    from app.services import day_move
 
-    from app.services.leveraged_market import get_price
-
-    def _pct(sym: str) -> float | None:
-        try:
-            q = _cached(("quote", sym), 60, lambda sym=sym: get_price(sym) or {})
-            v = q.get("change_pct")
-            return float(v) if v is not None else None
-        except Exception:  # noqa: BLE001
-            return None
-
-    syms = [str(p.get("yf") or p.get("ticker") or "") for p in positions]
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        pcts = list(pool.map(_pct, syms))
-    for row, pct in zip(positions, pcts):
-        row["day_change_pct"] = _r(pct, 5) if pct is not None else None
-        value = row.get("value") or 0.0
-        row["day_change"] = _r(value - value / (1 + pct)) if pct is not None and pct > -1 else None
+    day_move.attach(positions, symbol_keys=("yf", "ticker"))
 
 
 def _quotes(db: Session, params: dict[str, Any]) -> dict[str, Any]:

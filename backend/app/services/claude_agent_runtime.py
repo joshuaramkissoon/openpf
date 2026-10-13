@@ -13,7 +13,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
     parse_setting_sources, project_root, resolve_sdk_cwd,
 )
-from app.services import mcp_registry
+from app.services import mcp_registry, model_routing
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
 
 settings = get_settings()
@@ -263,7 +263,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                 "This is ANALYSIS ONLY — never execute and never imply a trade has been executed; "
                 f"intents are proposals for {settings.user_name} to approve."
             ),
-            model=settings.claude_agent_model,
+            model=model_routing.sdk_model("agent_run"),
             cwd=str(sdk_cwd),
             add_dirs=[str(workspace)],
             max_turns=settings.agent_max_turns,
@@ -308,7 +308,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                     _cost_db,
                     source="agent_run",
                     source_id=_source_id,
-                    model=settings.claude_agent_model,
+                    model=model_routing.sdk_model("agent_run"),
                     total_cost_usd=cost_info.get("total_cost_usd"),
                     duration_ms=cost_info.get("duration_ms"),
                     num_turns=cost_info.get("num_turns"),
@@ -439,7 +439,7 @@ def run_research_request(
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
-            model=settings.claude_agent_model,
+            model=model_routing.sdk_model("agent_run"),
             cwd=str(sdk_cwd),
             max_turns=30,
             allowed_tools=allowed_tools,
@@ -484,7 +484,7 @@ def run_research_request(
                     _cost_db,
                     source="research",
                     source_id=cost_info.get("session_id") or "research",
-                    model=settings.claude_agent_model,
+                    model=model_routing.sdk_model("agent_run"),
                     total_cost_usd=cost_info.get("total_cost_usd"),
                     duration_ms=cost_info.get("duration_ms"),
                     num_turns=cost_info.get("num_turns"),

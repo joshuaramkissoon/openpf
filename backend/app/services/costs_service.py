@@ -54,6 +54,7 @@ def get_summary(db: Session) -> dict:
         "scheduled": sum(_cost(r) for r in rows if r.source == "scheduled"),
         "agent_run": sum(_cost(r) for r in rows if r.source == "agent_run"),
     }
+    by_source["other"] = sum(_cost(r) for r in rows if r.source not in by_source)
 
     return {
         "all_time_usd": round(all_time, 6),

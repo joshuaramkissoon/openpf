@@ -628,15 +628,33 @@ def run_recipe_task(db: Session, task: ScheduledTask) -> tuple[str, dict[str, An
 
     sync_plugin(db)
     prompt = build_run_prompt(recipe, trigger_context=trigger_context, manual=forced)
-    output, run_meta, cost_info = ts._run_claude_prompt(SimpleNamespace(model=task.model, prompt=prompt))
-    path = ts._cron_log_path(task.name, output or "(no output)", task_kind="recipe", description=recipe.title)
+    # "Gather fixed data, then write" recipes run as a digest: code gathers the
+    # inputs, one fast model call writes the report. The rest stay agent runs.
+    from app.services import fast_llm, report_digest
+
+    mode = report_digest.mode_for(recipe)
+    if mode == "digest":
+        try:
+            output, run_meta, cost_info = report_digest.run_digest(db, recipe, trigger_context=trigger_context)
+        except fast_llm.NoProvider:
+            mode = "agent"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("digest run failed for recipe %s", recipe.slug, exc_info=True)
+            return "error", {"recipe": recipe.slug, "mode": "digest", "error": f"couldn't write the report: {str(exc)[:200]}"}, None, {}
+    if mode == "agent":
+        output, run_meta, cost_info = ts._run_claude_prompt(SimpleNamespace(model=task.model, prompt=prompt))
+    path = ts._cron_log_path(task.name, output or "(no output)", task_kind="recipe", description=recipe.title,
+                             summary=run_meta.get("summary"))
     payload: dict[str, Any] = {
         "recipe": recipe.slug,
         "recipe_version": recipe.current_version,
         "summary": _excerpt_line(output),
         "trigger_context": trigger_context,
         "manual": forced,
+        "mode": mode,
     }
+    if mode == "digest":
+        payload["digest"] = {k: run_meta.get(k) for k in ("provider", "model", "gather_ms", "llm_ms", "tokens", "flags_raised") if k in run_meta}
     block_reason = ts._detect_block(output, run_meta.get("json") if isinstance(run_meta.get("json"), dict) else None)
     if block_reason:
         payload.update({"blocked": True, "block_reason": block_reason})

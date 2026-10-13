@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.services.claude_sdk_config import configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd
+from app.services.claude_sdk_config import resolve_sdk_cwd
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -201,10 +201,6 @@ def _write_memory_lines(path: Path, lines: list[str]) -> None:
 
 
 async def _distill(user_message: str, assistant_message: str, current_memory: list[str]) -> list[str]:
-    from claude_agent_sdk import ClaudeAgentOptions, query
-
-    configure_sdk_auth()
-
     prompt_payload = {
         "purpose": "Extract durable memory for a long-running portfolio copilot.",
         "current_memory": current_memory[-40:],
@@ -225,26 +221,19 @@ async def _distill(user_message: str, assistant_message: str, current_memory: li
         "output_mode": "json_only",
     }
 
-    options = ClaudeAgentOptions(
-        system_prompt=(
-            "You are a strict memory distiller. "
-            "Output only valid JSON matching the provided schema."
-        ),
-        model=settings.claude_memory_model,
-        cwd=str(resolve_sdk_cwd()),
-        setting_sources=parse_setting_sources(settings.claude_setting_sources, require_project=True),
-        max_turns=2,
-        allowed_tools=[],
+    # One-shot structured call (Together → Claude Haiku API → Agent SDK as last resort).
+    from app.services import fast_llm
+
+    res = await fast_llm.complete_json(
+        "memory_extract",
+        system="You are a strict memory distiller. Output only valid JSON matching the provided schema.",
+        user=json.dumps(prompt_payload),
+        schema={"type": "object", "properties": {"store": {"type": "boolean"}, "facts": {"type": "array", "items": {"type": "string"}}},
+                "required": ["store", "facts"]},
+        max_tokens=800,
+        usage_id="memory",
     )
-
-    chunks: list[str] = []
-    async for message in query(prompt=json.dumps(prompt_payload), options=options):
-        text = _extract_text(message)
-        if text:
-            chunks.append(text)
-
-    raw = "\n".join(chunks)
-    parsed = _extract_json_block(raw)
+    parsed = res.data
     if not parsed or not bool(parsed.get("store")):
         return []
 
