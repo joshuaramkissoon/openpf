@@ -89,10 +89,10 @@ def suggestions(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/suggestions")
 def generate_suggestions(payload: SuggestRequest | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Theme rules group Unsorted holdings at once; a fast model refines them in the
-    background (poll GET for ``refining``). Nothing is applied."""
+    """A fast model groups Unsorted holdings (a few seconds); the theme rules are
+    the fallback if it fails or runs past ``MODEL_WAIT_S``. Nothing is applied."""
     try:
-        return bs.generate_suggestions(db, use_model=payload.use_model if payload else True, background=True)
+        return bs.generate_suggestions(db, use_model=payload.use_model if payload else True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("suggestions failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail=PORTFOLIO_UNAVAILABLE) from exc
