@@ -135,7 +135,7 @@ export function TrackRecordTab() {
 
           <p className="flex gap-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 size-3.5 shrink-0" />
-            {data.method} Returns are in each instrument's currency; past calls don't predict the next one.
+            {data.method} Past calls don't predict the next one.
           </p>
         </>
       )}
@@ -165,7 +165,7 @@ function Comparison({ data }: { data: TrackRecord }) {
   return (
     <div className="divide-y divide-border/70 rounded-xl border border-border">
       {rows.map((r) => (
-        <div key={r.key} className="grid grid-cols-[minmax(0,11rem)_1fr_auto] items-center gap-4 px-4 py-3 max-sm:grid-cols-[1fr_auto]">
+        <div key={r.key} className="grid grid-cols-[minmax(0,15rem)_1fr_auto] items-center gap-4 px-4 py-3 max-sm:grid-cols-[1fr_auto]">
           <div className="min-w-0">
             <p className="text-sm font-medium">{r.label}</p>
             <p className="truncate text-xs text-muted-foreground">
