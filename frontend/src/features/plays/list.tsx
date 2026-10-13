@@ -374,12 +374,9 @@ function EmptyState() {
             key={t.id}
             type="button"
             onClick={() => navigate(`/plays?new=1&template=${t.id}`)}
-            className="group rounded-xl border border-border bg-card p-4 text-left transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-foreground/25"
+            className="group rounded-xl border border-border bg-card p-4 text-left transition-colors duration-150 hover:border-foreground/25 hover:bg-muted/40"
           >
-            <span
-              className="flex size-8 items-center justify-center rounded-lg"
-              style={{ background: `color-mix(in oklab, var(--chart-${t.color}) 14%, transparent)`, color: `var(--chart-${t.color})` }}
-            >
+            <span className="flex size-8 items-center justify-center rounded-lg bg-muted text-foreground/80">
               <t.Icon className="size-4" />
             </span>
             <p className="mt-3 text-sm font-medium">{t.name}</p>

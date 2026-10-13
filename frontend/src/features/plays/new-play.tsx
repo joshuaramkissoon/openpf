@@ -522,14 +522,12 @@ function TemplateCard({ template: t, selected, onUse }: { template: PlayTemplate
       onClick={onUse}
       aria-pressed={selected}
       className={cn(
-        'group relative flex flex-col overflow-hidden rounded-xl border bg-card p-4 text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-md',
+        'group relative flex flex-col overflow-hidden rounded-xl border bg-card p-4 text-left transition-colors duration-150 hover:bg-muted/40',
         selected ? 'border-foreground/35' : 'border-border hover:border-foreground/25',
       )}
     >
-      {/* Palette accent along the top edge, like a play's swatch. */}
-      <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 opacity-70" style={{ background: `var(--chart-${t.color})` }} />
       <div className="flex items-start justify-between gap-3">
-        <span className="flex size-9 items-center justify-center rounded-lg" style={tint(t.color)}>
+        <span className="flex size-9 items-center justify-center rounded-lg bg-muted text-foreground/80">
           <t.Icon className="size-[18px]" />
         </span>
         {selected ? (
@@ -680,14 +678,9 @@ function WideTemplateCard({ template: t, onUse }: { template: PlayTemplate; onUs
     <button
       type="button"
       onClick={onUse}
-      className="group relative flex flex-col gap-4 overflow-hidden rounded-xl border border-border bg-card p-4 text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-foreground/25 hover:shadow-md sm:col-span-2 sm:flex-row sm:items-center lg:col-span-3"
+      className="group relative flex flex-col gap-4 overflow-hidden rounded-xl border border-border bg-card p-4 text-left transition-colors duration-150 hover:border-foreground/25 hover:bg-muted/40 sm:col-span-2 sm:flex-row sm:items-center lg:col-span-3"
     >
-      <span
-        aria-hidden
-        className="absolute inset-y-0 left-0 w-0.5 opacity-70"
-        style={{ background: `var(--chart-${t.color})` }}
-      />
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg" style={tint(t.color)}>
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground/80">
         <t.Icon className="size-[18px]" />
       </span>
       <span className="min-w-0 flex-1">
