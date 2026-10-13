@@ -1,0 +1,68 @@
+/*
+ * Viz tokens. Palettes validated with the dataviz skill's validate_palette.js
+ * against the app's card surfaces (light #ffffff, dark #212428):
+ *  - categorical, 6 slots in this fixed order (adjacent CVD ΔE ≥ 9.2 light /
+ *    9.4 dark, normal-vision ≥ 19.3). A 7th series folds into "Other".
+ *    Light slots 3/5/6 sit below 3:1 → every categorical chart ships a legend
+ *    with values and a table view (the relief rule).
+ *  - diverging gain/loss poles, lightness-offset so they survive deutan/protan
+ *    (CVD ΔE 12.2 light / 10.5 dark), neutral grey midpoint.
+ * Red/green hues are kept out of the categorical set so identity never reads
+ * as gain/loss. Single-series magnitude uses slot 1.
+ */
+:root,
+.dark {
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #9085e9;
+  --viz-5: #c98500;
+  --viz-6: #d55181;
+  --viz-other: #6b7079;
+  --viz-gain: #26ac80;
+  --viz-loss: #c6413f;
+  --viz-mid: #3a3e45;
+  --viz-grid: rgba(255, 255, 255, 0.07);
+  --viz-axis: rgba(255, 255, 255, 0.16);
+  --viz-cool: #3987e5;
+  --viz-warm: #d95926;
+}
+
+.light {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #6250d6;
+  --viz-5: #eda100;
+  --viz-6: #e87ba4;
+  --viz-other: #a3a6ad;
+  --viz-gain: #17a478;
+  --viz-loss: #ba2b2e;
+  --viz-mid: #eceef1;
+  --viz-grid: rgba(15, 18, 25, 0.07);
+  --viz-axis: rgba(15, 18, 25, 0.18);
+  --viz-cool: #2a78d6;
+  --viz-warm: #eb6834;
+}
+
+.viz-axis-text {
+  font-size: 10.5px;
+  fill: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-tile-text {
+  pointer-events: none;
+  user-select: none;
+}
+
+@keyframes viz-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.viz-in {
+  animation: viz-in 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .viz-in { animation: none; }
+}

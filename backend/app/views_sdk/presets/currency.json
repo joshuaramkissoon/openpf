@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "title": "Currency exposure",
+  "description": "How much of your money sits outside sterling, and what a 5% pound move would do",
+  "icon": "globe",
+  "data": {"pf": {"source": "portfolio"}, "fx": {"source": "fx", "params": {"currency": "GBP"}}},
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "Outside sterling",
+      "from": "pf.positions",
+      "value": {"agg": "sum", "field": "value", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}]},
+      "format": "money",
+      "delta": {"agg": "sum", "field": "value", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}], "per": {"from": "pf.account", "field": "total"}},
+      "deltaFormat": "pct",
+      "caption": "Share of the whole portfolio, by the currency each holding is listed in",
+      "width": "half"
+    },
+    {
+      "type": "kpis",
+      "from": "pf.positions",
+      "width": "half",
+      "items": [
+        {"label": "If GBP rises 5%", "value": {"agg": "sum", "field": "fx_up", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}, {"compute": {"as": "fx_up", "op": "scale", "field": "value", "by": -0.047619}}]}, "format": "signedMoney", "hint": "holdings abroad are worth less in pounds"},
+        {"label": "If GBP falls 5%", "value": {"agg": "sum", "field": "fx_down", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}, {"compute": {"as": "fx_down", "op": "scale", "field": "value", "by": 0.052632}}]}, "format": "signedMoney", "hint": "and worth more"}
+      ]
+    },
+    {
+      "type": "allocation",
+      "title": "By listing currency",
+      "subtitle": "Holdings only; cash sits in your account currency",
+      "from": "pf.positions",
+      "transform": [{"groupBy": "exposure_currency"}, {"sort": {"by": "value"}}],
+      "label": "exposure_currency",
+      "value": "value",
+      "style": "donut",
+      "width": "half"
+    },
+    {
+      "type": "treemap",
+      "title": "Holdings by currency",
+      "subtitle": "Sized by value, coloured by today's move",
+      "from": "pf.positions",
+      "label": "ticker",
+      "size": "value",
+      "color": "day_change_pct",
+      "group": "exposure_currency",
+      "width": "half"
+    },
+    {
+      "type": "kpis",
+      "from": "fx.rates",
+      "width": "half",
+      "items": [
+        {"label": "GBP/USD", "value": {"field": "USD"}, "format": "num", "hint": "dollars per pound"},
+        {"label": "GBP/EUR", "value": {"field": "EUR"}, "format": "num", "hint": "euros per pound"}
+      ]
+    },
+    {
+      "type": "note",
+      "width": "half",
+      "text": "Listing currency is a proxy: a London-listed fund that owns US shares still moves with the dollar. A stronger pound lowers the sterling value of everything priced abroad."
+    }
+  ]
+}

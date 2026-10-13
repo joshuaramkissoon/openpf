@@ -4,7 +4,8 @@ Layout under ``VIEWS_DATA_DIR`` (default ``backend/data/views``)::
 
     <id>/meta.json      id, title, description, icon, pinned, order, timestamps,
                         current_version, versions[], history[] (prompts)
-    <id>/v<N>.html      immutable version N of the view document
+    <id>/v<N>.json      immutable version N — a declarative viz spec (kind "spec")
+    <id>/v<N>.html      immutable version N — a legacy code view (kind "code")
     <id>/state.json     small per-view key/value state (``openpf.state``)
     <id>/draft.html     the builder's scratch file while a build is running
 
@@ -97,7 +98,18 @@ def public(meta: dict[str, Any]) -> dict[str, Any]:
         "versions": meta.get("versions", []),
         "history": meta.get("history", []),
         "starter": meta.get("starter"),
+        "kind": _current_kind(meta),
+        "last_good_version": meta.get("last_good_version"),
+        "build": meta.get("build"),
     }
+
+
+def _current_kind(meta: dict[str, Any]) -> str:
+    n = meta.get("current_version") or 0
+    for v in meta.get("versions", []):
+        if v.get("version") == n:
+            return v.get("kind") or "code"
+    return meta.get("kind") or "spec"
 
 
 def list_views() -> list[dict[str, Any]]:
@@ -116,22 +128,62 @@ def get_view(view_id: str) -> dict[str, Any]:
     return public(_read_meta(view_id))
 
 
-_STOP = {"a", "an", "the", "me", "my", "of", "by", "for", "and", "to", "in", "on", "show", "build", "make", "create", "give", "view", "page", "please", "i", "want", "with", "what", "how", "is", "are", "can", "you"}
+_STOP = {
+    "a", "an", "the", "me", "my", "mine", "our", "of", "by", "for", "and", "or", "to", "in", "on", "at", "from", "with", "about",
+    "show", "build", "make", "create", "give", "get", "see", "view", "page", "dashboard", "chart", "please", "pls", "i", "id",
+    "want", "would", "like", "need", "what", "whats", "how", "is", "are", "was", "can", "could", "you", "your", "it", "its",
+    "that", "this", "these", "those", "which", "all", "every", "some", "just", "also", "be", "do", "does", "there", "here",
+    "up", "into", "over", "per", "so", "much", "many", "lot", "lots", "really", "very", "new", "nice", "simple", "quick",
+}
+_FILLER_RE = re.compile(
+    r"^\s*(?:(?:hey|hi|ok|okay)\s+archie[,!.\s]*)?(?:(?:can|could|would)\s+you\s+|please\s+|i(?:'d| would)?\s+(?:like|want|need)\s+(?:to\s+see\s+)?|"
+    r"(?:show|give|build|make|create|draw|plot|chart)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:(?:view|page|dashboard|chart)\s+(?:of|for|showing|with)\s+)?)+",
+    re.I,
+)
+
+
+def prompt_title(prompt: str) -> str:
+    """Deterministic short title from a prompt (used until the builder names the view).
+
+    'can you show me my dividend income by month please' → 'Dividend income by month'.
+    """
+    text = _FILLER_RE.sub("", (prompt or "").strip().splitlines()[0] if (prompt or "").strip() else "")
+    text = re.sub(r"\b(?:please|pls|thanks?|thank you)\b[.!]*", "", text, flags=re.I)
+    text = re.sub(r"[^\w\s&%/+'-]", " ", text)
+    text = re.sub(r"^(?:my|the|a|an)\s+", "", text.strip(), flags=re.I)
+    words = text.split()
+    title = " ".join(words[:6])
+    if len(title) > 40:
+        title = title[:40].rsplit(" ", 1)[0]
+    title = title.strip(" -&/")
+    return (title[:1].upper() + title[1:]) if title else "New view"
 
 
 def prompt_slug(prompt: str) -> str:
-    """'show me my dividend income by month' → 'dividend-income-month'."""
-    words = [w for w in re.findall(r"[a-z0-9]+", (prompt or "").lower()) if w not in _STOP]
+    """'show me my dividend income by month' → 'dividend-income-month'. URL-safe ASCII."""
+    import unicodedata
+
+    ascii_text = unicodedata.normalize("NFKD", prompt or "").encode("ascii", "ignore").decode()
+    words = [w for w in re.findall(r"[a-z0-9]+", ascii_text.lower()) if w not in _STOP and len(w) < 24]
     return _slug("-".join(words[:4])) if words else "view"
 
 
 def create_view(*, title: str, description: str = "", icon: str = DEFAULT_ICON, prompt: str = "", starter: str | None = None, slug: str | None = None) -> dict[str, Any]:
-    """Create an empty view shell (no versions yet — the builder writes v1)."""
+    """Create an empty view shell (no versions yet — the builder writes v1).
+
+    The id is a short, unique, URL-safe slug: ``dividend-income``, then
+    ``dividend-income-2``…
+    """
     with _LOCK:
-        base = _slug(slug or title or prompt)
+        base = _slug(slug or title or prompt)[:36].strip("-") or "view"
         view_id = base
-        while (data_dir() / view_id).exists():
-            view_id = f"{base[:32]}-{uuid.uuid4().hex[:6]}"
+        n = 2
+        while (data_dir() / view_id).exists() or view_id.startswith("_"):
+            view_id = f"{base}-{n}"
+            n += 1
+            if n > 500:
+                view_id = f"{base}-{uuid.uuid4().hex[:6]}"
+                break
         (data_dir() / view_id).mkdir(parents=True)
         existing = list_views()
         meta = {
@@ -189,23 +241,36 @@ def add_history(view_id: str, kind: str, prompt: str) -> None:
         _write_meta(meta)
 
 
-def read_version(view_id: str, version: int | None = None) -> str:
+def read_document(view_id: str, version: int | None = None) -> tuple[int, str, str]:
+    """Return ``(version, kind, content)`` — kind is ``spec`` (JSON) or ``code`` (HTML)."""
     meta = _read_meta(view_id)
-    n = version or meta.get("current_version") or 0
-    path = view_dir(view_id) / f"v{int(n)}.html"
-    if not n or not path.exists():
-        raise ViewNotFound(f"{view_id}@v{n}")
-    return path.read_text(encoding="utf-8")
+    n = int(version or meta.get("current_version") or 0)
+    if not n:
+        raise ViewNotFound(f"{view_id}@v0")
+    for kind, ext in (("spec", "json"), ("code", "html")):
+        path = view_dir(view_id) / f"v{n}.{ext}"
+        if path.exists():
+            return n, kind, path.read_text(encoding="utf-8")
+    raise ViewNotFound(f"{view_id}@v{n}")
 
 
-def save_version(view_id: str, html: str, *, note: str = "", title: str | None = None, description: str | None = None, icon: str | None = None) -> dict[str, Any]:
-    """Persist ``html`` as a new version and make it current."""
+def read_version(view_id: str, version: int | None = None) -> str:
+    return read_document(view_id, version)[2]
+
+
+def save_version(view_id: str, html: str, *, note: str = "", title: str | None = None, description: str | None = None, icon: str | None = None, kind: str = "code") -> dict[str, Any]:
+    """Persist a new version (HTML for ``code``, JSON text for ``spec``) and make it current."""
+    if kind not in ("code", "spec"):
+        raise ValueError("kind must be code or spec")
     with _LOCK:
         meta = _read_meta(view_id)
         n = max((v["version"] for v in meta.get("versions", [])), default=0) + 1
-        (view_dir(view_id) / f"v{n}.html").write_text(html, encoding="utf-8")
-        meta.setdefault("versions", []).append({"version": n, "created_at": _now(), "note": note[:200], "bytes": len(html.encode())})
+        ext = "json" if kind == "spec" else "html"
+        (view_dir(view_id) / f"v{n}.{ext}").write_text(html, encoding="utf-8")
+        meta.setdefault("versions", []).append({"version": n, "created_at": _now(), "note": note[:200], "bytes": len(html.encode()), "kind": kind})
         meta["current_version"] = n
+        meta["kind"] = kind
+        meta["build"] = {"status": "done", "at": _now()}
         meta["updated_at"] = _now()
         if title:
             meta["title"] = title.strip()[:80]
@@ -259,3 +324,55 @@ def set_state(view_id: str, state: dict[str, Any]) -> dict[str, Any]:
         get_state(view_id)  # existence check
         (view_dir(view_id) / "state.json").write_text(raw, encoding="utf-8")
     return state
+
+
+def set_build(view_id: str, status: str, *, error: str | None = None, prompt: str | None = None, suggestions: list[dict[str, Any]] | None = None, job_id: str | None = None) -> None:
+    """Persist the latest build outcome on the view so it survives restarts and
+    crosses processes (the queue worker) — the UI never waits on a build that no
+    longer exists."""
+    with _LOCK:
+        try:
+            meta = _read_meta(view_id)
+        except ViewNotFound:
+            return
+        build: dict[str, Any] = {"status": status, "at": _now()}
+        if error:
+            build["error"] = error[:600]
+        if prompt:
+            build["prompt"] = prompt[:2000]
+        if suggestions:
+            build["suggestions"] = suggestions[:4]
+        if job_id:
+            build["job_id"] = job_id
+        meta["build"] = build
+        _write_meta(meta)
+
+
+def mark_good(view_id: str, version: int) -> dict[str, Any]:
+    """Remember the newest version that rendered cleanly (for one-click recovery)."""
+    with _LOCK:
+        meta = _read_meta(view_id)
+        if not any(v["version"] == version for v in meta.get("versions", [])):
+            raise ViewNotFound(f"{view_id}@v{version}")
+        meta["last_good_version"] = version
+        _write_meta(meta)
+        return public(meta)
+
+
+def fail_stale_builds(max_age_s: float = 0) -> int:
+    """Mark builds still 'queued'/'running' as failed — called at startup (any
+    in-flight build died with the previous process). Returns how many."""
+    n = 0
+    now = datetime.now(timezone.utc)
+    for v in list_views():
+        b = v.get("build") or {}
+        if b.get("status") not in ("queued", "running") or not b.get("job_id"):
+            continue  # no job id = still waiting in the cross-process queue
+        try:
+            age = (now - datetime.fromisoformat(b.get("at"))).total_seconds()
+        except (TypeError, ValueError):
+            age = max_age_s + 1
+        if age >= max_age_s:
+            set_build(v["id"], "error", error="The build was interrupted (the app restarted). Retry to build it again.", prompt=b.get("prompt"))
+            n += 1
+    return n

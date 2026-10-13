@@ -35,7 +35,25 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"), "string timers are not allowed"),
     (re.compile(r"\b(?:localStorage|sessionStorage|indexedDB|document\.cookie|caches)\b"), "browser storage is unavailable — use openpf.state"),
     (re.compile(r"\b(?:window\.)?(?:parent|top|opener)\s*\.\s*(?:postMessage|location|document|window)"), "talking to the parent window directly is not allowed — use the openpf API"),
-    (re.compile(r"\bwindow\.open\s*\(|\blocation\s*\.\s*(?:href|assign|replace)\b|\blocation\s*="), "navigation is not allowed — use openpf.navigate()"),
+    (re.compile(r"\bwindow\.open\s*\(|\bopen\s*\(\s*[\"'`]"), "opening windows is not allowed — use openpf.navigate()"),
+    # A view must never leave its document: no location (read or write), history
+    # jumps, document.write/open, form submits, meta refresh or link targets.
+    (
+        re.compile(
+            r"(?<![\w$-])location\s*(?:\.\s*[a-z]|\[|=(?!=))"
+            r"|\b(?:window|document|self|top|parent|globalThis|frames|this)\s*\.\s*location\b"
+            r"|\[\s*[\"'`]location[\"'`]\s*\]"
+            r"|\{\s*location\s*[,}]"
+        ),
+        "navigation is not allowed — use openpf.navigate() (location is off-limits)",
+    ),
+    (re.compile(r"\bhistory\s*\.\s*(?:go|back|forward|pushState|replaceState)\b|\bnavigation\s*\.\s*navigate\b"), "history navigation is not allowed — use openpf.navigate()"),
+    (re.compile(r"\bdocument\s*\.\s*(?:write|writeln|open)\s*\("), "document.write/open is not allowed — build DOM with openpf.h()"),
+    (re.compile(r"\.\s*(?:submit|requestSubmit)\s*\("), "form submission is not allowed"),
+    (re.compile(r"http-equiv|createElement\s*\(\s*[\"'`](?:meta|base|form|iframe|frame|object|embed|a|portal)[\"'`]", re.I), "creating navigating elements (meta, base, form, frames, links) is not allowed"),
+    (re.compile(r"<\s*a\b[^>]*\bhref\s*=\s*[\"']?(?!#)", re.I), "links are not allowed — use openpf.navigate() or openpf.openTicker()"),
+    (re.compile(r"\btarget\s*=\s*[\"']?_(?:blank|top|parent|self)", re.I), "link targets are not allowed"),
+    (re.compile(r"\bsrcdoc\b", re.I), "srcdoc is not allowed"),
     (re.compile(r"@import\b", re.I), "CSS @import is not allowed"),
     (re.compile(r"url\(\s*[\"']?(?!data:|#|[\"']?\))", re.I), "CSS url() may only reference data: URIs"),
     (re.compile(r"\b(?:src|href|action|xlink:href|srcset|poster)\s*=\s*[\"']?\s*(?!data:)(?://|[a-z][a-z0-9+.-]*:)", re.I), "external src/href references are not allowed"),

@@ -1,5 +1,5 @@
 import { apiClient as api } from './client'
-import type { ViewDocument, ViewJob, ViewMeta, ViewStarter } from '../types/views'
+import type { ViewDocument, ViewJob, ViewMeta, ViewPreset } from '../types/views'
 
 export async function listViews() {
   const { data } = await api.get<ViewMeta[]>('/views')
@@ -61,12 +61,27 @@ export async function getViewData(source: string, params: Record<string, unknown
   return data
 }
 
-export async function listStarters() {
-  const { data } = await api.get<ViewStarter[]>('/views/starters')
+/** Save a viz spec as a view instantly (chat "Pin as view"). */
+export async function pinSpecView(spec: unknown, title?: string) {
+  const { data } = await api.post<ViewMeta>('/views/specs', { spec, title })
   return data
 }
 
-export async function installStarter(slug: string) {
-  const { data } = await api.post<ViewMeta>(`/views/starters/${encodeURIComponent(slug)}/install`)
+export async function listPresets() {
+  const { data } = await api.get<ViewPreset[]>('/views/presets')
   return data
+}
+
+export async function installPreset(slug: string) {
+  const { data } = await api.post<ViewMeta>(`/views/presets/${encodeURIComponent(slug)}/install`)
+  return data
+}
+
+export async function retryView(id: string) {
+  const { data } = await api.post<ViewJob>(`/views/${encodeURIComponent(id)}/retry`)
+  return data
+}
+
+export async function markViewGood(id: string, version: number) {
+  await api.post(`/views/${encodeURIComponent(id)}/good`, { version })
 }

@@ -1,4 +1,7 @@
-# OpenPF View SDK
+# OpenPF View SDK (legacy code views)
+
+> New views are declarative specs — see `VIZ_SPEC.md`. This SDK is only used by the
+> custom-code fallback (requests a spec can't express) and existing code views.
 
 A **view** is one self-contained HTML fragment (markup + inline `<style>` + inline
 `<script>`) rendered inside a locked-down sandbox in the OpenPF app. It reads the
@@ -30,7 +33,7 @@ openpf.ready(async () => {
 - No `<html>/<head>/<body>`. The fragment is placed in the body; the page header (title, description) is rendered by the app — do not repeat the title inside the view.
 - Put all code in `openpf.ready(async () => { … })`. Thrown errors show a friendly error panel with a "Fix it" button.
 - Show skeletons while loading (`<div class="op-skeleton" style="height:240px"></div>`), then replace. Handle empty data with an `.op-empty` message (one calm sentence saying what will appear and when).
-- Size limit 200KB. Forbidden (rejected on save): `fetch`, `XMLHttpRequest`, `WebSocket`, `import`, `eval`, `new Function`, `<iframe>`, `<form>`, `<link>`, `<script src>`, any `http(s)://` URL, `localStorage`, `window.parent/top`, `window.open`, CSS `url()` other than `data:`.
+- Size limit 200KB. Forbidden (rejected on save): `fetch`, `XMLHttpRequest`, `WebSocket`, `import`, `eval`, `new Function`, `<iframe>`, `<form>`, `<link>`, `<script src>`, any `http(s)://` URL, `localStorage`, `window.parent/top`, `window.open`, `location` (any use), `history.*` navigation, `document.write`, form `submit()`, `<a href>` links, `target=`, meta refresh, CSS `url()` other than `data:`. A view never leaves its document — use `openpf.navigate()`.
 
 ## Design rules (it must look native)
 

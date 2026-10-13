@@ -49,7 +49,7 @@ mcp = FastMCP(
         "Views are pages in the OpenPF app built on request from the user's live data "
         "(e.g. 'dividend income by month', 'drift vs my target weights'). Use create_view when the "
         "user asks for a page, dashboard, tracker or chart they want to keep; update_view to change "
-        "one. Builds take ~30-90s. Afterwards tell the user it's pinned in the sidebar and give the "
+        "one. Builds are declarative charts and usually take seconds. If a request is declined (trading, data OpenPF doesn't have), relay the message and the suggested presets. Afterwards tell the user it's pinned in the sidebar and give the "
         "link path (/views/<id>). Views are read-only: they cannot trade."
     ),
 )
@@ -93,6 +93,8 @@ def create_view(prompt: str, title: str = "") -> str:
     full = f"{prompt}\n\n(Title suggestion: {title})" if title.strip() else prompt
     try:
         return _fmt(_queue(full, None))
+    except builder.ViewDeclined as exc:
+        return _fmt({"ok": False, "declined": True} | exc.decline.public())
     except ValueError as exc:
         return _fmt({"ok": False, "error": str(exc)})
 
@@ -110,6 +112,8 @@ def update_view(view_id: str, instruction: str) -> str:
         return _fmt(_queue(instruction, view_id))
     except store.ViewNotFound:
         return _fmt({"ok": False, "error": f"no view with id '{view_id}'"})
+    except builder.ViewDeclined as exc:
+        return _fmt({"ok": False, "declined": True} | exc.decline.public())
     except (ValueError, builder.BuildConflict) as exc:
         return _fmt({"ok": False, "error": str(exc)})
 

@@ -27,6 +27,7 @@
   --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
   color-scheme: dark;
 }
+:root[data-theme='light'] { color-scheme: light; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: transparent; }
 body {
@@ -95,7 +96,7 @@ button { font: inherit; color: inherit; }
 .op-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--border); background: transparent; color: var(--foreground); font-size: 13px; font-weight: 500; cursor: pointer; transition: background 120ms ease; }
 .op-btn:hover { background: var(--accent); }
 .op-btn-primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
-.op-btn-primary:hover { background: color-mix(in oklch, var(--primary) 88%, white); }
+.op-btn-primary:hover { background: color-mix(in oklch, var(--primary) 88%, var(--foreground)); }
 .op-btn-ghost { border-color: transparent; }
 .op-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
 .op-btn:disabled { opacity: 0.5; cursor: default; }
@@ -148,7 +149,7 @@ input.op-input[type='number'] { font-family: var(--font-mono); text-align: right
 .op-clickable:hover .op-hbar-label { color: var(--primary); }
 
 /* tooltip */
-.op-tip { position: fixed; z-index: 50; display: none; pointer-events: none; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; font-size: 12px; box-shadow: 0 8px 24px oklch(0 0 0 / 35%); max-width: 260px; }
+.op-tip { position: fixed; z-index: 50; display: none; pointer-events: none; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; font-size: 12px; box-shadow: 0 8px 24px oklch(0 0 0 / 18%); max-width: 260px; }
 .op-tip-title { color: var(--muted-foreground); margin-bottom: 4px; }
 .op-tip-row { display: flex; align-items: center; gap: 6px; }
 .op-tip-row b { font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; padding-left: 8px; }
@@ -162,6 +163,26 @@ input.op-input[type='number'] { font-family: var(--font-mono); text-align: right
 .op-error { margin-bottom: 16px; padding: 16px; border-radius: calc(var(--radius) * 1.4); border: 1px solid color-mix(in oklch, var(--negative) 35%, transparent); background: color-mix(in oklch, var(--negative) 8%, var(--card)); display: flex; flex-direction: column; gap: 8px; }
 .op-error-title { font-weight: 600; font-size: 14px; }
 .op-error-msg { font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground); word-break: break-word; }
+
+/* progress, chips, segmented control */
+.op-progress { position: relative; height: 10px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.op-progress-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--primary); transition: width 300ms ease; }
+.op-progress-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 2px; background: var(--foreground); opacity: 0.55; }
+.op-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.op-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; font-size: 12px; color: var(--foreground); cursor: default; white-space: nowrap; }
+button.op-chip { cursor: pointer; }
+button.op-chip:hover { background: var(--accent); }
+.op-chip b { font-family: var(--font-mono); font-weight: 500; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.op-chip-dashed { border-style: dashed; color: var(--muted-foreground); }
+.op-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: var(--radius); background: var(--muted); }
+.op-seg button { height: 26px; padding: 0 10px; border: 0; border-radius: calc(var(--radius) - 2px); background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 500; cursor: pointer; }
+.op-seg button[aria-pressed='true'] { background: var(--card); color: var(--foreground); box-shadow: 0 0 0 1px var(--border); }
+.op-list { display: flex; flex-direction: column; }
+.op-list > * + * { border-top: 1px solid var(--border); }
+.op-list-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.op-list-row:first-child { padding-top: 0; }
+.op-list-row:last-child { padding-bottom: 0; }
+input[type='range'].op-range { width: 100%; accent-color: var(--primary); }
 
 /* privacy */
 .op-blur { filter: blur(6px); user-select: none; }

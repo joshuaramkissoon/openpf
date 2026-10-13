@@ -14,7 +14,8 @@ from app.services import views_builder as builder
 from app.services import views_data
 from app.services import views_store as store
 from app.services.views_validate import parse_meta, validate_html
-from app.views_sdk import SDK_DIR, starters
+from app.services.viz_spec import validate_spec
+from app.views_sdk import SDK_DIR, preset_specs, starter
 
 HEADER = '<!-- openpf-view {"title": "T", "description": "d", "icon": "coins"} -->\n'
 OK = HEADER + "<div id='x'></div><script>openpf.ready(async () => { const p = await openpf.data('portfolio') })</script>"
@@ -70,11 +71,14 @@ def test_validation_requires_header_and_size_limit():
     assert any("limit" in p for p in validate_html(OK + "<!--" + "x" * 210_000 + "-->"))
 
 
-def test_starters_pass_validation():
-    shipped = starters()
-    assert {s["slug"] for s in shipped} >= {"dividend-income", "drift-vs-targets", "concentration"}
-    for s in shipped:
-        assert validate_html(s["html"]) == [], s["slug"]
+def test_presets_are_valid_specs_and_code_example_is_valid():
+    specs = preset_specs()
+    assert set(specs) >= {"today", "risk", "currency", "income", "winners-losers", "cash-drag", "isa-allowance", "plays-map"}
+    for slug, raw in specs.items():
+        spec, problems = validate_spec(raw)
+        assert problems == [] and spec, (slug, problems)
+    example = starter("drift-vs-targets")
+    assert example and validate_html(example["html"]) == []
 
 
 # ── builder path restriction ────────────────────────────────────────────
@@ -148,7 +152,10 @@ def test_unknown_source_rejected():
         views_data.resolve(None, "orders_place", {})
     with pytest.raises(views_data.DataSourceError):
         views_data.resolve(None, "__import__", {})
-    assert set(views_data.SOURCES) == {"portfolio", "history", "orders", "dividends", "prices", "quotes", "fundamentals", "watchlist", "proposals", "plays"}
+    assert set(views_data.SOURCES) == {
+        "portfolio", "history", "orders", "dividends", "prices", "quotes", "fundamentals", "watchlist", "proposals", "plays",
+        "profiles", "fx", "cashflows", "news",
+    }
 
 
 @pytest.mark.parametrize(
@@ -175,16 +182,22 @@ def test_truncate_sample_keeps_shape():
 
 
 # ── HTTP ────────────────────────────────────────────────────────────────
-def test_api_install_starter_and_render(views_dir):
+def test_api_install_preset_and_render(views_dir, monkeypatch):
     from app.main import app
+    from app.services import views_presets
 
+    monkeypatch.setattr(views_presets, "_signals", lambda db, currency: {})
     client = TestClient(app)
-    listed = client.get("/api/views/starters").json()
-    assert any(s["slug"] == "drift-vs-targets" for s in listed)
-    meta = client.post("/api/views/starters/drift-vs-targets/install").json()
-    assert meta["current_version"] == 1 and meta["icon"] == "target"
+    listed = client.get("/api/views/presets").json()
+    assert {p["slug"] for p in listed} >= {"today", "isa-allowance"}
+    assert all(p["why"] for p in listed)
+    meta = client.post("/api/views/presets/risk/install").json()
+    assert meta["current_version"] == 1 and meta["icon"] == "shield" and meta["kind"] == "spec" and meta["id"] == "risk"
     doc = client.get(f"/api/views/{meta['id']}/html").json()
-    assert doc["problems"] == [] and "openpf.state" in doc["html"]
+    assert doc["kind"] == "spec" and doc["problems"] == [] and doc["spec"]["title"] == "Where's my risk"
+    again = client.post("/api/views/presets/risk/install").json()
+    assert again["id"] == "risk-2"  # unique, readable slugs
+    assert client.post("/api/views/presets/nope/install").status_code == 404
     assert client.put(f"/api/views/{meta['id']}/state", json={"band": 0.03}).json() == {"band": 0.03}
     assert client.post("/api/views/data", json={"source": "nope"}).status_code == 400
     assert client.get("/api/views/missing-view").status_code == 404
@@ -232,7 +245,7 @@ def test_plays_source_reads_plays_service():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         out = views_data.resolve(db, "plays", {})
-        assert out == {"available": True, "plays": []}
+        assert out == {"available": True, "plays": [], "owners": []}
         with pytest.raises(views_data.DataSourceError):
             views_data.resolve(db, "plays", {"status": "deleted"})
 

@@ -77,6 +77,19 @@ def _round(value: Any, digits: int = 4) -> float | None:
     return round(f, digits)
 
 
+def _epoch_date(value: Any) -> str | None:
+    """yfinance gives some dates as epoch seconds; return ISO ``YYYY-MM-DD``."""
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0 or ts != ts:
+        return None
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts, timezone.utc).date().isoformat()
+
+
 def _get_info(yf_ticker: str) -> dict[str, Any]:
     """Fetch ``.info`` for a ticker, raising a consistent error on failure."""
     try:
@@ -146,7 +159,12 @@ def get_fundamentals_snapshot(ticker: str) -> dict[str, Any]:
         "earnings_growth": _round(info.get("earningsGrowth")),
         # Income/risk
         "dividend_yield": _round(info.get("dividendYield")),
+        "dividend_rate": _round(info.get("dividendRate")),
+        "ex_dividend_date": _epoch_date(info.get("exDividendDate")),
         "beta": _round(info.get("beta"), 3),
+        # Classification (country of domicile; quote type EQUITY / ETF / ...)
+        "country": info.get("country"),
+        "quote_type": info.get("quoteType"),
     }
 
     return _cache_set(key, payload)
