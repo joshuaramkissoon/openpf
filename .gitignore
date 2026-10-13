@@ -66,3 +66,6 @@ docs/reviews/
 
 # Views (agent-built pages; user data)
 backend/data/views/
+
+# Recipes made by you or Archie (personal data; built-ins ship in backend/app/recipes_builtin)
+backend/data/recipes/

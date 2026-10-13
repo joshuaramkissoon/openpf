@@ -398,3 +398,67 @@ class Play(Base):
 
     source_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class Recipe(Base):
+    """A recipe: a skill Archie runs (instructions in a SKILL.md) + a trigger +
+    delivery. Instructions only — a recipe can never grant tools, touch risk
+    rails or execute anything; runs use the scheduled-task MCP context, so the
+    most a recipe can do is create proposals. Versions live in RecipeVersion."""
+
+    __tablename__ = "recipes"
+
+    slug: Mapped[str] = mapped_column(String(48), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    source: Mapped[str] = mapped_column(String(16), default="user")  # builtin | user
+    created_by: Mapped[str] = mapped_column(String(16), default="user")  # builtin | user | archie
+    title: Mapped[str] = mapped_column(String(80), default="")
+    summary: Mapped[str] = mapped_column(String(300), default="")
+    icon: Mapped[str] = mapped_column(String(40), default="sparkles")
+    body: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # {"kind": "manual"} | {"kind": "schedule", "cron", "timezone"} |
+    # {"kind": "event", "event": "earnings_week"|"big_move", "threshold_pct"?}
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    delivery: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # {"home": true, "telegram": bool}
+    current_version: Mapped[int] = mapped_column(Integer, default=0)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class RecipeVersion(Base):
+    """Immutable snapshot of a recipe after each change (for diff + revert)."""
+
+    __tablename__ = "recipe_versions"
+    __table_args__ = (UniqueConstraint("slug", "version", name="uq_recipe_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    slug: Mapped[str] = mapped_column(String(48), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    author: Mapped[str] = mapped_column(String(16), default="user")  # builtin | user | archie
+    note: Mapped[str] = mapped_column(String(240), default="")
+    title: Mapped[str] = mapped_column(String(80), default="")
+    summary: Mapped[str] = mapped_column(String(300), default="")
+    icon: Mapped[str] = mapped_column(String(40), default="sparkles")
+    body: Mapped[str] = mapped_column(Text, default="")
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    delivery: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class RecipeSuggestion(Base):
+    """A change Archie proposed from an unattended (scheduled) run. Never applied
+    until the user approves it — news text can't rewrite the harness."""
+
+    __tablename__ = "recipe_suggestions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    slug: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)  # None → new recipe
+    action: Mapped[str] = mapped_column(String(16), default="update")  # create | update | enable | disable
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(String(600), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending | accepted | dismissed
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

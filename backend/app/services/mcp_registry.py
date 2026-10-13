@@ -171,6 +171,16 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
         tools=("list_views", "create_view", "update_view"),
         contexts=frozenset({CHAT}),
     ),
+    # Recipes: Archie's own harness (skills + triggers). Instructions only — no
+    # tool grants, no rails. From SCHEDULED (unattended) runs, create/update/
+    # enable only record a suggestion the user must approve (see
+    # recipes_service.request_change; the server reads OPENPF_MCP_CONTEXT).
+    McpServerSpec(
+        name="recipes",
+        script="recipes.py",
+        tools=("list_recipes", "get_recipe", "create_recipe", "update_recipe", "set_recipe_enabled"),
+        contexts=frozenset({CHAT, SCHEDULED}),
+    ),
 )
 
 
@@ -260,11 +270,14 @@ def build_mcp_servers(context: str) -> tuple[dict[str, Any], list[str]]:
     for spec in MCP_SERVERS:
         if context not in spec.contexts or not spec.script_path.is_file():
             continue
+        env = mcp_server_env(spec)
+        # Lets a server tell attended (chat) from unattended (scheduled) calls.
+        env["OPENPF_MCP_CONTEXT"] = context
         servers[spec.name] = {
             "type": "stdio",
             "command": sys.executable,
             "args": [str(spec.script_path)],
-            "env": mcp_server_env(spec),
+            "env": env,
         }
         allowed.extend(spec.tool_ids)
     return servers, allowed

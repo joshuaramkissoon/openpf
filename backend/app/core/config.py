@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     # Where view HTML/versions/state live. Relative paths resolve from backend/.
     views_data_dir: str = Field(default="data/views", alias="VIEWS_DATA_DIR")
 
+    # Recipes — Archie's own harness (skills + triggers). User/Archie-made recipes
+    # are personal data and live here (gitignored); built-ins ship in the repo.
+    recipes_data_dir: str = Field(default="data/recipes", alias="RECIPES_DATA_DIR")
+    recipes_model: str = Field(default="claude-sonnet-4-6", alias="RECIPES_MODEL")
+
     @model_validator(mode="after")
     def _legacy_sqlite_fallback(self) -> "Settings":
         self.database_url = resolve_legacy_sqlite_url(self.database_url)

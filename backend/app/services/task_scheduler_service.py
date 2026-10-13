@@ -228,36 +228,11 @@ def _persist_goal_proposals(
     db.commit()
     return {"created": len(pending), "run_id": run.id}
 
+# The morning brief, watchlist review and weekly review used to live here as
+# plain prompts. They're now built-in *recipes* (backend/app/recipes_builtin):
+# real skills the user can edit, version and revert. recipes_service adopts any
+# existing rows (and their run history) on first sync.
 _DEFAULT_TASKS: list[dict[str, Any]] = [
-    {
-        "name": "morning_brief",
-        "cron_expr": "0 7 * * 1-5",
-        "timezone": "Europe/London",
-        "model": settings.claude_model,  # Sonnet — strong enough to triage news, lighter for a daily run
-        "enabled": True,
-        "meta": {
-            "task_kind": "claude",
-            "description": "Curated pre-open brief — what matters today across your holdings + macro",
-        },
-        "prompt": (
-            "Produce the user's pre-open MARKET BRIEF as a tight markdown artifact. The goal: they have no time to "
-            "follow news, so YOU read everything and surface only what matters. Steps:\n\n"
-            "1. Pull current holdings via the T212 tools; focus on the top ~8 by value (both Invest + ISA).\n"
-            "2. For those names, call `get_company_news` (since_days=1) and `get_earnings` — note any earnings "
-            "within ~7 days.\n"
-            "3. Call `get_market_news` and `get_macro_snapshot` for the wider picture (yields, VIX, USD/GBP, "
-            "Fed funds) and read the current market regime if available.\n"
-            "4. Skim active theses/market_views in memory; flag any news that supports or threatens one.\n\n"
-            "Then CURATE hard. Output ONLY:\n"
-            "- **Top 3-5 things that matter today** — each: one-line what + why-it-matters-to-your-book + an "
-            "optional 'consider:' action. Tie each to a holding or a real macro move.\n"
-            "- **Macro line**: 10Y/2Y, VIX, USD/GBP with the day's direction.\n"
-            "- **On the radar**: earnings/events in the next 7 days for held names.\n\n"
-            "RULES: portfolio-relevant only. Ignore aggregator/SEO filler (e.g. 'most active stocks today', "
-            "generic listicles). If nothing is material, say so in one line — do NOT manufacture noise. No raw "
-            "headline dumps. Keep it a genuine 2-minute read."
-        ),
-    },
     {
         "name": "watch_cycle",
         "cron_expr": "0 8-21 * * 1-5",
@@ -274,35 +249,6 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "Deterministic watch cycle: run portfolio-scoped watches (concentration breach, thesis "
             "invalidation, earnings within 3 days, big intraday moves on holdings) and raise ranked, "
             "deduped alerts to the Attention inbox. Materiality-gated; no LLM call."
-        ),
-    },
-    {
-        "name": "watchlist_review",
-        "cron_expr": "15 7 * * 1-5",
-        "timezone": "Europe/London",
-        "model": settings.claude_model,  # Sonnet — reads notes + triages fresh data, no execution
-        "enabled": True,
-        "meta": {
-            "task_kind": "claude",
-            "description": "Daily reasoned review of the watchlist → flags worth-noticing items into Attention",
-        },
-        "prompt": (
-            "Review the user's WATCHLIST and resurface anything worth noticing — the watchlist must never "
-            "become a graveyard. Steps:\n\n"
-            "1. Call `list_watchlist` (status=watching). For EACH item, the `note` is the *reason* it's "
-            "being watched — that note is your watch condition.\n"
-            "2. For each item, gather fresh context: `get_company_news` (since_days=1) and `get_earnings` "
-            "for catalysts; marketdata `get_price_snapshot` / `get_technical_snapshot` for price + technicals; "
-            "and a Kronos `forecast_prices` read when the note is about timing/entry.\n"
-            "3. JUDGE, per item: is the stated reason now PLAYING OUT (entry setup triggered, catalyst hit, "
-            "target approached), BREAKING (thesis for watching invalidated), or UNCHANGED?\n"
-            "4. Only when something is MATERIAL relative to the note, call `flag_watchlist_item` with a tight "
-            "title, a detail grounded in the data you just pulled, an optional `consider:` action, and a "
-            "severity (info/warning/critical). If a name has clearly graduated to a real setup, you may also "
-            "`update_watchlist_item` (e.g. raise conviction, set a target_price/target_direction, or note the "
-            "change). Do NOT flag routine noise — if nothing is material, flag nothing.\n\n"
-            "Then write a short markdown artifact: one line per item (PLAYING OUT / BREAKING / UNCHANGED + a "
-            "few words), and list what you flagged. Keep it a genuine 1-minute read."
         ),
     },
     {
@@ -370,35 +316,6 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "Deterministic portfolio rebalance check: aggregate holdings by ticker across accounts, "
             "flag any name over its concentration cap, and queue minimum-turnover trim proposals for "
             "approval. Renders a markdown report; never auto-executes."
-        ),
-    },
-    {
-        "name": "weekly_review",
-        "cron_expr": "0 10 * * 0",
-        "timezone": "Europe/London",
-        "model": settings.claude_agent_model,
-        "enabled": True,
-        "meta": {
-            "task_kind": "claude",
-            "description": "Weekly strategy review and policy suggestions",
-        },
-        "prompt": (
-            "Produce a weekly strategy review artifact. Follow these steps:\n\n"
-            "1. **Portfolio snapshot**: Use T212 MCP tools to pull current ISA positions and account summary "
-            "(balances, holdings). For current prices and technicals of held tickers, use marketdata MCP tools. "
-            "Summarise total value, cash available, and top holdings.\n\n"
-            "2. **Leveraged positions**: List any open leveraged positions with current P&L, "
-            "entry price, and days held. Use marketdata MCP for current prices. If none, state that clearly.\n\n"
-            "3. **Market context**: Use marketdata MCP to get price and technicals for key indices "
-            "(SPY, QQQ) and any leveraged products held. Summarise trend, RSI, and notable moves.\n\n"
-            "4. **Trade log review**: Read memory/decisions/ for this month's trade decisions. "
-            "Summarise wins, losses, and patterns. If no trades yet, note that.\n\n"
-            "5. **Lessons & recommendations**: Based on the above, provide 2-3 actionable takeaways "
-            "and any suggested changes to position sizing, stop-loss levels, or strategy.\n\n"
-            "6. **Policy updates** (optional): If risk rails or trading parameters should change, "
-            "include a JSON block with key policy_updates.\n\n"
-            "Format your response as a clean, readable markdown report with headers and tables. "
-            "This is your final artifact — make it polished and information-dense, not a thinking log."
         ),
     },
     # ── Agentic alpha loop — three reasoned passes a day (open / midday / EOD) ──
@@ -683,6 +600,12 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _recipe_plugins() -> list[dict[str, str]]:
+    from app.services.claude_sdk_config import recipe_plugins
+
+    return recipe_plugins()
+
+
 def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
@@ -734,6 +657,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         max_turns=settings.agent_max_turns,
         hooks=build_security_hooks(),
         agents=build_subagents(),
+        plugins=_recipe_plugins(),
     )
 
     async def _run() -> tuple[str, dict]:
@@ -1186,6 +1110,14 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
+    if kind == "recipe":
+        # A user/Archie/built-in recipe: a validated skill run in this same
+        # SCHEDULED context (propose-only). May return "skipped" when an event
+        # trigger's deterministic gate doesn't pass.
+        from app.services.recipes_service import run_recipe_task
+
+        return run_recipe_task(db, task)
+
     if kind == "watch_cycle":
         # The 'Spot' layer: deterministic watches → ranked Alerts in the
         # Attention inbox. Materiality-gated + deduped; never an LLM run.
@@ -1275,6 +1207,16 @@ def _touch_task_after_run(db: Session, task: ScheduledTask, *, status: str, bloc
     db.commit()
 
 
+def _finish_skipped(db: Session, task: ScheduledTask) -> None:
+    """A gated run (e.g. an event recipe whose condition didn't hold): no log,
+    no run count — just move on to the next check."""
+    if task.last_status == "running":
+        task.last_status = "idle"
+    task.next_run_at = _next_run_utc(task.cron_expr, task.timezone, _utcnow())
+    db.add(task)
+    db.commit()
+
+
 def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
     task = db.get(ScheduledTask, task_id)
     if not task:
@@ -1282,6 +1224,9 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
 
     try:
         status, payload, output_path, cost_info = _run_task_impl(db, task)
+        if status == "skipped":
+            _finish_skipped(db, task)
+            return {"task": _serialize_task(task), "status": status, "payload": payload, "output_path": None}
         blocked = bool(payload.get("blocked"))
         _record_log(
             db,
@@ -1341,6 +1286,9 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                 return
             try:
                 status, payload, output_path, cost_info = _run_task_impl(bg_db, bg_task)
+                if status == "skipped":
+                    _finish_skipped(bg_db, bg_task)
+                    return
                 blocked = bool(payload.get("blocked"))
                 _record_log(
                     bg_db,
