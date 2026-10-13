@@ -483,10 +483,30 @@ def _plays(db: Session, params: dict[str, Any]) -> dict[str, Any]:
             positions = _portfolio(db, {"currency": params.get("currency")})["positions"]
         except Exception:  # noqa: BLE001 — plays still render without live values
             logger.warning("plays source: portfolio unavailable for rings", exc_info=True)
+    # Ownership (owned / related / bench) comes from the book model when it is
+    # available; the adapter below falls back to legs + overlap otherwise.
+    book_ctx = None
+    if rows:
+        try:
+            from app.services import plays_service as _ps
+
+            book_ctx = _ps.book_context(db)
+        except Exception:  # noqa: BLE001
+            logger.warning("plays source: book ownership unavailable", exc_info=True)
     plays = []
     owner: dict[str, str] = {}
     for p in rows:
         s = serialize_play(p)
+        if book_ctx is not None:
+            try:
+                from app.services import book_service
+
+                g = book_service.play_rings(db, p, book=book_ctx)
+                s["owned"] = [{"ticker": h.get("ticker"), "name": h.get("name")} for h in g.get("owned") or []]
+                s["related"] = [{"ticker": h.get("ticker"), "name": h.get("name"), "why": h.get("why")} for h in g.get("related") or []]
+                s["bench"] = [{"ticker": h.get("ticker"), "name": h.get("name"), "why": h.get("why")} for h in g.get("bench") or []]
+            except Exception:  # noqa: BLE001 — fall back to the legs/overlap shape
+                logger.warning("plays source: rings from book failed for %s", p.id, exc_info=True)
         out = {k: s.get(k) for k in ("id", "title", "thesis", "status", "conviction", "horizon_months", "account_kind", "budget_gbp", "legs", "kill_criteria", "review", "created_at", "activated_at")}
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         out["benchmark"] = meta.get("benchmark")
