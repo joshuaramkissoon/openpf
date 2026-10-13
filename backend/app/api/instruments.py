@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -28,7 +29,8 @@ from app.schemas.instruments import (
     InstrumentThesis,
     InstrumentWatchlist,
 )
-from app.services import leveraged_market, portfolio_service, watchlist_service
+from app.services import instrument_insight as instrument_insight_service
+from app.services import leveraged_market, portfolio_service, proposal_service, watchlist_service
 
 router = APIRouter(prefix="/instruments", tags=["instruments"])
 
@@ -260,4 +262,50 @@ def instrument_detail(
         target_direction=target_direction,
         target_distance_pct=target_distance_pct,
         display_currency=display_currency,
+    )
+
+
+# ── Insight: the stock sheet's single aggregated payload ─────────────────────
+
+
+@router.get("/{ticker}/insight")
+def instrument_insight(
+    ticker: str,
+    wait: float = Query(instrument_insight_service.DEFAULT_WAIT_S, ge=0.0, le=8.0, description="seconds to wait for slow sections"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Everything the instrument sheet shows, section by section. Every section
+    is optional (null/empty when its source is missing); sections still loading
+    are named in ``pending`` — re-request to pick them up from the cache."""
+    try:
+        return instrument_insight_service.build_insight(ticker, db, wait_s=wait)
+    except instrument_insight_service.UnknownInstrument:
+        raise HTTPException(status_code=404, detail=f"Unknown instrument {ticker!r}")
+
+
+class ProposeFromSheet(BaseModel):
+    side: str
+    account_kind: str
+    notional_gbp: float | None = Field(default=None, gt=0)
+    quantity: float | None = Field(default=None, gt=0)
+    rationale: str = ""
+
+
+@router.post("/{ticker}/propose")
+def propose_from_sheet(ticker: str, body: ProposeFromSheet, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Create a *proposed* trade intent from the sheet's sizer. Never executes:
+    it goes through the same validation and rails as Archie's proposals and
+    waits for a human to approve it in Decisions."""
+    ident = instrument_insight_service.resolve(ticker, db)
+    rationale = body.rationale.strip() or f"Sized by hand from the {ident['display_ticker']} sheet."
+    return proposal_service.propose_trade(
+        db,
+        side=body.side,
+        account_kind=body.account_kind,
+        rationale=rationale,
+        symbol=None if ident.get("instrument_code") else ident["display_ticker"],
+        instrument_code=ident.get("instrument_code"),
+        quantity=body.quantity,
+        notional_gbp=body.notional_gbp,
+        source="instrument_sheet",
     )
