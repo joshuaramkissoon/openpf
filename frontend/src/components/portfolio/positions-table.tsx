@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -46,11 +46,14 @@ export function PositionsTable({
   accountView,
   displayCurrency,
   onSelect,
+  renderOwner,
 }: {
   positions: PositionItem[]
   accountView: "all" | "invest" | "stocks_isa"
   displayCurrency: "GBP" | "USD"
   onSelect: (position: PositionItem) => void
+  /** Optional "Play" column — who owns the holding (a play, Core or Unsorted). */
+  renderOwner?: (position: PositionItem) => ReactNode
 }) {
   const [expanded, setExpanded] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>("value")
@@ -121,6 +124,7 @@ export function PositionsTable({
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <SortHead sortKey="ticker" label="Symbol" align="left" />
+                {renderOwner ? <TableHead className="text-xs text-muted-foreground">Play</TableHead> : null}
                 <SortHead sortKey="quantity" label="Qty" />
                 <SortHead sortKey="invested" label="Invested" />
                 <SortHead sortKey="value" label="Value" />
@@ -144,6 +148,7 @@ export function PositionsTable({
                       </Badge>
                     </div>
                   </TableCell>
+                  {renderOwner ? <TableCell className="py-1.5">{renderOwner(p)}</TableCell> : null}
                   <TableCell className="text-right font-mono text-muted-foreground tabular-nums">
                     {p.quantity.toFixed(2)}
                   </TableCell>

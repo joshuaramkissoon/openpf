@@ -29,3 +29,8 @@ export function PlaysPage({ route }: { route: Route }) {
 export function PlaysHomeCard() {
   return <PlaysHomeSummary />
 }
+
+export { BookByPlay, AllocationBar } from './book-card'
+export { OwnerMenu, useBook, reloadBook, holdingKey, Swatch } from './book'
+export { SortHoldingsSheet } from './suggestions'
+export type { Book, BookGroup, BookHolding, ThemeRisk } from './types'

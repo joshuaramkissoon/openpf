@@ -309,6 +309,11 @@ export interface TradeIntent {
   source?: string | null
   play_id?: string | null
   play_title?: string | null
+  /** "For which play?" — 'play' | 'core' | null (not part of any play). */
+  owner_kind?: 'play' | 'core' | null
+  owner_play_id?: string | null
+  owner_label?: string | null
+  owner_inferred?: boolean
   approved_at?: string | null
   executed_at?: string | null
   broker_order_id?: string | null

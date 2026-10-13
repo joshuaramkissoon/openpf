@@ -8,7 +8,7 @@ import { AllocationCard } from "@/components/portfolio/allocation-card"
 import { RebalanceCard } from "@/components/portfolio/rebalance-card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { PlaysHomeCard } from "@/features/plays"
+import { BookByPlay, OwnerMenu, holdingKey, useBook } from "@/features/plays"
 import { useAppActions } from "@/lib/app-actions"
 import type { Route } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -19,7 +19,7 @@ import type { ProposalsState } from "@/app/hooks/use-proposals"
 
 import { DecisionsCard } from "./decisions-card"
 import { SignalRow } from "./decision-rows"
-import { HoldingsSummary, RiskChips } from "./holdings-summary"
+import { RiskChips } from "./holdings-summary"
 import { HomeHero } from "./hero"
 import { TodayCard } from "./today-card"
 import { signalPrompt, useSignals } from "./use-signals"
@@ -48,6 +48,16 @@ function HomeOverview({ portfolio, proposals, config, brokerMode }: HomeProps) {
     <div className="space-y-10">
       <HomeHero portfolio={portfolio} />
 
+      {/* The book by play leads: every holding has one owner — a play, Core or Unsorted. */}
+      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
+        <div className="min-w-0 lg:col-span-3">
+          <BookByPlay bump={portfolio.lastUpdate ? portfolio.lastUpdate.slice(0, 16) : null} />
+        </div>
+        <div className="min-w-0 lg:col-span-2">
+          <RiskChips snapshot={snapshot} positions={positions} config={config} />
+        </div>
+      </div>
+
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
         <div className="min-w-0 lg:col-span-3">
           <DecisionsCard
@@ -61,17 +71,6 @@ function HomeOverview({ portfolio, proposals, config, brokerMode }: HomeProps) {
         </div>
         <div className="min-w-0 lg:col-span-2">
           <TodayCard />
-        </div>
-      </div>
-
-      <PlaysHomeCard />
-
-      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
-        <div className="min-w-0 lg:col-span-3">
-          <HoldingsSummary snapshot={snapshot} positions={positions} />
-        </div>
-        <div className="min-w-0 lg:col-span-2">
-          <RiskChips snapshot={snapshot} positions={positions} config={config} />
         </div>
       </div>
     </div>
@@ -142,6 +141,8 @@ function SignalsPage() {
 function HoldingsPage({ portfolio }: { portfolio: PortfolioState }) {
   const { openTicker } = useAppActions()
   const { snapshot, positions, accountView, currency } = portfolio
+  const { book } = useBook()
+  const byKey = new Map((book?.holdings ?? []).map((h) => [h.key, h]))
   return (
     <div className="space-y-6">
       <div>
@@ -157,6 +158,18 @@ function HoldingsPage({ portfolio }: { portfolio: PortfolioState }) {
             accountView={accountView}
             displayCurrency={currency}
             onSelect={(p) => openTicker(p.ticker)}
+            renderOwner={(p) => {
+              const h = byKey.get(holdingKey(p.account_kind, p.display_ticker || p.ticker))
+              return h ? (
+                <OwnerMenu
+                  ticker={h.ticker}
+                  owner={h.owner}
+                  relatedTo={h.related_to}
+                  accountKind={h.account_kind}
+                  className="max-w-[11rem]"
+                />
+              ) : null
+            }}
           />
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="min-w-0">

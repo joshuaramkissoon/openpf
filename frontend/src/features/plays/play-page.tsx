@@ -5,6 +5,16 @@ import { toast } from 'sonner'
 
 import { Money, PctDelta } from '@/components/kit'
 import { RichMarkdown } from '@/components/RichMarkdown'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -19,7 +29,9 @@ import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
 import { accountLabel, formatPercent } from '@/utils/format'
 import { deletePlay, getPerformance, getPlay, runReview, stageTranche, updatePlay } from './api'
-import { BasketEditor, Block, KillList, LegsTable, OverlapCallout, SizingPanel, TranchePlan } from './parts'
+import { reloadBook, useBook } from './book'
+import { BasketEditor, Block, KillList, OverlapCallout, SizingPanel, TranchePlan } from './parts'
+import { PlayRings } from './rings'
 import type { Play, PlayLeg, PlayPerformance, StageResult } from './types'
 import { ConvictionDots, Eyebrow, Meter, StatusChip, VerdictChip } from './ui'
 
@@ -138,6 +150,7 @@ function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => vo
         const res = await stageTranche(p.id, 0)
         stageToast(res, navigate)
         refresh()
+        void reloadBook()
         p = await getPlay(p.id)
       } else {
         toast.success('Play activated', { description: 'Stage the first tranche when you are ready.' })
@@ -264,7 +277,10 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
   const [staging, setStaging] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [legs, setLegs] = useState<PlayLeg[]>(play.legs)
+  const { book } = useBook(play.updated_at)
+  const group = book?.groups.find((g) => g.play_id === play.id) ?? null
 
   const loadPerf = useCallback(async () => {
     try {
@@ -285,6 +301,7 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
       const res = await stageTranche(play.id, index)
       stageToast(res, navigate)
       refresh()
+      void reloadBook()
       onChange(await getPlay(play.id))
     } catch (e) {
       toastApiError(e, 'Could not stage the tranche')
@@ -296,6 +313,7 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
   async function setStatus(status: Play['status']) {
     try {
       onChange(await updatePlay(play.id, { status }))
+      void reloadBook()
     } catch (e) {
       toastApiError(e, 'Could not update the play')
     }
@@ -325,7 +343,12 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
 
   async function remove() {
     try {
+      const n = group?.holdings_count ?? 0
       await deletePlay(play.id)
+      void reloadBook()
+      toast.success(`Deleted “${play.title}”`, {
+        description: n ? `${n} holding${n === 1 ? '' : 's'} moved to Unsorted. Nothing was sold.` : undefined,
+      })
       navigate('/plays')
     } catch (e) {
       toastApiError(e, 'Could not delete')
@@ -395,11 +418,30 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
                 ) : (
                   <DropdownMenuItem onClick={() => void setStatus('active')}>Reopen</DropdownMenuItem>
                 )}
-                <DropdownMenuItem variant="destructive" onClick={() => void remove()}>
+                <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(true)}>
                   Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete “{play.title}”?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {group?.holdings_count
+                      ? `Its ${group.holdings_count} holding${group.holdings_count === 1 ? '' : 's'} move to Unsorted — nothing is sold. `
+                      : ''}
+                    Proposals it already staged stay in your queue. To keep the history, close the play instead.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+                    Delete play
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
       </div>
@@ -409,12 +451,21 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
           <Money value={play.budget_gbp} decimals={0} />
           <Sub>{formatPercent(play.budget_pct_of_book, 1)} of book</Sub>
         </Stat>
-        <Stat label="Exposure">
-          {perf ? <Money value={perf.held_gbp} decimals={0} /> : <Skeleton className="h-7 w-24" />}
-          {deployed != null ? <Meter value={deployed} className="mt-2" /> : null}
+        <Stat label="Owned">
+          {group ? <Money value={group.value_gbp} decimals={0} /> : perf ? <Money value={perf.held_gbp} decimals={0} /> : <Skeleton className="h-7 w-24" />}
+          {deployed != null && tranches.length ? <Meter value={deployed} className="mt-2" /> : null}
           <Sub>
-            {perf ? <>of <Money value={perf.target_exposure_gbp} decimals={0} /> target · </> : null}
-            {staged.length}/{tranches.length} tranches
+            {group ? (
+              <>
+                {formatPercent(group.weight, 1)} of book
+                {group.effective_weight != null && group.effective_weight - group.weight >= 0.001
+                  ? ` · ${formatPercent(group.effective_weight, 1)} incl. related`
+                  : ''}
+              </>
+            ) : perf ? (
+              <>of <Money value={perf.target_exposure_gbp} decimals={0} /> target</>
+            ) : null}
+            {tranches.length ? ` · ${staged.length}/${tranches.length} tranches` : ''}
           </Sub>
         </Stat>
         <Stat label={`Return vs ${perf?.benchmark ?? 'SPY'}`}>
@@ -439,17 +490,28 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
         </Stat>
       </div>
 
+      {group?.needs.length ? (
+        <ul className="-mt-4 flex flex-wrap gap-x-6 gap-y-1.5">
+          {group.needs.map((n) => (
+            <li key={n.text} className="flex items-center gap-2 text-sm">
+              <span className={cn('size-1.5 rounded-full', n.tone === 'critical' ? 'bg-negative' : n.tone === 'warn' ? 'bg-warning' : 'bg-muted-foreground/50')} />
+              {n.text}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {perf && perf.points.length > 1 ? (
         <Block title="Basket vs benchmark" description={`Target-weighted, since activation · ${perf.benchmark} dashed`}>
           <PerfChart points={perf.points} />
         </Block>
       ) : null}
 
-      <Block
-        title="Basket"
-        description={editing ? 'Adjust weights — future tranches use the new mix' : 'Target vs what you hold in this account'}
-        action={
-          editing ? (
+      {editing ? (
+        <Block
+          title="Basket plan"
+          description="Adjust target weights — future tranches use the new mix"
+          action={
             <>
               <Button size="sm" variant="ghost" onClick={() => { setLegs(play.legs); setEditing(false) }}>
                 Cancel
@@ -458,19 +520,14 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
                 Save
               </Button>
             </>
-          ) : null
-        }
-      >
-        {editing ? (
+          }
+        >
           <BasketEditor legs={legs} allocations={play.sizing.allocations} onChange={setLegs} />
-        ) : perf ? (
-          <LegsTable legs={perf.legs} built={perf.basket_built} />
-        ) : perfError ? (
-          <p className="text-sm text-muted-foreground">Live positions are unavailable right now.</p>
-        ) : (
-          <Skeleton className="h-40 w-full" />
-        )}
-      </Block>
+        </Block>
+      ) : null}
+
+      <PlayRings play={play} onPlayChange={onChange} />
+      {perfError && !perf ? <p className="-mt-6 text-xs text-muted-foreground">Live performance is unavailable right now.</p> : null}
 
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-2">
         <Block title="Entry plan" description={remaining > 0 ? `${remaining} tranche${remaining === 1 ? '' : 's'} to go` : 'Fully staged'}>

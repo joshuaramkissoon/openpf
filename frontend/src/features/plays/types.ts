@@ -108,6 +108,8 @@ export interface Play {
   kill_criteria: KillCriterion[]
   what_would_change_my_mind: string
   review: PlayReview
+  related?: { ticker: string; why: string }[]
+  bench?: { ticker: string; name?: string; why: string; instrument_verified?: boolean }[]
   source_session_id: string | null
   meta: {
     idea?: string
@@ -115,6 +117,8 @@ export interface Play {
     key_risks?: string[]
     overlap?: OverlapRow[]
     conviction_source?: 'user' | 'archie'
+    origin?: 'adopted'
+    dropped_legs?: string[]
   }
 }
 
@@ -153,8 +157,143 @@ export interface DraftJob {
   progress: { at: string; text: string }[]
   play_id: string | null
   error: string | null
+  error_kind?: 'unclear_idea' | 'no_instruments' | 'interrupted' | 'model' | 'failed' | null
+  retryable?: boolean
+  idea?: string | null
+  request?: DraftRequest
   started_at: string
   finished_at: string | null
+}
+
+// ── The book by play ─────────────────────────────────────────────────────────
+
+export type OwnerKind = 'play' | 'core' | 'unsorted'
+
+export interface HoldingOwner {
+  kind: OwnerKind
+  play_id: string | null
+  title: string
+  status: PlayStatus | null
+  /** user | archie | suggestion | system (explicit) · basket | default (derived) */
+  source: string
+}
+
+export interface BookHolding {
+  key: string
+  account_kind: PlayAccount
+  ticker: string
+  instrument_code: string | null
+  name: string
+  value_gbp: number
+  ppl_gbp: number
+  weight: number
+  owner: HoldingOwner
+  related_to: { play_id: string; title: string; why: string }[]
+}
+
+export interface OwnedHolding extends BookHolding {
+  is_leg?: boolean
+  target_weight?: number | null
+  share_of_play?: number
+  why?: string
+}
+
+export interface RelatedHolding {
+  key: string
+  ticker: string
+  account_kind: PlayAccount
+  name: string
+  value_gbp: number
+  weight: number
+  owner: HoldingOwner
+  why: string
+  source: 'basket' | 'user'
+}
+
+export interface BenchItem {
+  ticker: string
+  name: string
+  why: string
+  in_plan: boolean
+  target_weight: number | null
+  instrument_verified?: boolean
+}
+
+export type NeedKind = 'kill_tripped' | 'kill_near' | 'tranche_due' | 'drift_over' | 'drift_under' | 'empty' | 'awaiting' | 'draft'
+
+export interface Need {
+  kind: NeedKind
+  tone: 'critical' | 'warn' | 'info'
+  text: string
+}
+
+export interface BookGroup {
+  kind: OwnerKind
+  id: string
+  play_id: string | null
+  title: string
+  status: PlayStatus | null
+  conviction?: Conviction
+  account_kind?: PlayAccount
+  color_index?: number
+  value_gbp: number
+  ppl_gbp: number
+  ppl_pct: number | null
+  weight: number
+  holdings_count: number
+  target_pct?: number
+  effective_value_gbp: number | null
+  effective_weight: number | null
+  tranches_total?: number
+  tranches_staged?: number
+  next_tranche?: { index: number; label: string; due: string | null; is_due: boolean } | null
+  verdict?: Verdict | null
+  needs: Need[]
+  owned: OwnedHolding[]
+  related: RelatedHolding[]
+  bench: BenchItem[]
+}
+
+export interface ThemeRisk {
+  play_id: string
+  title: string
+  weight: number
+  effective_weight: number | null
+  tone: 'warn' | 'neutral'
+  text: string
+}
+
+export interface Book {
+  as_of: string
+  total_gbp: number
+  cash_gbp: number
+  cash_weight: number
+  groups: BookGroup[]
+  holdings: BookHolding[]
+  theme_risk: ThemeRisk[]
+  unsorted_count: number
+  unsorted_weight: number
+}
+
+export interface Suggestion {
+  id: string
+  kind: 'play' | 'core' | 'existing'
+  play_id: string | null
+  title: string
+  tickers: string[]
+  why: string
+  thesis: string
+  value_gbp: number
+  weight: number
+  holdings: { ticker: string; name: string; value_gbp: number; weight: number }[]
+}
+
+export interface Suggestions {
+  generated_at: string | null
+  source: 'archie' | 'rules' | 'none' | null
+  items: Suggestion[]
+  unsorted: { ticker: string; name: string; value_gbp: number; weight: number; accounts: string[] }[]
+  unsorted_weight: number
 }
 
 export interface DraftRequest {
