@@ -32,7 +32,9 @@ import {
   setRecipeEnabled,
 } from '@/api/recipes'
 import { RichMarkdown } from '@/components/RichMarkdown'
-import { ReportBody, ReportReader, useReport as useReportDoc } from '@/components/rich/report-reader'
+import { cardStats } from '@/components/rich/card-model'
+import { ReportReader, useReport as useReportDoc } from '@/components/rich/report-reader'
+import { ResultCard, whyLine } from '@/components/rich/result-card'
 import { resolveArtifactRelativePath } from '@/components/scheduled-jobs/artifact'
 import {
   AlertDialog,
@@ -312,10 +314,10 @@ export function RecipeDetailPage({ slug }: { slug: string }) {
         </section>
       ) : (
         <>
-          <ResultCard recipe={recipe} run={lastOk} last={recipe.runs[0] ?? null} running={recipe.running} busy={busy} onOpen={setReport} onRun={runNow} />
+          <LatestResult recipe={recipe} run={lastOk} last={recipe.runs[0] ?? null} running={recipe.running} busy={busy} onOpen={setReport} onRun={runNow} />
           <div className="grid gap-10 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:gap-12">
             <StepsTimeline recipe={recipe} />
-            <RunsTimeline runs={recipe.runs} running={recipe.running} onOpen={setReport} />
+            <RunsTimeline runs={recipe.runs} running={recipe.running} title={recipe.title} onOpen={setReport} />
           </div>
         </>
       )}
@@ -473,7 +475,7 @@ function useRunReport(run: RecipeRun | null) {
   return state
 }
 
-function ResultCard({ recipe, run, last, running, busy, onOpen, onRun }: {
+function LatestResult({ recipe, run, last, running, busy, onOpen, onRun }: {
   recipe: RecipeDetail
   run: RecipeRun | null
   last: RecipeRun | null
@@ -482,59 +484,45 @@ function ResultCard({ recipe, run, last, running, busy, onOpen, onRun }: {
   onOpen: (r: RecipeRun) => void
   onRun: () => void
 }) {
-  const { content, summary } = useRunReport(run)
+  const { content, summary: loaded } = useRunReport(run)
   const doc = useReportDoc(content)
   const failedSince = last && last.status === 'error' && (!run || last.id !== run.id) ? last : null
 
   if (!run) return <SampleResult recipe={recipe} running={running} busy={busy} failed={failedSince} onRun={onRun} />
 
+  const summary: ReportSummary | null = loaded ?? run.card ?? (run.summary ? { headline: run.summary, points: [], action: null, signal: null, derived: true } : null)
+  const stats = cardStats(summary && !summary.derived ? summary : null, doc?.keyNumbers ?? [])
+  const when = utc(run.at).format('ddd D MMM · HH:mm')
+  const status = running ? (
+    <span className="inline-flex items-center gap-1.5 text-primary">
+      <StatusDot status="running" /> Running a fresh one…
+    </span>
+  ) : failedSince ? (
+    <span className="inline-flex items-start gap-1.5 text-negative">
+      <StatusDot status="error" className="mt-1" /> The last run {ago(failedSince.at)} didn’t finish: {failedSince.message}
+    </span>
+  ) : null
+
   return (
-    <section aria-labelledby="latest-result" className="overflow-hidden rounded-2xl border border-border bg-card">
-      <div className="flex items-center justify-between gap-3 px-5 pt-4 sm:px-6">
-        <h2 id="latest-result" className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-          Latest result
-        </h2>
-        <span className="text-xs text-muted-foreground">
-          {running ? (
-            <span className="inline-flex items-center gap-1.5 text-primary">
-              <StatusDot status="running" /> Running a fresh one…
-            </span>
-          ) : (
-            <span title={utc(run.at).format('dddd D MMMM, HH:mm')}>{utc(run.at).format('ddd D MMM · HH:mm')}</span>
-          )}
-        </span>
-      </div>
-      {failedSince ? (
-        <p className="mx-5 mt-3 flex items-start gap-2 rounded-lg bg-negative/5 px-3 py-2 text-xs text-negative sm:mx-6">
-          <StatusDot status="error" className="mt-1" /> The last run {ago(failedSince.at)} didn’t finish: {failedSince.message}
-        </p>
-      ) : null}
-      {run.trigger_context ? (
-        <p className="mx-5 mt-3 text-xs text-muted-foreground sm:mx-6">
-          <span className="font-medium text-foreground">Why it ran: </span>
-          {run.trigger_context.split('\n').slice(1).join(' · ') || run.trigger_context}
-        </p>
-      ) : null}
-      <div className="relative max-h-[520px] overflow-hidden px-5 pb-2 pt-3 sm:px-6 [&_.rc-toc]:hidden">
-        {doc && content ? (
-          <ReportBody doc={doc} markdown={content} summary={summary} showKeyNumbers />
-        ) : content === null && run.output_path ? (
-          <div className="space-y-3 py-2">
-            <Skeleton className="h-20 w-full rounded-xl" />
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-4 w-5/6" />
-          </div>
-        ) : (
-          <p className="py-2 text-sm text-muted-foreground">{run.summary}</p>
-        )}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-card via-card/80 to-transparent" />
-      </div>
-      <div className="flex items-center justify-between gap-3 border-t border-border/60 px-5 py-3 sm:px-6">
-        <span className="text-xs text-muted-foreground">{run.version ? `Made with version ${run.version}` : ''}</span>
-        <button type="button" onClick={() => onOpen(run)} className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline hover:underline-offset-4">
-          Read the full report <ArrowRight className="size-3.5" />
-        </button>
-      </div>
+    <section aria-label="Latest result" className="space-y-2">
+      <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Latest result</h2>
+      {summary ? (
+        <ResultCard
+          summary={summary}
+          stats={stats}
+          title={recipe.title}
+          when={when}
+          why={whyLine(run.trigger_context, run.manual) ? `Why it ran: ${whyLine(run.trigger_context, run.manual)}` : null}
+          status={status}
+          onOpen={() => onOpen(run)}
+        />
+      ) : (
+        <div className="space-y-3 rounded-2xl border border-border bg-card p-6">
+          <Skeleton className="h-3 w-40" />
+          <Skeleton className="h-7 w-4/5" />
+          <Skeleton className="h-24 w-full rounded-xl" />
+        </div>
+      )}
     </section>
   )
 }
@@ -638,7 +626,8 @@ function StepsTimeline({ recipe }: { recipe: RecipeDetail }) {
 }
 
 // ── run history ────────────────────────────────────────────────────────
-function RunsTimeline({ runs, running, onOpen }: { runs: RecipeRun[]; running: boolean; onOpen: (r: RecipeRun) => void }) {
+function RunsTimeline({ runs, running, title, onOpen }: { runs: RecipeRun[]; running: boolean; title: string; onOpen: (r: RecipeRun) => void }) {
+  const [open, setOpen] = useState<number | null>(null)
   const [all, setAll] = useState(false)
   const shown = all ? runs : runs.slice(0, 6)
   return (
@@ -658,19 +647,35 @@ function RunsTimeline({ runs, running, onOpen }: { runs: RecipeRun[]; running: b
               <span className="text-xs text-muted-foreground">Running…</span>
             </li>
           ) : null}
-          {shown.map((r) => (
-            <li key={r.id}>
-              <button type="button" disabled={!r.output_path} onClick={() => onOpen(r)} className="recipe-run group w-full text-left disabled:cursor-default">
-                <StatusDot status={r.status} className="recipe-run-dot" />
-                <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" title={utc(r.at).format('dddd D MMMM, HH:mm')}>
-                  {utc(r.at).format('ddd D MMM')}
-                </span>
-                <span className={cn('min-w-0 truncate text-xs', r.status === 'error' ? 'text-negative' : 'text-foreground/85 group-enabled:group-hover:text-foreground')}>
-                  {r.status === 'error' ? r.message || 'Didn’t finish' : r.summary || r.message || 'Done'}
-                </span>
-              </button>
-            </li>
-          ))}
+          {shown.map((r) => {
+            const card = r.card && !r.card.derived && r.card.headline ? r.card : null
+            const isOpen = open === r.id
+            return (
+              <li key={r.id}>
+                <button
+                  type="button"
+                  disabled={!r.output_path}
+                  onClick={() => (card ? setOpen(isOpen ? null : r.id) : onOpen(r))}
+                  aria-expanded={card ? isOpen : undefined}
+                  className="recipe-run group w-full text-left disabled:cursor-default"
+                >
+                  <StatusDot status={r.status} className="recipe-run-dot" />
+                  <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" title={utc(r.at).format('dddd D MMMM, HH:mm')}>
+                    {utc(r.at).format('ddd D MMM')}
+                  </span>
+                  <span className={cn('min-w-0 truncate text-xs', r.status === 'error' ? 'text-negative' : 'text-foreground/85 group-enabled:group-hover:text-foreground', isOpen && 'text-foreground')}>
+                    {r.status === 'error' ? r.message || 'Didn’t finish' : r.summary || r.message || 'Done'}
+                  </span>
+                  {card ? <ChevronRight className={cn('size-3.5 text-muted-foreground/70 transition-transform', isOpen && 'rotate-90')} /> : <span />}
+                </button>
+                {card && isOpen ? (
+                  <div className="recipe-unfold pb-2 pl-[1.15rem] pt-1">
+                    <ResultCard summary={card} stats={cardStats(card)} title={title} when={utc(r.at).format('ddd D MMM · HH:mm')} variant="compact" bare onOpen={() => onOpen(r)} />
+                  </div>
+                ) : null}
+              </li>
+            )
+          })}
         </ol>
       ) : (
         <p className="text-sm text-muted-foreground">Nothing yet. Each run shows up here with its headline.</p>

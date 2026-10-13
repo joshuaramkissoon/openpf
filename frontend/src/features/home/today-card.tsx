@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import dayjs from "dayjs"
 import calendar from "dayjs/plugin/calendar"
-import { ArrowRight, CalendarClock, Check, FileText } from "lucide-react"
+import { CalendarClock, Check, FileText } from "lucide-react"
 
 import { getArtifact, getSchedulerTimeline, listArtifacts } from "@/api/client"
 import { Section, SectionLink } from "@/components/kit"
-import { Inline, RichProvider } from "@/components/rich/inline"
+import { cardStats } from "@/components/rich/card-model"
 import { ReportReader } from "@/components/rich/report-reader"
+import { ResultCard } from "@/components/rich/result-card"
 import { reportTypeLabel } from "@/components/scheduled-jobs/labels"
-import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAppActions } from "@/lib/app-actions"
-import { cn } from "@/lib/utils"
-import type { ArtifactDetail, ArtifactItem, ReportSummary, TimelineUpcoming } from "@/types"
+import type { ArtifactDetail, ArtifactItem, TimelineUpcoming } from "@/types"
 
 import { ago } from "./decision-rows"
 
@@ -32,30 +31,9 @@ function pickReport(items: ArtifactItem[]): ArtifactItem | null {
   )
 }
 
-type ActionTarget = { label: string; run: () => void }
-
-/** A summary's `action` → one button: a proposal / play / page link, or "ask Archie". */
-function useAction(summary: ReportSummary | null | undefined, kind: string): ActionTarget | null {
-  const { navigate, askArchie } = useAppActions()
-  return useMemo(() => {
-    const action = summary?.action?.trim()
-    if (!action) return null
-    const link = action.match(/\[([^\]]+)\]\(([^)\s]+)\)/)
-    if (link) {
-      const [, label, href] = link
-      if (href.startsWith("proposal:")) return { label, run: () => navigate("/activity/proposals") }
-      if (href.startsWith("#/")) return { label, run: () => navigate(href.slice(1)) }
-      if (href.startsWith("/")) return { label, run: () => navigate(href) }
-      if (/^https?:/.test(href)) return { label, run: () => window.open(href, "_blank", "noreferrer") }
-    }
-    const plain = action.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "")
-    return { label: plain, run: () => askArchie(`From the ${kind.toLowerCase()}: "${plain}". Help me do this.`) }
-  }, [summary, kind, navigate, askArchie])
-}
-
 /**
- * "Today": the latest report as a high-signal digest from its summary block:
- * type + when, the headline, up to three points and one action. Low-signal
+ * "Today": the latest report as a compact result card from its summary block:
+ * type + when, the headline, its stat tiles and one action. Low-signal
  * reports collapse to a quiet line; `signal: none` stays off Home entirely.
  * The full text lives in the reader.
  */
@@ -105,7 +83,6 @@ export function TodayCard() {
 
   const summary = latest?.summary ?? null
   const kind = reportTypeLabel(latest?.task_name, latest?.type === "chat" ? "Chat report" : "Report")
-  const action = useAction(summary, kind)
   const quiet = summary?.signal === "low"
 
   const nextLine = next ? (
@@ -159,45 +136,16 @@ export function TodayCard() {
           {reader}
         </div>
       ) : latest && summary ? (
+        // The latest report as a compact result card: headline, stat tiles, one action.
         <div className="space-y-3">
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            {summary.signal === "high" ? <span className="size-1.5 rounded-full bg-primary" aria-label="Worth a look" /> : null}
-            <span className="font-medium text-foreground/80">{kind}</span>
-            <span>· {ago(latest.created_at)} ago</span>
-          </p>
-          <RichProvider>
-            <p className="text-[15px] font-medium leading-snug tracking-tight text-foreground">
-              <Inline text={summary.headline} />
-            </p>
-            {summary.points.length ? (
-              <ul className="space-y-1">
-                {summary.points.slice(0, 3).map((p, i) => (
-                  <li key={i} className="flex gap-2 text-sm leading-relaxed text-muted-foreground">
-                    <span className="mt-[9px] size-1 shrink-0 rounded-full bg-muted-foreground/60" />
-                    <span className="min-w-0">
-                      <Inline text={p} />
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </RichProvider>
-          <div className="flex flex-wrap items-center gap-2 pt-0.5">
-            {action ? (
-              <Button size="sm" className="h-7 max-w-full gap-1.5 px-3 text-xs" onClick={action.run}>
-                <span className="truncate">{action.label}</span>
-                <ArrowRight className="size-3.5 shrink-0" />
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              variant={action ? "ghost" : "outline"}
-              className={cn("h-7 px-2.5 text-xs", action && "text-muted-foreground")}
-              onClick={() => setOpen(true)}
-            >
-              Read report
-            </Button>
-          </div>
+          <ResultCard
+            summary={summary}
+            stats={cardStats(summary)}
+            title={latest.task_name?.startsWith("recipe_") && latest.title ? latest.title : kind}
+            when={`${ago(latest.created_at)} ago`}
+            variant="compact"
+            onOpen={() => setOpen(true)}
+          />
           {nextLine}
           {reader}
         </div>
