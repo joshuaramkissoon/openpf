@@ -136,6 +136,14 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
         tools=("get_company_news", "get_market_news", "get_macro_snapshot", "get_earnings"),
         contexts=frozenset({CHAT, AGENT, SCHEDULED}),
     ),
+    # Smart money: disclosed insider / 13F / Congress trades + trend detector.
+    # Read-only over the local disclosures table.
+    McpServerSpec(
+        name="smart_money",
+        script="smart_money.py",
+        tools=("get_smart_money", "get_disclosure_trends"),
+        contexts=frozenset({CHAT, AGENT, SCHEDULED}),
+    ),
     McpServerSpec(
         name="watchlist",
         script="watchlist.py",

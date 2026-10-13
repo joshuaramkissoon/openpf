@@ -92,6 +92,14 @@ BUILTINS: list[dict[str, Any]] = [
         "enabled": False,
         "category": "Weekly",
     },
+    {
+        "slug": "smart-money-watch",
+        "title": "Smart money watch",
+        "icon": "landmark",
+        "trigger": {"kind": "schedule", "cron": "0 9 * * 6", "timezone": "Europe/London"},
+        "enabled": False,
+        "category": "Weekly",
+    },
 ]
 
 

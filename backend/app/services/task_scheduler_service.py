@@ -349,6 +349,19 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "approval. Renders a markdown report; never auto-executes."
         ),
     },
+    {
+        "name": "smart_money_refresh",
+        "cron_expr": "15 6 * * *",
+        "timezone": "Europe/London",
+        "model": settings.claude_model,
+        "enabled": True,
+        "meta": {
+            "task_kind": "smart_money_refresh",
+            "description": "Daily fetch of insider / 13F / Congress disclosures → detections → signals (deterministic)",
+        },
+        # Deterministic (no LLM): see app/services/smart_money/service.refresh.
+        "prompt": "Deterministic smart-money refresh: fetch disclosures, run the trend detector, raise high-signal alerts.",
+    },
     # ── Agentic alpha loop — three reasoned passes a day (open / midday / EOD) ──
     # Each pass runs Archie with the live regime + macro context + the day's
     # regime-gated universe injected (see _build_goal_context) and the £/day goal.
@@ -1168,6 +1181,19 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
 
         result = run_watches(db)
         content = _render_watch_md(result)
+        path = _cron_log_path(task.name, content, task_kind=kind, description=description)
+        return "ok", {"result": result}, path, {}
+
+    if kind == "smart_money_refresh":
+        from app.services.smart_money.service import refresh as smart_money_refresh
+
+        result = smart_money_refresh(db)
+        content = (
+            "# Smart money refresh\n\n"
+            f"- Added: {result.get('added') or {}}\n"
+            f"- Alerts: {(result.get('alerts') or {}).get('created', 0)}\n"
+            + "".join(f"- Error: {e}\n" for e in result.get("errors") or [])
+        )
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
