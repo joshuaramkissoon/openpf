@@ -202,4 +202,7 @@ async def revise(current: dict[str, Any], instruction: str) -> dict[str, Any]:
         "changed. Keep everything the user didn't ask to change. If the change is impossible, ok=false.\n\n"
         f"Recipe:\n{json.dumps(payload, indent=1)}\n\nChange requested by the user:\n{instruction.strip()}"
     )
-    return _finish(await _ask_model(prompt))
+    out = _finish(await _ask_model(prompt))
+    if out.get("ok") and "icon" not in instruction.lower():
+        out["draft"]["icon"] = current.get("icon") or out["draft"]["icon"]  # keep the user's icon stable
+    return out
