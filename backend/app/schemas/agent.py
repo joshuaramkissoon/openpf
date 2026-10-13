@@ -48,6 +48,12 @@ class TradeIntentItem(BaseModel):
     source: str | None = None
     play_id: str | None = None
     play_title: str | None = None
+    # "For which play?" — 'play' | 'core' | None (not part of any play). Inferred
+    # from the holding's owner when the proposal didn't say.
+    owner_kind: str | None = None
+    owner_play_id: str | None = None
+    owner_label: str | None = None
+    owner_inferred: bool = False
     approved_at: datetime | None = None
     executed_at: datetime | None = None
     broker_order_id: str | None = None

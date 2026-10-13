@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Lightbulb, Loader2, RotateCw, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { toastApiError } from '@/lib/api-error'
+import { parseApiError, toastApiError } from '@/lib/api-error'
 import { useAppActions } from '@/lib/app-actions'
 import { navigate as routerNavigate } from '@/lib/router'
 import { cn } from '@/lib/utils'
-import { getDraftJob, startDraft } from './api'
+import { getDraftJob, retryDraft, startDraft } from './api'
 import type { Conviction, DraftJob, PlayAccount } from './types'
 import { Eyebrow, Segmented } from './ui'
 
@@ -35,23 +35,30 @@ export function NewPlay({ initialIdea, jobId }: { initialIdea?: string; jobId?: 
   const [horizon, setHorizon] = useState<string>('24')
   const [account, setAccount] = useState<PlayAccount>('stocks_isa')
   const [submitting, setSubmitting] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
 
   if (jobId) return <Drafting jobId={jobId} />
 
   async function submit() {
-    if (idea.trim().length < 3) return
+    if (idea.trim().length < 3) {
+      setProblem('Describe the theme in a few words — e.g. “Europe is rearming for a decade”.')
+      return
+    }
     setSubmitting(true)
+    setProblem(null)
     try {
       const job = await startDraft({
         idea: idea.trim(),
-        budget_gbp: budget ? Number(budget) : null,
+        budget_gbp: budget && Number(budget) > 0 ? Number(budget) : null,
         conviction,
         horizon_months: Number(horizon) || null,
         account_kind: account,
       })
       navigate(`/plays?new=1&job=${job.job_id}`)
     } catch (e) {
-      toastApiError(e, 'Could not start drafting')
+      const status = (e as { response?: { status?: number } })?.response?.status
+      if (status === 400 || status === 422) setProblem(parseApiError(e).message)
+      else toastApiError(e, 'Could not start drafting')
       setSubmitting(false)
     }
   }
@@ -79,19 +86,33 @@ export function NewPlay({ initialIdea, jobId }: { initialIdea?: string; jobId?: 
         <Textarea
           autoFocus
           value={idea}
-          onChange={(e) => setIdea(e.target.value)}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={problem ? 'idea-problem' : undefined}
+          onChange={(e) => {
+            setIdea(e.target.value)
+            if (problem) setProblem(null)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit()
           }}
           placeholder="e.g. Europe is rearming for a decade — defence primes and their suppliers will compound orders…"
           className="min-h-36 resize-y text-base leading-relaxed"
         />
+        {problem ? (
+          <p id="idea-problem" role="alert" className="flex items-start gap-2 text-sm text-warning animate-in fade-in duration-200">
+            <Lightbulb className="mt-0.5 size-4 shrink-0" />
+            <span>{problem}</span>
+          </p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           {EXAMPLE_IDEAS.map((ex) => (
             <button
               key={ex.title}
               type="button"
-              onClick={() => setIdea(ex.idea)}
+              onClick={() => {
+                setIdea(ex.idea)
+                setProblem(null)
+              }}
               className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
             >
               {ex.title}
@@ -107,7 +128,7 @@ export function NewPlay({ initialIdea, jobId }: { initialIdea?: string; jobId?: 
             <Input
               inputMode="decimal"
               value={budget}
-              onChange={(e) => setBudget(e.target.value.replace(/[^0-9.]/g, ''))}
+              onChange={(e) => setBudget(e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1').slice(0, 10))}
               placeholder="Auto"
               className="pl-7 font-mono tabular-nums"
             />
@@ -150,7 +171,7 @@ export function NewPlay({ initialIdea, jobId }: { initialIdea?: string; jobId?: 
 
       <div className="flex items-center justify-between gap-3 border-t border-border pt-5">
         <p className="text-xs text-muted-foreground">Takes about a minute.</p>
-        <Button onClick={() => void submit()} disabled={submitting || idea.trim().length < 3}>
+        <Button onClick={() => void submit()} disabled={submitting || idea.trim().length === 0}>
           {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
           Draft the play
           <ArrowRight className="size-4" />
@@ -201,21 +222,47 @@ function Drafting({ jobId }: { jobId: string }) {
     }
   }, [jobId])
 
+  const [retrying, setRetrying] = useState(false)
   const lines = job?.progress ?? []
   const failed = job?.status === 'error' || missing
+  const kind = job?.error_kind
+  const idea = job?.idea ?? job?.request?.idea ?? ''
+  const heading = missing
+    ? 'That draft has gone'
+    : kind === 'unclear_idea'
+      ? 'Archie needs a sharper idea'
+      : kind === 'no_instruments'
+        ? 'Nothing to buy on Trading 212'
+        : kind === 'interrupted'
+          ? 'Drafting was interrupted'
+          : 'Archie could not finish this draft'
+
+  async function retry() {
+    setRetrying(true)
+    try {
+      const next = await retryDraft(jobId)
+      routerNavigate(`/plays?new=1&job=${next.job_id}`, { replace: true })
+    } catch (e) {
+      toastApiError(e, 'Could not retry')
+      setRetrying(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-xl space-y-8 py-10">
       <div className="space-y-2">
         <Eyebrow>{failed ? 'Drafting stopped' : 'Drafting your play'}</Eyebrow>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {failed ? 'Archie could not finish this draft' : 'Archie is researching the theme'}
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{failed ? heading : 'Archie is researching the theme'}</h1>
         <p className="text-sm text-muted-foreground">
           {failed
-            ? job?.error || 'The draft job has expired. Try again.'
+            ? missing
+              ? 'It may have been cleared. Start again — your idea takes a minute to draft.'
+              : job?.error || 'Something went wrong. Try again.'
             : 'Picking a basket, checking prices and risk, then sizing it against your book.'}
         </p>
+        {failed && idea ? (
+          <p className="border-l-2 border-border pl-3 text-sm text-muted-foreground italic">“{idea}”</p>
+        ) : null}
       </div>
       <ol className="space-y-2.5">
         {lines.map((l, i) => {
@@ -230,7 +277,13 @@ function Drafting({ jobId }: { jobId: string }) {
               )}
             >
               <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
-                {spinning ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5 text-muted-foreground" />}
+                {spinning ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : last && failed ? (
+                  <X className="size-3.5 text-warning" />
+                ) : (
+                  <Check className="size-3.5 text-muted-foreground" />
+                )}
               </span>
               <span className="min-w-0 break-words">{l.text}</span>
             </li>
@@ -238,9 +291,20 @@ function Drafting({ jobId }: { jobId: string }) {
         })}
       </ol>
       {failed ? (
-        <Button variant="outline" onClick={() => navigate('/plays?new=1')}>
-          Try again
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {job?.retryable ? (
+            <Button onClick={() => void retry()} disabled={retrying}>
+              {retrying ? <Loader2 className="size-4 animate-spin" /> : <RotateCw className="size-4" />}
+              Retry
+            </Button>
+          ) : null}
+          <Button
+            variant={job?.retryable ? 'ghost' : 'outline'}
+            onClick={() => navigate(idea ? `/plays?new=1&idea=${encodeURIComponent(idea)}` : '/plays?new=1')}
+          >
+            {idea ? 'Edit the idea' : 'Start again'}
+          </Button>
+        </div>
       ) : null}
     </div>
   )

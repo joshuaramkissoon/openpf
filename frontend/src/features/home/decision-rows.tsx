@@ -57,6 +57,33 @@ export function railCheck(
   return { ok: true, label: "Within rails" }
 }
 
+/** "For which play?" — the play (linked), Core, or a gentle "not part of any play". */
+export function ProposalOwner({ intent }: { intent: TradeIntent }) {
+  const kind = intent.owner_kind ?? (intent.play_id ? "play" : null)
+  const playId = intent.owner_play_id ?? intent.play_id
+  if (kind === "play" && playId) {
+    return (
+      <button
+        type="button"
+        onClick={() => navigate(`/plays/${playId}`)}
+        title={intent.owner_label ?? undefined}
+        className="max-w-[16rem] truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+      >
+        · for {intent.owner_label ?? intent.play_title ?? "a play"}
+      </button>
+    )
+  }
+  if (kind === "core") return <span className="text-xs text-muted-foreground">· Core</span>
+  return (
+    <span
+      className="text-xs text-muted-foreground/80 italic"
+      title="This proposal doesn't belong to a play or Core. Ask Archie which bet it serves before you approve."
+    >
+      · not part of any play
+    </span>
+  )
+}
+
 function accountShort(kind?: string | null) {
   return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : null
 }
@@ -103,15 +130,7 @@ export function ProposalRow({
         </button>
         <Money value={intent.estimated_notional} currency="GBP" decimals={0} className="text-sm" />
         {preset ? <span className="text-xs text-muted-foreground">· {accountShort(preset)}</span> : null}
-        {intent.play_id ? (
-          <button
-            type="button"
-            onClick={() => navigate(`/plays/${intent.play_id}`)}
-            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-          >
-            · {intent.play_title ?? "Play"}
-          </button>
-        ) : null}
+        <ProposalOwner intent={intent} />
         {intent.status === "approved" ? <span className="text-xs text-muted-foreground">· approved</span> : null}
         <span
           className={cn(
@@ -125,7 +144,10 @@ export function ProposalRow({
       </div>
 
       {intent.rationale ? (
-        <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">{intent.rationale}</p>
+        <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+          {/* Older play tranches carried a "[play] Title — " prefix; the owner label says that now. */}
+          {intent.rationale.replace(/^\[play\][^—]*—\s*/, "")}
+        </p>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">

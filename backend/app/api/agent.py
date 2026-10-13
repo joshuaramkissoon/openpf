@@ -117,8 +117,27 @@ def run_detail(run_id: str, db: Session = Depends(get_db)) -> AgentRunResponse:
 @router.get("/intents", response_model=list[TradeIntentItem])
 def intents(db: Session = Depends(get_db)) -> list[TradeIntentItem]:
     rows = list_intents(db)
+    owners: dict[str, dict | None] = {}
+    try:
+        from app.models.entities import Play
+        from app.services import book_service
+
+        idx = book_service.ownership_index(db)
+        titles = {p.id: p.title for p in db.execute(select(Play)).scalars().all()}
+        owners = {r.id: book_service.intent_owner(idx, r, titles) for r in rows}
+    except Exception:  # noqa: BLE001 — labels are cosmetic; never break the queue
+        pass
+
+    def _o(r, key, default=None):
+        o = owners.get(r.id)
+        return o.get(key, default) if o else default
+
     return [
         TradeIntentItem(
+            owner_kind=_o(r, "kind"),
+            owner_play_id=_o(r, "play_id"),
+            owner_label=_o(r, "title"),
+            owner_inferred=bool(_o(r, "inferred", False)),
             id=r.id,
             created_at=r.created_at,
             status=r.status,

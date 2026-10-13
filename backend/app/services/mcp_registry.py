@@ -160,7 +160,9 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
     McpServerSpec(
         name="plays",
         script="plays.py",
-        tools=("list_plays", "get_play", "draft_play", "update_play", "stage_play_tranche"),
+        tools=("list_plays", "get_play", "draft_play", "update_play", "stage_play_tranche",
+               "get_book_by_play", "assign_owner", "add_related", "remove_related", "add_bench",
+               "remove_bench", "suggest_plays"),
         contexts=frozenset({CHAT, SCHEDULED}),
     ),
     # Agent-built pages. Generated code runs in a sandboxed iframe and can only

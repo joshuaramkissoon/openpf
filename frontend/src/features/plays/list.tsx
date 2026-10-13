@@ -9,6 +9,9 @@ import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
 import { formatPercent } from '@/utils/format'
 import { getPerformance, listPlays } from './api'
+import { ArchieMark, Swatch, useBook } from './book'
+import { AllocationBar } from './book-card'
+import { SortHoldingsSheet } from './suggestions'
 import { EXAMPLE_IDEAS } from './new-play'
 import type { Play, PlayPerformance } from './types'
 import { ConvictionDots, Meter, Sparkline, StatusChip, VerdictChip } from './ui'
@@ -43,12 +46,14 @@ export function usePerformance(play: Play) {
 export function PlaysList({ tab }: { tab: Tab }) {
   const { navigate } = useAppActions()
   const [plays, setPlays] = useState<Play[] | null>(null)
+  const [sorting, setSorting] = useState(false)
+  const { book } = useBook()
 
   useEffect(() => {
     listPlays()
       .then(setPlays)
       .catch(() => setPlays([]))
-  }, [])
+  }, [book?.as_of])
 
   const order = { active: 0, paused: 1, draft: 2, closed: 3 }
   const sorted = (plays ?? []).slice().sort((a, b) => order[a.status] - order[b.status])
@@ -89,6 +94,27 @@ export function PlaysList({ tab }: { tab: Tab }) {
         ))}
       </div>
 
+      {tab === 'plays' && book && book.holdings.length > 0 ? (
+        <div className="space-y-2">
+          <AllocationBar book={book} />
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              {formatPercent(book.groups.filter((g) => g.kind === 'play').reduce((s, g) => s + g.weight, 0), 0)} of your book is in a play
+              {' · '}
+              {formatPercent(book.groups.find((g) => g.kind === 'core')?.weight ?? 0, 0)} Core
+              {book.unsorted_count ? ` · ${formatPercent(book.unsorted_weight, 0)} unsorted` : ''}
+            </span>
+            {book.unsorted_count ? (
+              <button type="button" onClick={() => setSorting(true)} className="inline-flex items-center gap-1 text-foreground hover:underline">
+                <ArchieMark className="size-3" />
+                Sort {book.unsorted_count} unsorted with Archie
+              </button>
+            ) : null}
+          </div>
+          <SortHoldingsSheet open={sorting} onOpenChange={setSorting} />
+        </div>
+      ) : null}
+
       {tab === 'watchlist' ? (
         <WatchlistBoard onError={() => {}} />
       ) : plays === null ? (
@@ -113,8 +139,11 @@ export function PlaysList({ tab }: { tab: Tab }) {
 function PlayCard({ play }: { play: Play }) {
   const { navigate } = useAppActions()
   const perf = usePerformance(play)
+  const { book } = useBook()
+  const group = book?.groups.find((g) => g.play_id === play.id)
   const deployed = perf && perf.target_exposure_gbp ? perf.held_gbp / perf.target_exposure_gbp : 0
   const series = perf?.points.map((p) => p.basket) ?? []
+  const need = group?.needs[0]
 
   return (
     <button
@@ -126,7 +155,14 @@ function PlayCard({ play }: { play: Play }) {
       )}
     >
       <div className="flex items-center justify-between gap-3">
-        <StatusChip status={play.status} />
+        {group ? (
+          <span className="inline-flex items-center gap-2 text-xs text-muted-foreground capitalize">
+            <Swatch kind="play" colorIndex={group.color_index} className="size-2.5" />
+            {play.status}
+          </span>
+        ) : (
+          <StatusChip status={play.status} />
+        )}
         <VerdictChip verdict={play.status === 'draft' ? null : play.review.verdict} />
       </div>
       <h3 className="mt-3 text-base font-semibold tracking-tight text-balance">{play.title}</h3>
@@ -160,13 +196,30 @@ function PlayCard({ play }: { play: Play }) {
               <Sparkline values={series} className="w-28" />
             </div>
             <div className="space-y-1.5">
-              <Meter value={deployed} />
+              <Meter value={group && group.target_pct ? group.weight / group.target_pct : deployed} />
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>
-                  {perf ? <Money value={perf.held_gbp} decimals={0} /> : '—'} of {perf ? <Money value={perf.target_exposure_gbp} decimals={0} /> : '—'}
+                  {group ? (
+                    <>
+                      {formatPercent(group.weight, 1)} of book
+                      {group.target_pct ? ` · target ${formatPercent(group.target_pct, 0)}` : ''}
+                    </>
+                  ) : perf ? (
+                    <>
+                      <Money value={perf.held_gbp} decimals={0} /> of <Money value={perf.target_exposure_gbp} decimals={0} />
+                    </>
+                  ) : (
+                    '—'
+                  )}
                 </span>
                 <ConvictionDots conviction={play.conviction} />
               </div>
+              {need ? (
+                <p className="flex items-center gap-1.5 pt-1 text-xs text-foreground/80">
+                  <span className={cn('size-1.5 shrink-0 rounded-full', need.tone === 'critical' ? 'bg-negative' : need.tone === 'warn' ? 'bg-warning' : 'bg-muted-foreground/50')} />
+                  <span className="truncate">{need.text}</span>
+                </p>
+              ) : null}
             </div>
           </>
         )}

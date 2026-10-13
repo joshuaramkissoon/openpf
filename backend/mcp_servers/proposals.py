@@ -80,7 +80,8 @@ def propose_trade(
         order_type: market | limit | stop | stop_limit.
         limit_price: Required for limit / stop_limit (instrument's quote currency).
         stop_price: Required for stop / stop_limit (instrument's quote currency).
-        play_id: Optional id of the Play this proposal belongs to.
+        play_id: Which play this proposal is for — a Play id, or "core" for long-term / no-thesis
+            holdings. Always say: proposals with neither are flagged "not part of any play".
         source: Free-form origin tag (e.g. 'chat', 'scheduled:<task>').
     """
     logger.info("propose_trade side=%s symbol=%s code=%s account=%s", side, symbol, instrument_code, account_kind)

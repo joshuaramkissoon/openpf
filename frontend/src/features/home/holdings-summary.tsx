@@ -1,5 +1,6 @@
 import { Money, Pct, PctDelta, Section, SectionLink } from "@/components/kit"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useBook } from "@/features/plays/book"
 import { useAppActions } from "@/lib/app-actions"
 import { usePrivacyMode } from "@/lib/privacy"
 import { cn } from "@/lib/utils"
@@ -101,9 +102,25 @@ export function RiskChips({
 }) {
   const { askArchie } = useAppActions()
   const privacy = usePrivacyMode()
+  const { book } = useBook()
   if (!snapshot) return <Skeleton className="h-32 w-full rounded-xl" />
   const { metrics, account } = snapshot
   const chips: Chip[] = []
+  // Per-theme concentration first: one bet can be bigger than any single stock.
+  const theme = book?.theme_risk[0]
+  if (theme && theme.weight >= 0.15) {
+    chips.push({
+      tone: theme.tone === "warn" ? "warn" : "neutral",
+      text: theme.text,
+      action:
+        theme.tone === "warn"
+          ? {
+              label: "Stress-test it",
+              prompt: `${theme.text}. Pressure-test the concentration in my "${theme.title}" play: what happens to my book if the theme breaks, and should I cap or trim it? Play id: ${theme.play_id}.`,
+            }
+          : undefined,
+    })
+  }
   const topPos = positions[0]
   const maxW = config?.risk.max_position_weight ?? 0.25
   if (topPos) {

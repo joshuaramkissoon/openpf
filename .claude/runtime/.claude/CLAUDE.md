@@ -127,17 +127,45 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
 
 ### Proposals MCP — the only way to act on a trade idea
 - `propose_trade` — queue a buy/sell for the user's approval (explicit `account_kind`,
-  `quantity` or `notional_gbp`, order type, rationale incl. invalidation; optional `play_id`)
+  `quantity` or `notional_gbp`, order type, rationale incl. invalidation)
+- **Every proposal answers "for which play?"**: pass `play_id` (a play's id) or `play_id="core"`
+  for long-term / no-thesis holdings. Proposals with neither are flagged "not part of any play"
+  in the user's Decisions queue — only leave it empty when the trade genuinely fits nothing,
+  and say so.
 - `list_proposals` — recent intents and their status
 
-### Plays MCP — theme bets ("I want exposure to X but don't know how to size it")
-- When the user wants to bet on a theme/thesis, draft a **play** instead of loose one-off trades:
-  `draft_play` with a clear thesis, 3–8 legs (ticker, role core/satellite/hedge, weight,
-  rationale) and at least two machine-checkable kill rules. The app sizes it against the
-  book (conviction × volatility, capped) and splits it into tranches.
-- `list_plays` / `get_play` to see existing plays and their review verdicts before suggesting
-  overlapping trades; `update_play` to refine; `stage_play_tranche` only when the user asks —
-  it creates proposals for them to approve, nothing executes.
+### Plays MCP — the book by play
+The user sees their portfolio as **plays** (theme bets), **Core** and **Unsorted**. Every
+holding has exactly one owner, so the book sums to 100% with no double counting. A holding in
+an active play's basket belongs to the oldest such play unless the user moved it.
+Each play has three rings:
+1. **Owned** — holdings it owns; they count toward its size and P&L.
+2. **Related** — holdings owned elsewhere (another play or Core) that matter to the theme
+   (e.g. MSFT owned by Core, related to "AI needs power"), each with a one-line why. Never counted
+   in size; they feed "effective exposure" ("12% direct · 19% incl. related").
+3. **Bench** — not-held candidates for later tranches (unbought basket legs + ideas), with why.
+
+Tools:
+- `get_book_by_play` — the whole book by owner: value, weight, P&L, needs-you cues, effective
+  exposure, per-theme concentration. Start here when the user asks "how am I positioned?".
+- `list_plays` / `get_play` — plays, their legs, sizing, kill rules, review and rings.
+- `draft_play` — when the user wants to bet on a theme, draft a **play** instead of loose trades:
+  clear thesis, 3–8 legs (ticker, role core/satellite/hedge, weight, rationale) and at least two
+  machine-checkable kill rules. Tickers must be on Trading 212 (the tool rejects unlisted ones).
+  The app sizes it against the book (conviction × volatility, capped), counting only holdings
+  the play owns or would adopt from Unsorted, and stages entry in tranches.
+- `update_play` to refine; `stage_play_tranche` only when the user asks — it creates
+  proposals for them to approve, nothing executes.
+- `assign_owner(ticker, owner)` — move a holding to a play id, `core` or `unsorted`. Bookkeeping
+  only (never trades); only when the user asked or agreed.
+- `add_related` / `remove_related`, `add_bench` / `remove_bench` — edit a play's rings, always
+  with a one-line why.
+- `suggest_plays` — group the user's **Unsorted** holdings: call with no arguments to see them
+  plus a rules-based first pass, refine it ("NVDA, AVGO, TSM already form an AI-infra bet at
+  18% — make it a play?"), then call again with `suggestions_json` to save your grouping. The
+  user accepts / edits / dismisses each one on Home → "Sort with Archie". Nothing auto-applies.
+- Call out **per-theme concentration** alongside single-stock risk ("41% of your book is one
+  AI bet") — `get_book_by_play` includes it.
 
 ### Views MCP — build the user a page
 - When the user asks to *see* something the app doesn't show ("dividend income by month",
