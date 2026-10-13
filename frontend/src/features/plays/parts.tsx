@@ -7,6 +7,7 @@ import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
 import { formatPercent } from '@/utils/format'
 import type { KillCriterion, KillState, LegPerformance, Play, PlayLeg, PlaySizing, StagedTranche } from './types'
+import { InstrumentLabel } from './names'
 import { Block, Eyebrow, KillIcon, ROLE_LABEL, ruleLabel } from './ui'
 
 /** Editable basket for a draft: weights as %, remove a leg. */
@@ -45,13 +46,14 @@ export function BasketEditor({
             return (
               <TableRow key={l.ticker} className="align-top hover:bg-muted/40">
                 <TableCell className="py-3">
-                  <button type="button" onClick={() => openTicker(l.ticker)} className="text-left">
-                    <span className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-medium">{l.ticker}</span>
-                      <span className="text-[11px] text-muted-foreground">{ROLE_LABEL[l.role] ?? l.role}</span>
-                    </span>
-                    <span className="block max-w-56 truncate text-xs text-muted-foreground">{l.name}</span>
-                  </button>
+                  <InstrumentLabel
+                    symbol={l.ticker}
+                    hint={l.name}
+                    iconSize={26}
+                    onOpen={() => openTicker(l.ticker)}
+                    sub={ROLE_LABEL[l.role] ?? l.role}
+                    className="max-w-64"
+                  />
                   {a && a.held_gbp > 0 ? (
                     <span className="mt-1 block text-[11px] text-muted-foreground">
                       Held <Money value={a.held_gbp} decimals={0} /> · {a.new_gbp > 0 ? 'topping up' : 'covered — no new money'}
@@ -59,7 +61,7 @@ export function BasketEditor({
                   ) : null}
                   {l.instrument_verified === false ? (
                     <span className="mt-1 flex items-center gap-1 text-[11px] text-warning">
-                      <TriangleAlert className="size-3" /> Not found in your broker's instrument list
+                      <TriangleAlert className="size-3" /> Not listed on Trading 212: staging skips it
                     </span>
                   ) : null}
                 </TableCell>

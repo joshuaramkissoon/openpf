@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { CircleCheck, CircleDashed, CircleHelp, CircleX, TriangleAlert } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { cleanTicker } from './names'
 import type { Conviction, KillRule, KillState, PlayStatus, Verdict } from './types'
 
 /** Borderless titled block — mirrors the v2 shell's `Section` rhythm. */
@@ -94,7 +95,7 @@ export function ruleLabel(rule?: KillRule | null): string | null {
   const v = rule.value
   switch (rule.type) {
     case 'price_below':
-      return `${rule.ticker} < ${v}`
+      return `${cleanTicker(rule.ticker ?? '')} < ${v}`
     case 'drawdown_pct': {
       const n = Number(v)
       return `Drawdown ≥ ${n <= 1 ? Math.round(n * 100) : n}%`
@@ -102,7 +103,7 @@ export function ruleLabel(rule?: KillRule | null): string | null {
     case 'weight_above': {
       const n = Number(v)
       const pct = `${n <= 1 ? Math.round(n * 100) : n}%`
-      return rule.ticker ? `${rule.ticker} > ${pct} of play` : `Play > ${pct} of book`
+      return rule.ticker ? `${cleanTicker(rule.ticker)} > ${pct} of play` : `Play > ${pct} of book`
     }
     case 'date_after':
       return `Review by ${String(v).slice(0, 10)}`

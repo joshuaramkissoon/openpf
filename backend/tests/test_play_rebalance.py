@@ -218,3 +218,22 @@ def test_place_endpoint_requires_the_explicit_user_action(db):
     for bad in [{}, {"user_action": {"kind": "manual_trade"}}, {"user_action": {"kind": "proposal", "reviewed": True}}]:
         assert client.post(f"/api/plays/{play.id}/rebalance/place", json=bad).status_code == 422
     assert db.query(TradeIntent).count() == 0
+
+
+def test_a_held_back_sale_holds_back_the_buys_it_funds(db, priced, monkeypatch):
+    from app.services import proposal_service
+
+    real = proposal_service.propose_trade
+
+    def capped(db, **kw):
+        if kw["side"] == "sell":
+            return {"ok": False, "violations": ["risk-guard: order exceeds max single-order notional"]}
+        return real(db, **kw)
+
+    monkeypatch.setattr(proposal_service, "propose_trade", capped)
+    play = _play(db)
+    book = _book(_pos("AAA", 1200), _pos("BBB", 400), _pos("CCC.L", 400, code="CCCl_EQ"))
+    res = rb.propose(db, play, book=book, owned=book["positions"], price_fn=lambda t: 10.0)
+    assert res["proposed"] == []
+    assert [f["side"] for f in res["failed"]] == ["sell", "buy"]
+    assert db.query(TradeIntent).count() == 0

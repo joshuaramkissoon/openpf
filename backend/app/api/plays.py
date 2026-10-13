@@ -243,7 +243,7 @@ def rebalance_preview(play_id: str, payload: RebalancePreviewRequest | None = No
     play = _get_or_404(db, play_id)
     p = payload or RebalancePreviewRequest()
     try:
-        return rb.plan(db, play, weights=p.weights, use_cash=p.use_cash)
+        return {**rb.plan(db, play, weights=p.weights, use_cash=p.use_cash), "broker_mode": manual_trade.broker_mode(db)}
     except ValueError as exc:
         raise _bad(exc) from exc
     except Exception as exc:  # noqa: BLE001

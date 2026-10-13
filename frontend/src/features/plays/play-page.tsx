@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Loader2, MoreHorizontal } from 'lucide-react'
+import { ArrowLeft, Loader2, MoreHorizontal, Scale, TriangleAlert } from 'lucide-react'
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { toast } from 'sonner'
 
-import { ArchieIcon, Money, PctDelta } from '@/components/kit'
+import { ArchieIcon } from '@/components/kit'
 import { RichMarkdown } from '@/components/RichMarkdown'
 import {
   AlertDialog,
@@ -27,13 +27,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toastApiError } from '@/lib/api-error'
 import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
-import { accountLabel, formatPercent } from '@/utils/format'
+import { accountLabel } from '@/utils/format'
 import { deletePlay, getPerformance, getPlay, runReview, stageTranche, updatePlay } from './api'
 import { reloadBook, useBook } from './book'
 import { BasketEditor, Block, KillList, OverlapCallout, SizingPanel, TranchePlan } from './parts'
-import { PlayRings } from './rings'
+import { EntryStepper, HealthRow, nextActions, PlayHero, ReviewsBlock, ThesisQuote } from './detail'
+import { LegName } from './names'
+import { RebalanceDialog } from './rebalance'
+import { driftedCount, holdingRows, PlayRings } from './rings'
 import type { Play, PlayLeg, PlayPerformance, StageResult } from './types'
-import { ConvictionDots, Eyebrow, Meter, StatusChip, VerdictChip } from './ui'
+import { ConvictionDots, Eyebrow, StatusChip } from './ui'
 
 export function playContextPrompt(play: Play): string {
   const legs = play.legs.map((l) => `${l.ticker} ${Math.round(l.target_weight * 100)}%`).join(', ')
@@ -213,6 +216,21 @@ function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => vo
             }
           >
             <BasketEditor legs={legs} allocations={play.sizing.allocations} onChange={setLegs} />
+            {play.meta.dropped_legs?.length ? (
+              <p className="mt-3 flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  Left out, not listed on Trading 212:{' '}
+                  {play.meta.dropped_legs.map((t, i) => (
+                    <span key={t}>
+                      {i ? ', ' : ''}
+                      <LegName symbol={t} className="font-medium" />
+                    </span>
+                  ))}
+                  .
+                </span>
+              </p>
+            ) : null}
           </Block>
           <Block title="Kill criteria" description="Checked daily. Archie flags it on Home when one trips.">
             <KillList items={play.kill_criteria} wwcmm={play.what_would_change_my_mind} />
@@ -277,10 +295,13 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
   const [staging, setStaging] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [rebalancing, setRebalancing] = useState<null | 'saved' | 'edited'>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [legs, setLegs] = useState<PlayLeg[]>(play.legs)
   const { book } = useBook(play.updated_at)
   const group = book?.groups.find((g) => g.play_id === play.id) ?? null
+
+  useEffect(() => setLegs(play.legs), [play.legs])
 
   const loadPerf = useCallback(async () => {
     try {
@@ -331,9 +352,13 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
     }
   }
 
+  async function persistLegs() {
+    onChange(await updatePlay(play.id, { legs, resize: true }))
+  }
+
   async function saveLegs() {
     try {
-      onChange(await updatePlay(play.id, { legs, resize: true }))
+      await persistLegs()
       setEditing(false)
       toast.success('Basket updated', { description: 'Future tranches use the new weights.' })
     } catch (e) {
@@ -355,38 +380,22 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
     }
   }
 
-  const staged = play.sizing.staged ?? []
-  const tranches = play.sizing.tranches ?? []
-  const remaining = tranches.length - staged.length
-  const verdict = play.review.verdict
-  const deployed = perf ? (perf.target_exposure_gbp ? perf.held_gbp / perf.target_exposure_gbp : 0) : null
-  const excess = perf && perf.basket_return != null && perf.benchmark_return != null ? perf.basket_return - perf.benchmark_return : null
+  const rows = group ? holdingRows(play, group) : []
+  const drifted = driftedCount(rows)
+  const actions = nextActions({
+    play, perf, drifted, staging, reviewing,
+    onStage: (i) => void stage(i),
+    onRebalance: () => setRebalancing('saved'),
+    onReview: () => void review(),
+  })
+  const horizon = play.horizon_months >= 12 ? `${+(play.horizon_months / 12).toFixed(1)}y horizon` : `${play.horizon_months}m horizon`
 
   return (
-    <div className="space-y-10">
-      <div className="space-y-3">
-        <BackLink />
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0 space-y-2">
-            <h1 className="text-2xl font-semibold tracking-tight text-balance">{play.title}</h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <StatusChip status={play.status} />
-              <ConvictionDots conviction={play.conviction} />
-              <span className="text-xs text-muted-foreground">{accountLabel(play.account_kind)}</span>
-              {play.activated_at ? (
-                <span className="text-xs text-muted-foreground">
-                  since {new Date(play.activated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </span>
-              ) : null}
-            </div>
-          </div>
+    <div className="space-y-8">
+      <header className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <BackLink />
           <div className="flex items-center gap-2">
-            {play.status === 'active' && remaining > 0 ? (
-              <Button size="sm" onClick={() => void stage()} disabled={staging}>
-                {staging ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                Stage next tranche
-              </Button>
-            ) : null}
             <Button size="sm" variant="outline" onClick={() => askArchie(playContextPrompt(play))}>
               <ArchieIcon className="size-4" />
               <span className="hidden sm:inline">Ask Archie</span>
@@ -405,6 +414,9 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setEditing(true)} disabled={play.status === 'closed'}>
                   Edit basket
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setRebalancing('saved')} disabled={play.status === 'closed' || !rows.some((r) => r.held)}>
+                  Rebalance
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {play.status === 'active' ? (
@@ -444,68 +456,21 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
             </AlertDialog>
           </div>
         </div>
-      </div>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <StatusChip status={play.status} />
+            <ConvictionDots conviction={play.conviction} />
+            <span className="text-xs text-muted-foreground">{accountLabel(play.account_kind)}</span>
+            <span className="text-xs text-muted-foreground">{horizon}</span>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-balance">{play.title}</h1>
+        </div>
+        <ThesisQuote thesis={play.thesis} />
+      </header>
 
-      <div className="grid grid-cols-2 gap-x-8 gap-y-6 border-y border-border py-5 lg:grid-cols-4">
-        <Stat label="New money">
-          <Money value={play.budget_gbp} decimals={0} />
-          <Sub>{formatPercent(play.budget_pct_of_book, 1)} of book</Sub>
-        </Stat>
-        <Stat label="Owned">
-          {group ? <Money value={group.value_gbp} decimals={0} /> : perf ? <Money value={perf.held_gbp} decimals={0} /> : <Skeleton className="h-7 w-24" />}
-          {deployed != null && tranches.length ? <Meter value={deployed} className="mt-2" /> : null}
-          <Sub>
-            {group ? (
-              <>
-                {formatPercent(group.weight, 1)} of book
-                {group.effective_weight != null && group.effective_weight - group.weight >= 0.001
-                  ? ` · ${formatPercent(group.effective_weight, 1)} incl. related`
-                  : ''}
-              </>
-            ) : perf ? (
-              <>of <Money value={perf.target_exposure_gbp} decimals={0} /> target</>
-            ) : null}
-            {tranches.length ? ` · ${staged.length}/${tranches.length} tranches` : ''}
-          </Sub>
-        </Stat>
-        <Stat label={`Return vs ${perf?.benchmark ?? 'SPY'}`}>
-          {perf ? (
-            perf.basket_return != null ? <PctDelta value={perf.basket_return} /> : <span className="text-muted-foreground">—</span>
-          ) : (
-            <Skeleton className="h-7 w-20" />
-          )}
-          {excess != null ? (
-            <Sub>
-              {excess >= 0 ? 'Ahead' : 'Behind'} by {formatPercent(Math.abs(excess), 1)}
-            </Sub>
-          ) : perf && perf.basket_return == null ? (
-            <Sub>Tracks from the first full day</Sub>
-          ) : null}
-        </Stat>
-        <Stat label="Verdict">
-          {verdict ? <VerdictChip verdict={verdict} className="text-sm" /> : <span className="font-sans text-sm font-normal text-muted-foreground">Not reviewed yet</span>}
-          {play.review.last_reviewed_at ? (
-            <Sub>{new Date(play.review.last_reviewed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</Sub>
-          ) : null}
-        </Stat>
-      </div>
-
-      {group?.needs.length ? (
-        <ul className="-mt-4 flex flex-wrap gap-x-6 gap-y-1.5">
-          {group.needs.map((n) => (
-            <li key={n.text} className="flex items-center gap-2 text-sm">
-              <span className={cn('size-1.5 rounded-full', n.tone === 'critical' ? 'bg-negative' : n.tone === 'warn' ? 'bg-warning' : 'bg-muted-foreground/50')} />
-              {n.text}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {perf && perf.points.length > 1 ? (
-        <Block title="Basket vs benchmark" description={`Target-weighted, since activation · ${perf.benchmark} dashed`}>
-          <PerfChart points={perf.points} />
-        </Block>
-      ) : null}
+      <PlayHero play={play} group={group} perf={perf} actions={actions} />
+      <HealthRow play={play} perf={perf} />
+      {perfError && !perf ? <p className="-mt-4 text-xs text-muted-foreground">Live performance is unavailable right now.</p> : null}
 
       {editing ? (
         <Block
@@ -515,6 +480,10 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
             <>
               <Button size="sm" variant="ghost" onClick={() => { setLegs(play.legs); setEditing(false) }}>
                 Cancel
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setRebalancing('edited')} disabled={!rows.some((r) => r.held)}>
+                <Scale className="size-3.5" />
+                Rebalance
               </Button>
               <Button size="sm" onClick={() => void saveLegs()}>
                 Save
@@ -526,71 +495,46 @@ function PlayDetail({ play, onChange }: { play: Play; onChange: (p: Play) => voi
         </Block>
       ) : null}
 
-      <PlayRings play={play} onPlayChange={onChange} />
-      {perfError && !perf ? <p className="-mt-6 text-xs text-muted-foreground">Live performance is unavailable right now.</p> : null}
+      <PlayRings play={play} onPlayChange={onChange} onRebalance={() => setRebalancing('saved')} />
+
+      {perf && perf.points.length > 1 ? (
+        <Block title="Basket vs benchmark" description={`Target-weighted, since activation · ${perf.benchmark} dashed`}>
+          <PerfChart points={perf.points} />
+        </Block>
+      ) : null}
+
+      <Block
+        title="Entry plan"
+        description={(() => {
+          const t = play.sizing.tranches ?? []
+          const left = t.length - (play.sizing.staged ?? []).length
+          return t.length ? (left > 0 ? `New money in ${t.length} steps · ${left} to go` : 'Fully staged') : undefined
+        })()}
+      >
+        <EntryStepper play={play} onStage={(i) => void stage(i)} staging={staging} />
+      </Block>
 
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-2">
-        <Block title="Entry plan" description={remaining > 0 ? `${remaining} tranche${remaining === 1 ? '' : 's'} to go` : 'Fully staged'}>
-          <TranchePlan play={play} staged={staged} onStage={(i) => void stage(i)} staging={staging} />
-        </Block>
-        <Block title="Kill criteria" description="Live status, checked daily">
+        <Block title="Kill criteria" description="Checked after every close">
           <KillList items={perf?.kill_status ?? play.kill_criteria} wwcmm={play.what_would_change_my_mind} />
         </Block>
+        <ReviewsBlock play={play} reviewing={reviewing} onReview={() => void review()} />
       </div>
 
-      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
-        <Block title="Thesis" className="lg:col-span-3">
-          <div className="text-sm leading-relaxed">
-            <RichMarkdown markdown={play.thesis} />
-          </div>
-        </Block>
-        <Block
-          title="Reviews"
-          className="lg:col-span-2"
-          action={
-            <Button size="sm" variant="ghost" onClick={() => void review()} disabled={reviewing}>
-              {reviewing ? <Loader2 className="size-3.5 animate-spin" /> : <ArchieIcon className="size-3.5" />}
-              Run review
-            </Button>
-          }
-        >
-          {play.review.history?.length ? (
-            <ol className="space-y-4">
-              {play.review.history.slice(0, 8).map((r, i) => (
-                <li key={i} className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <VerdictChip verdict={r.verdict} />
-                    <span className="text-xs text-muted-foreground">
-                      {r.source === 'archie' ? 'Archie' : 'Daily check'} ·{' '}
-                      {new Date(r.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                    </span>
-                  </div>
-                  <p className="text-sm leading-relaxed text-muted-foreground">{r.notes}</p>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              The daily check runs after the close. Run a review for Archie's read on the thesis now.
-            </p>
-          )}
-        </Block>
-      </div>
+      <RebalanceDialog
+        play={play}
+        open={rebalancing !== null}
+        onOpenChange={(v) => !v && setRebalancing(null)}
+        legs={rebalancing === 'edited' ? legs : null}
+        colorIndex={group?.color_index ?? 0}
+        saveTargets={async () => {
+          await persistLegs()
+          setEditing(false)
+        }}
+        onDone={() => void reloadBook()}
+      />
     </div>
   )
-}
-
-function Stat({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <Eyebrow className="mb-1">{label}</Eyebrow>
-      <div className="font-mono text-xl font-semibold tracking-tight tabular-nums">{children}</div>
-    </div>
-  )
-}
-
-function Sub({ children }: { children: React.ReactNode }) {
-  return <span className="mt-1 block font-sans text-xs font-normal tracking-normal text-muted-foreground">{children}</span>
 }
 
 function PerfChart({ points }: { points: PlayPerformance['points'] }) {

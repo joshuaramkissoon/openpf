@@ -213,7 +213,9 @@ def plan(
         warnings.append(
             f"£{unfunded:,.0f} of buys had no cash to fund them in the right account, so they're left out. "
             + ("Add cash to the account, or top up with cash instead." if not use_cash else "Add cash to the account."))
-    if cash_binding:
+    wanted = sum(max(0.0, target[t] - current[t]) * total for t in target if target[t] - current[t] > min_drift)
+    funded = sum(tr["notional_gbp"] for tr in trades if tr["side"] == "buy")
+    if cash_binding and wanted - funded > max(min_trade_gbp, 0.02 * wanted):
         warnings.append("Not enough free cash to reach every target; the buys share what there is."
                         if use_cash else "Buys were scaled down to what the sales can fund.")
 
@@ -226,6 +228,21 @@ def plan(
         tr["fee_gbp"] = 0.0 if ccy in _GBP or tr["account_kind"] == "crypto" else round(tr["notional_gbp"] * FX_FEE_RATE, 2)
         tr["name"] = by_ticker[tr["ticker"]].get("name") or ""
     trades.sort(key=lambda tr: (tr["side"] != "sell", -tr["notional_gbp"]))
+
+    try:
+        from app.services.config_store import ConfigStore
+
+        cap = float(ConfigStore(db).get_risk().get("max_single_order_notional") or 0.0)
+    except Exception:  # noqa: BLE001
+        cap = 0.0
+    over = [tr for tr in trades if cap and tr["notional_gbp"] > cap]
+    for tr in trades:
+        tr["over_order_limit"] = tr in over
+    if over:
+        warnings.append(
+            f"{len(over)} order{'s are' if len(over) > 1 else ' is'} over your £{cap:,.0f} per-order limit: proposing holds "
+            f"{'them' if len(over) > 1 else 'it'} back (and the buys {'they fund' if len(over) > 1 else 'it funds'}); "
+            "placing them yourself treats the limit as a warning.")
 
     moved = {tr["ticker"] for tr in trades}
     legs_out = []
@@ -276,7 +293,12 @@ def propose(db: Session, play: Play, *, use_cash: bool = False, **plan_kwargs: A
     p = plan(db, play, use_cash=use_cash, **plan_kwargs)
     legs = {l["ticker"]: l for l in p["legs"]}
     created, failed = [], []
+    short: set[str] = set()
     for tr in p["trades"]:
+        if tr["side"] == "buy" and tr["account_kind"] in short:
+            failed.append({"ticker": tr["ticker"], "side": "buy",
+                           "reason": "not proposed: the sale funding it was held back"})
+            continue
         res = proposal_service.propose_trade(
             db, side=tr["side"], account_kind=tr["account_kind"], rationale=_rationale(play, tr, legs.get(tr["ticker"])),
             instrument_code=tr.get("instrument_code") or None,
@@ -292,6 +314,8 @@ def propose(db: Session, play: Play, *, use_cash: bool = False, **plan_kwargs: A
         else:
             failed.append({"ticker": tr["ticker"], "side": tr["side"],
                            "reason": "; ".join(res.get("violations") or []) or res.get("error") or "not proposed"})
+            if tr["side"] == "sell":
+                short.add(tr["account_kind"])
     return {"plan": p, "proposed": created, "failed": failed}
 
 

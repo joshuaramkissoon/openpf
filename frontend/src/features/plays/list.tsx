@@ -15,6 +15,7 @@ import { AllocationBar } from './book-card'
 import { SortHoldingsSheet } from './suggestions'
 import { PLAY_TEMPLATES } from './templates'
 import type { BookGroup, Play, PlayPerformance } from './types'
+import { LegName } from './names'
 import { Sparkline, StatusChip, VerdictChip } from './ui'
 
 type Tab = 'plays' | 'watchlist'
@@ -330,9 +331,7 @@ function DraftCard({ play, onOpen }: { play: Play; onOpen: () => void }) {
       <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{firstLine(play.thesis)}</p>
       <div className="mt-4 flex flex-wrap gap-1.5">
         {legs.map((l) => (
-          <span key={l.ticker} className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
-            {l.ticker}
-          </span>
+          <LegName key={l.ticker} symbol={l.ticker} hint={l.name} className="max-w-40 truncate rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-foreground/80" />
         ))}
         {play.legs.length > legs.length ? <span className="px-1 text-[11px] text-muted-foreground">+{play.legs.length - legs.length}</span> : null}
       </div>

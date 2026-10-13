@@ -1292,7 +1292,7 @@ def _mark_interrupted(row: PlayDraftJob) -> None:
     row.error = INTERRUPTED_MSG
     row.error_kind = "interrupted"
     row.finished_at = _now()
-    row.progress = list(row.progress or []) + [{"at": _now().isoformat(), "text": "Interrupted"}]
+    row.progress = list(row.progress or []) + [{"at": _now().isoformat(), "text": "Stopped: OpenPF restarted"}]
 
 
 def get_draft_job(db: Session, job_id: str) -> dict[str, Any] | None:
