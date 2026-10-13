@@ -13,7 +13,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import LeveragedSignal, LeveragedTrade, ScheduledTaskLog, TradeIntent
-from app.services.claude_sdk_config import project_root
+from app.services.claude_sdk_config import memory_dir, project_root
 from app.services.config_store import ConfigStore
 from app.services.instrument_cache_service import instrument_cache_paths, refresh_instrument_cache
 from app.services.leveraged_market import LeveragedMarketError, get_price, get_technicals
@@ -37,8 +37,7 @@ def _utcnow() -> datetime:
 
 
 def _trade_log_dir() -> Path:
-    root = project_root()
-    out = root / ".claude" / "runtime" / "memory" / "trades"
+    out = memory_dir() / "trades"
     out.mkdir(parents=True, exist_ok=True)
     return out
 
@@ -1676,7 +1675,7 @@ def adopt_position(
 
 
 def _leveraged_memory_dir() -> Path:
-    out = project_root() / ".claude" / "runtime" / "memory" / "leveraged"
+    out = memory_dir() / "leveraged"
     out.mkdir(parents=True, exist_ok=True)
     return out
 

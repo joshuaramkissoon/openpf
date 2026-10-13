@@ -241,6 +241,15 @@ def mcp_server_env(spec: McpServerSpec) -> dict[str, str]:
     env = _scrubbed_inherited_env()
     env["PYTHONPATH"] = str(BACKEND_ROOT)
     env["DATABASE_URL"] = resolved_database_url()
+    # Pin every per-instance folder explicitly so a child process can't fall
+    # back to another instance's defaults (sandbox vs live).
+    from app.core.sandbox import is_sandbox
+    from app.services.claude_sdk_config import runtime_dir
+
+    env["OPENPF_RUNTIME_DIR"] = str(runtime_dir())
+    views_dir = Path(get_settings().views_data_dir).expanduser()
+    env["VIEWS_DATA_DIR"] = str(views_dir if views_dir.is_absolute() else (BACKEND_ROOT / views_dir).resolve())
+    env["OPENPF_SANDBOX"] = "1" if is_sandbox() else ""
     if spec.needs_t212_read_keys:
         from app.services.claude_sdk_config import resolve_t212_env
 

@@ -48,6 +48,23 @@ def resolve_t212_env() -> dict[str, str]:
     READ keys only. Execution (write) keys are never handed to any agent
     subprocess — live orders go through ``execution_service.execute_intent``.
     """
+    from app.core.sandbox import is_sandbox, sandbox_base_url
+
+    if is_sandbox():
+        # Only the mock broker: its URL and its fake read keys. Real keys (env
+        # or DB) never reach a sandbox subprocess.
+        from app.services.sandbox_broker import SANDBOX_CREDENTIALS
+
+        return {
+            "T212_BASE_ENV": "sandbox",
+            "T212_SANDBOX_URL": sandbox_base_url(),
+            "OPENPF_SANDBOX": "1",
+            "T212_API_KEY_INVEST": SANDBOX_CREDENTIALS["invest"]["t212_api_key"],
+            "T212_API_SECRET_INVEST": SANDBOX_CREDENTIALS["invest"]["t212_api_secret"],
+            "T212_API_KEY_STOCKS_ISA": SANDBOX_CREDENTIALS["stocks_isa"]["t212_api_key"],
+            "T212_API_SECRET_STOCKS_ISA": SANDBOX_CREDENTIALS["stocks_isa"]["t212_api_secret"],
+        }
+
     env: dict[str, str] = {"T212_BASE_ENV": settings.t212_base_env}
     invest = ("", "")
     isa = ("", "")
@@ -111,26 +128,67 @@ def parse_setting_sources(raw: str | None, *, require_project: bool = True) -> l
 
 def _resolve_cwd_candidate() -> Path:
     root = project_root()
-    raw = str(settings.claude_project_cwd or ".").strip() or "."
+    explicit = str(settings.openpf_runtime_dir or "").strip()
+    raw = explicit or str(settings.claude_project_cwd or ".").strip() or "."
     candidate = Path(raw).expanduser()
     if not candidate.is_absolute():
         candidate = (root / candidate).resolve()
     else:
         candidate = candidate.resolve()
 
-    # Keep SDK cwd scoped to this repo tree.
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        candidate = root
+    # CLAUDE_PROJECT_CWD stays scoped to this repo tree; an explicit
+    # OPENPF_RUNTIME_DIR (per-instance data folder) may live anywhere.
+    if not explicit:
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            candidate = root
 
     return candidate
 
 
+def runtime_dir() -> Path:
+    """This instance's Archie runtime folder (his cwd; holds artifacts/ and
+    memory/). Every artifact/memory path in the backend derives from here so a
+    sandbox instance and a live one never see each other's files."""
+    return resolve_sdk_cwd()
+
+
+def artifacts_dir() -> Path:
+    return runtime_dir() / "artifacts"
+
+
+def memory_dir() -> Path:
+    return runtime_dir() / "memory"
+
+
+def _seed_runtime_from_template(cwd: Path) -> None:
+    """A non-default runtime folder gets Archie's tracked identity (CLAUDE.md)
+    and skills from the template ``.claude/runtime/.claude`` — never its
+    artifacts/ or memory/ (those are per-instance and may hold real data).
+    CLAUDE.md is refreshed when the template is newer."""
+    from app.core.sandbox import live_runtime_dir
+
+    template = live_runtime_dir() / ".claude"
+    dst = cwd / ".claude"
+    dst.mkdir(parents=True, exist_ok=True)
+    src_md, dst_md = template / "CLAUDE.md", dst / "CLAUDE.md"
+    if src_md.is_file() and (not dst_md.exists() or src_md.stat().st_mtime > dst_md.stat().st_mtime):
+        shutil.copy2(src_md, dst_md)
+    src_skills = template / "skills"
+    if src_skills.is_dir():
+        shutil.copytree(src_skills, dst / "skills", dirs_exist_ok=True)
+
+
 def resolve_sdk_cwd() -> Path:
+    from app.core.sandbox import live_runtime_dir
+
     root = project_root()
     cwd = _resolve_cwd_candidate()
     cwd.mkdir(parents=True, exist_ok=True)
+    if cwd != root and cwd.resolve() != live_runtime_dir().resolve():
+        _seed_runtime_from_template(cwd)
+        return cwd
 
     src_hidden = root / ".claude"
     dst_hidden = cwd / ".claude"
@@ -194,7 +252,7 @@ _RESEARCHER_PROMPT = (
     "gaps/weekends, round-number prices, zero volume, or values that contradict a reliable source), "
     "FLAG it explicitly rather than reporting it as fact. Distinguish what you verified from what you "
     "could not. Return structured, clearly sourced findings. You may write artifacts, but ONLY under "
-    "`.claude/runtime/artifacts/`; never write anywhere else."
+    "`artifacts/` in your working directory; never write anywhere else."
 )
 
 _QUANT_PROMPT = (
@@ -335,8 +393,39 @@ def _network_violation(text: str) -> str | None:
     return None
 
 
+_OTHER_INSTANCE_REASON = "another OpenPF instance's data (sandbox and live are kept apart)"
+
+
+def _other_instance_roots() -> tuple[list[Path], str]:
+    """(folders this instance must never touch, substring marker for Bash)."""
+    from app.core.sandbox import demo_dir, live_runtime_dir
+
+    runtime = runtime_dir().resolve()
+    live = live_runtime_dir().resolve()
+    if runtime == live:
+        return [demo_dir().resolve()], ".demo"
+    # A sandbox/custom instance: the live runtime (memory, artifacts) is off-limits.
+    return [live], ".claude/runtime"
+
+
+def _touches_other_instance(paths: list[str], cwd: str | None) -> bool:
+    roots, _ = _other_instance_roots()
+    base = Path(cwd or runtime_dir())
+    for raw in paths:
+        if not raw:
+            continue
+        p = Path(raw).expanduser()
+        p = (p if p.is_absolute() else base / p).resolve()
+        if any(p == r or r in p.parents for r in roots):
+            return True
+    return False
+
+
 async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
     command = str((input_data.get("tool_input") or {}).get("command", ""))
+    _, marker = _other_instance_roots()
+    if marker in command:
+        return _deny(_OTHER_INSTANCE_REASON)
     for pattern, reason in _BASH_DENY:
         if pattern.search(command):
             return _deny(reason)
@@ -368,6 +457,9 @@ def _outside_agent_area(raw_path: str, cwd: str | None) -> bool:
     if not path.is_absolute():
         path = Path(cwd or resolve_sdk_cwd()) / path
     path = path.resolve()
+    runtime = runtime_dir().resolve()
+    if path == runtime or runtime in path.parents:
+        return False  # this instance's own runtime folder (artifacts, memory)
     try:
         rel = path.relative_to(root)
     except ValueError:
@@ -386,6 +478,11 @@ async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, conte
             return _deny(reason)
     if re.search(r"\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?\b", target, re.IGNORECASE):
         return _deny("the app database is off-limits")
+    _, marker = _other_instance_roots()
+    if marker in target or _touches_other_instance(
+        [str(tool_input.get(k, "")) for k in ("file_path", "path", "notebook_path")], input_data.get("cwd")
+    ):
+        return _deny(_OTHER_INSTANCE_REASON)
     if str(input_data.get("tool_name", "")) in _WRITE_TOOLS:
         write_target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         if _outside_agent_area(write_target, input_data.get("cwd")):

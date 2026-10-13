@@ -127,11 +127,15 @@ _FALLBACK = {code_for(t): p for t, _, p in UNIVERSE}
 
 
 def is_sandbox_enabled_env() -> bool:
-    return os.environ.get("OPENPF_SANDBOX", "").strip().lower() in {"1", "true", "yes", "on"}
+    from app.core.sandbox import is_sandbox
+
+    return is_sandbox()
 
 
 def sandbox_base_url() -> str:
-    return os.environ.get("T212_SANDBOX_URL", "").strip() or f"http://127.0.0.1:{os.environ.get('PORT', '8000')}{SANDBOX_PREFIX}"
+    from app.core.sandbox import sandbox_base_url as _url
+
+    return _url()
 
 
 def _state_path() -> Path:
@@ -504,13 +508,9 @@ def seed_config_if_fresh(db) -> bool:
     from app.services.config_store import ConfigStore
 
     store = ConfigStore(db)
-    creds = store.get_credentials()
-    has_real = any(
-        str((creds.get(k) or {}).get("t212_api_key", "")).strip() and not str((creds.get(k) or {}).get("t212_api_key", "")).startswith("sandbox-")
-        for k in ACCOUNTS
-    )
-    if has_real:
-        logger.warning("OPENPF_SANDBOX=1 ignored: this database has real broker credentials")
+    # Credentials are locked to the mock broker in sandbox mode (ConfigStore),
+    # so "fresh" just means the broker config hasn't been seeded yet.
+    if (store.get("broker_config", {}) or {}).get("t212_base_env") == "sandbox":
         return False
     for account in ACCOUNTS:
         store.set_account_credentials(account, {**SANDBOX_CREDENTIALS[account], "enabled": True, "exec_enabled": True})

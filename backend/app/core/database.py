@@ -24,6 +24,12 @@ def get_db():
 def init_db() -> None:
     from app.models import entities  # noqa: F401
 
+    # Fresh install / fresh sandbox: the sqlite file's folder may not exist yet.
+    db_file = engine.url.database if engine.url.get_backend_name() == "sqlite" else None
+    if db_file and db_file != ":memory:":
+        from pathlib import Path
+
+        Path(db_file).expanduser().parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _run_lightweight_migrations()
 

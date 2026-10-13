@@ -370,6 +370,14 @@ def execute_intent(
     if force_live:
         mode = "live"
 
+    from app.core.sandbox import is_sandbox, is_sandbox_url
+
+    if is_sandbox() and mode != "paper":
+        # Defence in depth: a sandbox instance only ever orders against the mock broker.
+        probe = build_t212_client(config, account_kind=resolved_account, purpose="execute")  # type: ignore[arg-type]
+        if broker.get("t212_base_env") != "sandbox" or not is_sandbox_url(probe.base_url):
+            raise ExecutionError("sandbox mode: refusing to execute against a non-sandbox broker")
+
     # Atomically claim the intent (approved -> executing). Two concurrent
     # executes (double-click, UI + Telegram) both pass the checks above; only
     # the one whose UPDATE matches places the order.

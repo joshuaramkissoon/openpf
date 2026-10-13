@@ -151,6 +151,10 @@ class Settings(BaseSettings):
     views_model: str = Field(default="claude-sonnet-4-6", alias="VIEWS_MODEL")
     # Where view HTML/versions/state live. Relative paths resolve from backend/.
     views_data_dir: str = Field(default="data/views", alias="VIEWS_DATA_DIR")
+    # Archie's per-instance runtime folder: his working dir, artifacts/ and
+    # memory/. Empty → CLAUDE_PROJECT_CWD (default .claude/runtime). Sandbox
+    # mode defaults it to .demo/runtime and refuses the live folder.
+    openpf_runtime_dir: str = Field(default="", alias="OPENPF_RUNTIME_DIR")
 
     @model_validator(mode="after")
     def _legacy_sqlite_fallback(self) -> "Settings":
@@ -175,14 +179,58 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def _sqlite_path(url: str) -> Path | None:
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return None
+    return Path(url[len(prefix):]).expanduser().resolve()
+
+
+def _apply_sandbox_isolation(settings: "Settings") -> None:
+    """Sandbox runs get their own data folders and can never reuse the live
+    instance's. Only the *process* env can relocate them — a live ``.env``
+    (which may name the live DB) is not trusted for paths in sandbox mode."""
+    from app.core.sandbox import SandboxViolation, demo_dir, is_within, live_runtime_dir, repo_root, same_path
+
+    # Never pick up real broker keys from .env — blank every T212 credential so
+    # only the mock broker's keys exist in this process.
+    for name in type(settings).model_fields:
+        if name.startswith(("t212_", "archie_t212_")) and ("_key" in name or "_secret" in name):
+            setattr(settings, name, "")
+    settings.t212_base_env = "sandbox"
+
+    demo = demo_dir()
+    if not os.environ.get("DATABASE_URL"):
+        settings.database_url = f"sqlite:///{demo / 'openpf-demo.db'}"
+    if not os.environ.get("VIEWS_DATA_DIR"):
+        settings.views_data_dir = str(demo / "views")
+    if not os.environ.get("OPENPF_RUNTIME_DIR"):
+        settings.openpf_runtime_dir = str(demo / "runtime")
+    if not os.environ.get("AGENT_WORKSPACE"):
+        settings.agent_workspace = str(Path(settings.openpf_runtime_dir) / "agent_workspace")
+    os.environ.setdefault("OPENPF_SANDBOX_STATE", str(demo / "sandbox_state.json"))
+
+    backend = repo_root() / "backend"
+    db_path = _sqlite_path(settings.database_url)
+    if db_path is None or any(same_path(db_path, backend / n) for n in ("openpf.db", "mypf.db")) or is_within(
+        db_path, live_runtime_dir()
+    ):
+        raise SandboxViolation(f"sandbox mode refuses database {settings.database_url!r} — use a separate sqlite file")
+    if is_within(settings.views_data_dir if Path(settings.views_data_dir).is_absolute() else backend / settings.views_data_dir,
+                 backend / "data" / "views"):
+        raise SandboxViolation("sandbox mode refuses the live views folder — set VIEWS_DATA_DIR elsewhere")
+    runtime = Path(settings.openpf_runtime_dir).expanduser()
+    if not runtime.is_absolute():
+        runtime = repo_root() / runtime
+    if is_within(runtime, live_runtime_dir()) or is_within(live_runtime_dir(), runtime):
+        raise SandboxViolation("sandbox mode refuses the live Archie runtime folder — set OPENPF_RUNTIME_DIR elsewhere")
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-    if os.environ.get("OPENPF_SANDBOX", "").strip().lower() in {"1", "true", "yes", "on"}:
-        # Sandbox runs must never pick up real broker keys from .env — blank every
-        # T212 credential so only the mock broker's keys exist in this process.
-        for name in type(settings).model_fields:
-            if name.startswith(("t212_", "archie_t212_")) and ("_key" in name or "_secret" in name):
-                setattr(settings, name, "")
-        settings.t212_base_env = "sandbox"
+    from app.core.sandbox import is_sandbox
+
+    if is_sandbox():
+        _apply_sandbox_isolation(settings)
     return settings

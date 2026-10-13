@@ -40,7 +40,9 @@ class T212Client:
 
     @property
     def base_url(self) -> str:
-        if self.base_env == "sandbox":
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox() or self.base_env == "sandbox":
             from app.services.sandbox_broker import sandbox_base_url
 
             return sandbox_base_url()
@@ -68,6 +70,13 @@ class T212Client:
             raise T212AuthError("Trading 212 API credentials are not configured")
 
         url = f"{self.base_url}{path}"
+        from app.core.sandbox import SandboxViolation, assert_sandbox_url, is_sandbox
+
+        if is_sandbox():
+            try:
+                assert_sandbox_url(url)
+            except SandboxViolation as exc:
+                raise T212Error(str(exc)) from exc
         try:
             with httpx.Client(timeout=20.0) as client:
                 response = client.request(method, url, headers=self._headers(), params=params, json=payload)

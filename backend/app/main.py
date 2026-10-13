@@ -61,9 +61,11 @@ def _warm_sandbox_history() -> None:
 
 
 def _sandbox_enabled() -> bool:
-    from app.services.sandbox_broker import is_sandbox_enabled_env
+    # Keyed off the process env (OPENPF_SANDBOX=1 or T212_BASE_ENV=sandbox) so
+    # the isolation in core.config/core.sandbox always applies with it.
+    from app.core.sandbox import is_sandbox
 
-    return is_sandbox_enabled_env() or settings.t212_base_env == "sandbox"
+    return is_sandbox()
 
 
 def _bind_host() -> str:
@@ -114,6 +116,18 @@ async def lifespan(app: FastAPI):
                     _warm_sandbox_history()
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).warning("Sandbox seed skipped", exc_info=True)
+        # Fail closed: a sandbox that could reach live data/keys must not start.
+        from app.core.sandbox import SandboxViolation, verify_isolation
+
+        log = logging.getLogger("openpf.sandbox")
+        try:
+            lines = verify_isolation()
+        except SandboxViolation as exc:
+            log.critical("SANDBOX ISOLATION FAILED — refusing to start: %s", exc)
+            raise
+        banner = "=" * 72
+        log.warning("\n%s\n  SANDBOX MODE — mock broker, fake money, isolated data\n%s\n%s", banner,
+                    "\n".join(f"  {line}" for line in lines), banner)
     # Nothing can be mid-order before we've served a request: anything still
     # 'executing' was interrupted by a crash/restart — surface it, don't spin.
     try:
