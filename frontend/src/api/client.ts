@@ -325,7 +325,11 @@ export function streamChatMessage(
   const MAX_ATTEMPTS = 4
   const BASE_DELAY_MS = 500
 
+  // abort() settles `done` too, so callers awaiting it always reach their
+  // cleanup (a never-settling promise left the UI's finally blocks hanging).
+  let resolveDone: (() => void) | null = null
   const done = new Promise<void>((resolve, reject) => {
+    resolveDone = resolve
     const url = withWsToken(`${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`)
 
     const fail = (message: string) => {
@@ -467,6 +471,7 @@ export function streamChatMessage(
     } catch {
       // no-op
     }
+    resolveDone?.()
   }
 
   const sendAnswer = (questionId: string, answers: ChatQuestionAnswers) => {
