@@ -158,6 +158,7 @@ export function AppShell() {
           )
         }
         onAskArchiePrompt={(p) => actions.askArchie(p)}
+        onAskArchieSend={(p) => actions.askArchie(p, { send: true })}
         commands={commands}
       >
         <ShellActions base={actions}>
