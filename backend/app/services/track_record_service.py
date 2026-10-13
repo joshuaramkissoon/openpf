@@ -289,6 +289,9 @@ def mark_outcomes(
     prices = _PriceBook(history_fn or _default_history, max(30, (today - oldest).days + 15))
     counts = {"seen": 0, "marked": 0, "unpriced": 0, "complete": 0}
     for intent in intents:
+        # Trades the user placed by hand aren't Archie's calls.
+        if (intent.meta or {}).get("source") == "user":
+            continue
         # Open proposals get a row too, so the reference price is captured close
         # to proposal time; they join the stats once they resolve.
         existing = done.get(intent.id)

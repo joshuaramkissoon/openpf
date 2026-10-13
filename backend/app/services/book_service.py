@@ -762,96 +762,64 @@ def _store(db: Session) -> Any:
     return ConfigStore(db)
 
 
-REFINE_STALE_S = 45  # a refinement older than this is treated as dead
-
-
-def _refining(stored: dict[str, Any]) -> bool:
-    since = stored.get("refining_since")
-    if not since:
-        return False
-    try:
-        return (_now() - datetime.fromisoformat(since)).total_seconds() < REFINE_STALE_S
-    except ValueError:
-        return False
+MODEL_WAIT_S = 12.0  # the sheet waits this long for the model before showing the rules
 
 
 def get_suggestions(db: Session, *, book: dict[str, Any] | None = None) -> dict[str, Any]:
     stored = _store(db).get(SUGGESTIONS_KEY, {"items": []})
     unsorted, full = unsorted_holdings(db, book=book)
     return {"generated_at": stored.get("generated_at"), "source": stored.get("source"),
-            "refining": _refining(stored), "refine_error": stored.get("refine_error"),
+            "refine_error": stored.get("refine_error"),
             "items": _decorate(stored.get("items") or [], unsorted),
             "unsorted": unsorted, "unsorted_weight": full["unsorted_weight"]}
 
 
-def _save(db: Session, items: list[dict[str, Any]], source: str, *, refining: bool = False) -> str:
+def _save(db: Session, items: list[dict[str, Any]], source: str, *, note: str | None = None) -> None:
     for it in items:
         it.setdefault("id", uuid.uuid4().hex[:10])
         it.setdefault("status", "open")
-    gen = uuid.uuid4().hex[:10]
-    _store(db).set(SUGGESTIONS_KEY, {"generated_at": _now().isoformat(), "source": source, "items": items, "gen": gen,
-                                     "refining_since": _now().isoformat() if refining else None})
-    return gen
+    _store(db).set(SUGGESTIONS_KEY, {"generated_at": _now().isoformat(), "source": source, "items": items,
+                                     "refine_error": note})
 
 
-def apply_refinement(db: Session, gen: str, unsorted: list[dict[str, Any]]) -> bool:
-    """Swap the rule-based groups for the model's, unless the user has moved on
-    (regrouped, or accepted/dismissed a card) since. Returns True when swapped."""
-    store = _store(db)
+def _model_within(unsorted: list[dict[str, Any]], plays: list[Play], wait_s: float) -> list[dict[str, Any]]:
+    """The model's groups, or TimeoutError after ``wait_s``. A late answer is dropped."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="play-suggest")
     try:
-        items = clean_suggestions(_model_suggestions(unsorted, owning_plays(db), 0.0), unsorted, db)
-        error = None if items else "Archie didn't find better groupings."
-    except Exception as exc:  # noqa: BLE001 — no model / timeout → keep the rules
-        logger.info("play suggestion refinement kept the rules: %s", exc)
-        items, error = [], "Archie couldn't refine these just now."
-    stored = store.get(SUGGESTIONS_KEY, {"items": []})
-    if stored.get("gen") != gen:
-        return False
-    untouched = all(i.get("status", "open") == "open" for i in stored.get("items") or [])
-    if items and untouched:
-        _save(db, items, "archie")
-        return True
-    stored["refining_since"] = None
-    stored["refine_error"] = error if not items else None
-    store.set(SUGGESTIONS_KEY, stored)
-    return False
-
-
-def _refine_in_background(gen: str, unsorted: list[dict[str, Any]]) -> None:
-    import threading
-
-    def run() -> None:
-        from app.core.database import SessionLocal
-
-        try:
-            with SessionLocal() as db:
-                apply_refinement(db, gen, unsorted)
-        except Exception:  # noqa: BLE001
-            logger.warning("play suggestion refinement crashed", exc_info=True)
-
-    threading.Thread(target=run, name="play-suggest-refine", daemon=True).start()
+        return pool.submit(_model_suggestions, unsorted, plays, 0.0).result(timeout=wait_s)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def generate_suggestions(db: Session, *, use_model: bool = True, book: dict[str, Any] | None = None,
-                         background: bool = False) -> dict[str, Any]:
+                         wait_s: float = MODEL_WAIT_S) -> dict[str, Any]:
     """Group Unsorted holdings into suggested plays / Core. Never applies anything.
 
-    The theme rules answer instantly and are saved first. When a fast model is
-    configured, it then refines them — inline, or with ``background=True`` in a
-    thread while the caller returns the rule-based groups at once (the UI polls
-    ``refining`` and swaps the refined groups in)."""
+    The fast model groups them (a few seconds; the UI shows a loading state). The
+    theme rules are the fallback only: no model configured, or it failed, found
+    nothing, or took longer than ``wait_s`` (then ``refine_error`` says so, quietly)."""
     unsorted, full = unsorted_holdings(db, book=book)
     if not unsorted:
         _save(db, [], "none")
         return get_suggestions(db, book=book)
     rules = clean_suggestions(deterministic_suggestions(unsorted), unsorted, db)
-    refine = use_model and (not background or refine_available())
-    gen = _save(db, rules, "rules", refining=refine)
-    if refine:
-        if background:
-            _refine_in_background(gen, unsorted)
-        else:
-            apply_refinement(db, gen, unsorted)
+    if not (use_model and refine_available()):
+        _save(db, rules, "rules")
+        return get_suggestions(db, book=book)
+    try:
+        items = clean_suggestions(_model_within(unsorted, owning_plays(db), wait_s), unsorted, db)
+        note = None if items else "Archie didn't find clearer groups, so these follow theme rules."
+    except TimeoutError:
+        items, note = [], "Archie took too long, so these follow theme rules."
+    except Exception as exc:  # noqa: BLE001 — no model / provider error → the rules
+        logger.info("play suggestions fell back to the rules: %s", exc)
+        items, note = [], "Archie couldn't group these just now, so these follow theme rules."
+    if items:
+        _save(db, items, "archie")
+    else:
+        _save(db, rules, "rules", note=note)
     return get_suggestions(db, book=book)
 
 

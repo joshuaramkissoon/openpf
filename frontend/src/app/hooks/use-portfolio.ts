@@ -110,6 +110,13 @@ export function usePortfolio({ privacyMode, pollActive }: { privacyMode: Privacy
     }
   }, [accountView, currency])
 
+  // A trade placed by hand (the stock sheet) changes holdings now, not in a minute.
+  useEffect(() => {
+    const onTraded = () => void refreshSilently()
+    window.addEventListener('openpf:portfolio-changed', onTraded)
+    return () => window.removeEventListener('openpf:portfolio-changed', onTraded)
+  }, [refreshSilently])
+
   useEffect(() => {
     if (!pollActive) return
     function maybeRefresh() {

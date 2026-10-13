@@ -372,6 +372,10 @@ _NETWORK_DENY = [
         re.compile(r"/api/(?:agent/intents|orders|leveraged|config|crypto)\b", re.IGNORECASE),
         "trading/config API endpoints are human-only",
     ),
+    (
+        re.compile(r"/api/instruments/[^/\s'\"]+/(?:trade|propose)\b", re.IGNORECASE),
+        "trading from the stock sheet is human-only — propose trades with propose_trade",
+    ),
     (re.compile(r"trading212\.com", re.IGNORECASE), "direct Trading 212 API access is blocked — use the read-only trading212 tools"),
     (re.compile(r"\b(?:api(?:-futures)?\.kraken\.com|api\.coinbase\.com|api\.exchange\.coinbase\.com|api\d?\.binance\.com)\b",
                 re.IGNORECASE), "direct crypto exchange API access is blocked — use the read-only crypto tools"),
@@ -379,7 +383,7 @@ _NETWORK_DENY = [
 _BASH_TRADING_DENY = [
     (
         re.compile(
-            r"\b(?:execute_intent|approve_intent|place_(?:market|limit|stop|stop_limit)_order|cancel_order"
+            r"\b(?:execute_intent|approve_intent|manual_trade|place_(?:market|limit|stop|stop_limit)_order|cancel_order"
             r"|build_t212_client|get_account_exec_credentials|exec_api_(?:key|secret)|T212_EXEC|update_policy"
             r"|build_crypto_client|CcxtCryptoBroker|client_for|ccxt|CRYPTO_API_(?:KEY|SECRET)|crypto_config"
             r"|set_leveraged|auto_execute|execute_signal|ConfigStore|app_config|sqlite3?)\b",

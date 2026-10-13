@@ -150,7 +150,7 @@ Labels are what the user reads: never a raw field name.
 
 **`hero`** — the one number the page leads with (one per page).
 `{"type": "hero", "label": "Today", "value": Measure, "format": "signedMoney", "delta": Measure, "deltaFormat": "signedPct", "deltaLabel": "on what's invested", "caption": "across 20 holdings", "trend": {"from": "hist.points", "field": "total"}?}`
-`deltaLabel` (≤ 40) follows the delta: what it's relative to. `name` (a field) names what the number is about from the block's first row — `{"label": "Largest country", "name": "country", "from": "pf.positions", "transform": [enrich, groupBy country, sort, top 1], …}` reads "Largest country · United States". `trend` adds a sparkline under the number — only when no chart on the page draws that series.
+`deltaLabel` (≤ 40) follows the delta: what it's relative to. `name` (a field) names what the number is about from the block's first row — `{"label": "Largest country", "name": "country", "from": "pf.positions", "transform": [enrich, groupBy country, sort, top 1], …}` reads "Largest country · United States". `trend` adds a sparkline under the number — only when no chart on the page draws that series; `"last": 10` keeps only the latest N points. `breadth` (`{"field": "day_change"}`) counts the block's rows up vs down on a signed field ("8 up · 14 down").
 
 **`meter`** — one amount against a limit, with an optional pace marker.
 `{"type": "meter", "label": "ISA allowance used", "from": "cf.tax_year", "value": {"field": "isa_used"}, "max": {"field": "isa_allowance"} | 20000, "mark": {"field": "year_elapsed_pct"}?, "markLabel": "Share of the tax year gone"?, "format": "money"}`
@@ -168,7 +168,7 @@ Labels are what the user reads: never a raw field name.
 
 **`bars`** — ranked magnitude or a signed contribution.
 `{"type": "bars", "from": "...", "label": "ticker", "value": "day_change", "format": "signedMoney", "orientation": "horizontal" (default) | "vertical", "limit": 10?, "secondary": "day_change_pct"?, "secondaryFormat": "signedPct"?, "valueLabel": "Cash"?, "secondaryLabel": "% of account"?, "highlight": "max"?}`
-Signed values diverge from a zero line (gains green, losses red). Unsigned bars are neutral with the accent on `highlight` (`max` default for horizontal, `all` for vertical; also `min` `first` `last` `none`). `valueLabel` / `secondaryLabel` head the value columns — required when a % column needs its basis. Use `vertical` for time buckets (e.g. months); the peak and latest bars are labelled.
+Signed values diverge from a zero line (gains green, losses red). Unsigned bars are neutral with the accent on `highlight` (`max` default for horizontal, `all` for vertical; also `min` `first` `last` `none`). `valueLabel` / `secondaryLabel` head the value columns — required when a % column needs its basis. Use `vertical` for time buckets (e.g. months); the peak and latest bars are labelled. `"split": "sign"` shows both sides of a signed value as two labelled groups — the top `limit` gainers and the top `limit` losers, on one shared scale (e.g. today's best and worst movers).
 
 **`timeseries`** — change over time.
 `{"type": "timeseries", "from": "hist.points", "x": "date", "series": [{"field": "total", "label": "Value"}, {"field": "invested", "label": "Invested"}], "style": "area" | "line", "format": "moneyCompact"}`

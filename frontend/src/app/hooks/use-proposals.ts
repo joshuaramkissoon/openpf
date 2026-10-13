@@ -47,10 +47,12 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
     }
     const id = window.setInterval(tick, 20_000)
     window.addEventListener('hashchange', tick)
+    window.addEventListener('openpf:portfolio-changed', tick)
     document.addEventListener('visibilitychange', tick)
     return () => {
       window.clearInterval(id)
       window.removeEventListener('hashchange', tick)
+      window.removeEventListener('openpf:portfolio-changed', tick)
       document.removeEventListener('visibilitychange', tick)
     }
   }, [reload])

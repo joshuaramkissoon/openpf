@@ -46,7 +46,7 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
     )
   }
 
-  const h = env.size === 'L' ? 200 : env.compact ? 200 : 260
+  const h = env.size === 'L' ? 316 : env.compact ? 200 : 260
   const m = { t: 12, r: 12, b: 24, l: 56 }
   const iw = Math.max(0, width - m.l - m.r)
   const ih = h - m.t - m.b

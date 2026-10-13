@@ -31,12 +31,15 @@ type Base = {
   empty?: string
 }
 
-export type Trend = { from: string; field: string; x?: string }
+/** `last`: only the most recent N points. */
+export type Trend = { from: string; field: string; x?: string; last?: number }
+/** Counts the block's rows up vs down on a signed field ("8 up · 14 down"). */
+export type Breadth = { field: string }
 /**
  * `deltaLabel` names what a delta is relative to ("of your book", "on cost") — a % never stands alone.
  * `name`: a field of the block's first row that says what the number is about ("country" → United States).
  */
-export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; deltaLabel?: string; name?: string; caption?: string; trend?: Trend }
+export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; deltaLabel?: string; name?: string; caption?: string; trend?: Trend; breadth?: Breadth }
 export type MeterBlock = Base & { type: 'meter'; label: string; value: Measure; max: Measure | number; format?: VizFormat; mark?: Measure; markLabel?: string; caption?: string }
 export type KpiItem = { label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; hint?: string }
 export type KpisBlock = Base & { type: 'kpis'; items: KpiItem[] }
@@ -59,6 +62,8 @@ export type BarsBlock = Base & {
   /** Which bars carry the accent; the rest stay neutral. Default: the largest (horizontal), all (vertical). */
   highlight?: 'max' | 'min' | 'first' | 'last' | 'all' | 'none'
   details?: Detail[]
+  /** 'sign': two labelled groups — the top `limit` up and the top `limit` down, on one scale. */
+  split?: 'sign'
 }
 /**
  * `zero`: start the y-axis at 0 (default for money levels — a small change must not look like a cliff).

@@ -294,3 +294,48 @@ export async function proposeFromSheet(
   const { data } = await api.post<SheetProposalResult>(`/instruments/${encodeURIComponent(ticker)}/propose`, body)
   return data
 }
+
+// ── Manual trades: the user trades from the sheet (no proposal) ──────────────
+
+export type TradeAmount = { side: 'buy' | 'sell'; account_kind: string; notional_gbp: number }
+
+export interface TradeFees {
+  commission_gbp: number
+  fx_fee_rate: number
+  fx_fee_gbp: number
+}
+
+export interface TradePreview {
+  ok: boolean
+  broker_mode: 'live' | 'paper' | 'demo' | 'sandbox'
+  sizing?: { symbol: string; quantity: number; reference_price: number; currency: string; estimated_notional_gbp: number; price_gbp: number }
+  fees?: TradeFees
+  violations: string[]
+  warnings: string[]
+  error?: string
+  caps?: { max_single_order_notional_gbp: number; max_daily_notional_gbp: number; executed_today_gbp: number }
+}
+
+export interface TradeResult {
+  ok: boolean
+  intent: { id: string; status: string; symbol: string; side: string; quantity: number; estimated_notional_gbp: number }
+  fill_price: number | null
+  broker_mode: string
+  fees: TradeFees
+}
+
+/** Size, fees and every rail for the review step. Records nothing. */
+export async function previewTrade(ticker: string, body: TradeAmount): Promise<TradePreview> {
+  const { data } = await api.post<TradePreview>(`/instruments/${encodeURIComponent(ticker)}/trade/preview`, body)
+  return data
+}
+
+/** Place the user's own order: approved as the user, executed through the single gate. */
+export async function placeTrade(ticker: string, body: TradeAmount & { live_confirmed?: boolean }): Promise<TradeResult> {
+  const { data } = await api.post<TradeResult>(
+    `/instruments/${encodeURIComponent(ticker)}/trade`,
+    { ...body, user_action: { kind: 'manual_trade', reviewed: true } },
+    { timeout: 60000 },
+  )
+  return data
+}

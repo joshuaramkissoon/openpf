@@ -10,7 +10,7 @@ a missing snapshot/price never 500s the view, it just narrows what's returned.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -30,7 +30,10 @@ from app.schemas.instruments import (
     InstrumentWatchlist,
 )
 from app.services import instrument_insight as instrument_insight_service
-from app.services import leveraged_market, portfolio_service, proposal_service, watchlist_service
+from app.services import leveraged_market, manual_trade, portfolio_service, proposal_service, watchlist_service
+from app.services.execution_service import ExecutionError
+from app.services.t212_client import T212Error
+from app.services.t212_errors import classify_t212_error
 
 router = APIRouter(prefix="/instruments", tags=["instruments"])
 
@@ -309,3 +312,55 @@ def propose_from_sheet(ticker: str, body: ProposeFromSheet, db: Session = Depend
         notional_gbp=body.notional_gbp,
         source="instrument_sheet",
     )
+
+
+# ── Manual trades: the user trades from the sheet; no proposal ──────────────
+
+
+class ManualTradeAmount(BaseModel):
+    side: str
+    account_kind: str
+    notional_gbp: float = Field(gt=0)
+
+
+class UserAction(BaseModel):
+    """Proof the request came from a person pressing Trade in the review step.
+    Agents have no route here at all (no MCP tool; the app's own API is blocked
+    by their hooks); this makes the intent explicit in every request too."""
+
+    kind: Literal["manual_trade"]
+    reviewed: Literal[True]
+
+
+class ManualTradeRequest(ManualTradeAmount):
+    user_action: UserAction
+    live_confirmed: bool = False
+    note: str = Field(default="", max_length=500)
+
+
+@router.post("/{ticker}/trade/preview")
+def manual_trade_preview(ticker: str, body: ManualTradeAmount, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The review step: size, fees and every rail for a hand-placed order. Records nothing."""
+    ident = instrument_insight_service.resolve(ticker, db)
+    try:
+        return manual_trade.preview(db, ident, side=body.side, account_kind=body.account_kind, notional_gbp=body.notional_gbp)
+    except manual_trade.ManualTradeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{ticker}/trade")
+def manual_trade_place(ticker: str, body: ManualTradeRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Place the user's own order: recorded with source "user", approved as the
+    user, then executed through ``execute_intent`` (every rail re-checked)."""
+    ident = instrument_insight_service.resolve(ticker, db)
+    try:
+        return manual_trade.place(
+            db, ident, side=body.side, account_kind=body.account_kind, notional_gbp=body.notional_gbp,
+            live_confirmed=body.live_confirmed, note=body.note,
+        )
+    except manual_trade.ManualTradeError as exc:
+        status = 409 if exc.code == "needs_live_confirmation" else 400
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc), "violations": exc.violations}) from exc
+    except (ExecutionError, T212Error) as exc:
+        classified = classify_t212_error(exc, account_kind=body.account_kind)
+        raise HTTPException(status_code=classified.status_code, detail=classified.as_detail()) from exc

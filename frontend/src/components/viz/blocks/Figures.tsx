@@ -1,4 +1,5 @@
-import { useId } from 'react'
+import { useId, useLayoutEffect, useState } from 'react'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useBlur, useFmt, useVizEnv, useWidth } from '../shared'
@@ -46,33 +47,151 @@ export function Sparkline({ values, height = 44, signed = false, zero = false }:
   )
 }
 
+/** A sparkline that takes whatever height its box has (widgets: the space under the figure). */
+function FillSparkline({ values, zero, min = 28 }: { values: number[]; zero: boolean; min?: number }) {
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  const [h, setH] = useState(0)
+  useLayoutEffect(() => {
+    if (!box) return
+    setH(box.clientHeight)
+    const ro = new ResizeObserver(() => setH(box.clientHeight))
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [box])
+  return (
+    <div ref={setBox} className="min-h-0 flex-1" style={{ minHeight: min }}>
+      {h > 0 ? <Sparkline values={values} height={Math.max(min, h)} zero={zero} /> : null}
+    </div>
+  )
+}
+
+/** "8 up · 14 down": how many holdings moved each way. Arrows + words carry it, colour only reinforces. */
+function BreadthLine({ up, down, bar = false }: { up: number; down: number; bar?: boolean }) {
+  const total = up + down
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-label={`${up} holdings up, ${down} down`}>
+        <span className="inline-flex items-center gap-0.5">
+          <ArrowUp className="size-3 text-positive" aria-hidden />
+          <span className="font-medium text-foreground tabular-nums">{up}</span> up
+        </span>
+        <span aria-hidden>·</span>
+        <span className="inline-flex items-center gap-0.5">
+          <ArrowDown className="size-3 text-negative" aria-hidden />
+          <span className="font-medium text-foreground tabular-nums">{down}</span> down
+        </span>
+      </p>
+      {bar && total > 0 ? (
+        <div className="flex h-1.5 w-full gap-[2px]" aria-hidden>
+          {up ? <span className="h-full rounded-l-[4px] last:rounded-r-[4px]" style={{ flexGrow: up, background: 'var(--viz-gain)' }} /> : null}
+          {down ? <span className="h-full rounded-r-[4px] first:rounded-l-[4px]" style={{ flexGrow: down, background: 'var(--viz-loss)' }} /> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** The one number a page leads with — the answer. Label, figure, then what the figure means. */
-export function Hero({ block, value, delta, trend, name }: { block: HeroBlock; value: number | null; delta: number | null; trend?: number[]; name?: string }) {
+export function Hero({
+  block,
+  value,
+  delta,
+  trend,
+  breadth,
+  name,
+}: {
+  block: HeroBlock
+  value: number | null
+  delta: number | null
+  trend?: number[]
+  breadth?: { up: number; down: number }
+  name?: string
+}) {
   const fmt = useFmt()
   const blur = useBlur()
   const env = useVizEnv()
   const small = env.size === 'S' || env.size === 'M'
+  const zero = !block.format || block.format === 'money' || block.format === 'moneyCompact'
+  const hasTrend = !!trend && trend.length > 1
+  const label = (
+    <p className={cn('truncate font-medium text-muted-foreground', small ? 'text-xs' : 'text-[13px]')}>
+      {block.label}
+      {name ? <span className="text-foreground"> · {name}</span> : null}
+    </p>
+  )
+  const figure = (
+    <p className={cn('mt-2 font-semibold', small ? 'text-[30px] leading-none tracking-tight' : 'viz-hero-value', tone(value, block.format), blur(block.format))}>
+      {fmt(value, block.format)}
+    </p>
+  )
+  const deltaLine = block.delta ? (
+    <p className={cn('leading-snug', small ? 'mt-1.5 truncate text-xs' : 'mt-4 text-[15px]')}>
+      <span className={cn('font-medium tabular-nums', tone(delta, block.deltaFormat) || 'text-foreground', blur(block.deltaFormat))}>{fmt(delta, block.deltaFormat)}</span>
+      {block.deltaLabel ? <span className="text-muted-foreground"> {block.deltaLabel}</span> : null}
+    </p>
+  ) : null
+  // A caption under a widget's sparkline says what the line is (it may not be the figure's own series).
+  const trendCaption = block.caption ? <p className="mt-1 truncate text-[11px] text-muted-foreground">{block.caption}</p> : null
+
+  // Widgets fill their tile: the figure on top, the trend takes the rest, breadth at the foot.
+  if (env.size === 'S') {
+    return (
+      <div className="flex h-full flex-col">
+        {label}
+        {figure}
+        {deltaLine}
+        {hasTrend ? (
+          <div className="mt-2.5 flex min-h-0 flex-1 flex-col">
+            <FillSparkline values={trend!} zero={zero} min={20} />
+          </div>
+        ) : null}
+        {breadth || (hasTrend && block.caption) ? (
+          // Breadth and the line's caption share a row when the tile is wide (phones), stack when not.
+          <div className={cn('flex flex-wrap items-center justify-between gap-x-3', hasTrend ? 'mt-1.5' : 'mt-auto')}>
+            {hasTrend ? <div className="min-w-0 max-w-full">{trendCaption}</div> : null}
+            {breadth ? <BreadthLine {...breadth} /> : null}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+  if (env.size === 'M' && (hasTrend || breadth)) {
+    return (
+      <div className="grid h-full grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] gap-5">
+        <div className="flex min-w-0 flex-col">
+          {label}
+          {figure}
+          {deltaLine}
+          {block.caption && !hasTrend ? <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{block.caption}</p> : null}
+          {breadth ? <div className="mt-auto"><BreadthLine {...breadth} bar /></div> : null}
+        </div>
+        {hasTrend ? (
+          <div className="flex min-w-0 flex-col pt-1">
+            <FillSparkline values={trend!} zero={zero} />
+            {/* The line spans its own low–high (a shape, not a zero-based level): say the range. */}
+            <p className="mt-1 truncate text-[11px] text-muted-foreground">
+              {block.caption ? `${block.caption} · ` : ''}
+              <span className={cn('tabular-nums', blur('money'))}>
+                {fmt(Math.min(...trend!), 'moneyCompact')}–{fmt(Math.max(...trend!), 'moneyCompact')}
+              </span>
+            </p>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col">
-      <p className={cn('truncate font-medium text-muted-foreground', small ? 'text-xs' : 'text-[13px]')}>
-        {block.label}
-        {name ? <span className="text-foreground"> · {name}</span> : null}
-      </p>
-      <p className={cn('mt-2 font-semibold', small ? 'text-[30px] leading-none tracking-tight' : 'viz-hero-value', tone(value, block.format), blur(block.format))}>
-        {fmt(value, block.format)}
-      </p>
-      {block.delta ? (
-        <p className={cn('leading-snug', small ? 'mt-1.5 truncate text-xs' : 'mt-4 text-[15px]')}>
-          <span className={cn('font-medium tabular-nums', tone(delta, block.deltaFormat) || 'text-foreground', blur(block.deltaFormat))}>{fmt(delta, block.deltaFormat)}</span>
-          {block.deltaLabel ? <span className="text-muted-foreground"> {block.deltaLabel}</span> : null}
-        </p>
-      ) : null}
-      {block.caption && env.size !== 'S' ? (
+      {label}
+      {figure}
+      {deltaLine}
+      {breadth ? <div className={small ? 'mt-2' : 'mt-3'}><BreadthLine {...breadth} /></div> : null}
+      {block.caption ? (
         <p className={cn('max-w-[56ch] text-muted-foreground', small ? 'mt-1 line-clamp-2 text-xs' : 'mt-2 text-[13px] leading-relaxed')}>{block.caption}</p>
       ) : null}
-      {trend && trend.length > 1 ? (
+      {hasTrend ? (
         <div className={small ? 'mt-2' : 'mt-6'}>
-          <Sparkline values={trend} height={env.size === 'L' ? 150 : small ? 40 : 56} zero={!block.format || block.format === 'money' || block.format === 'moneyCompact'} />
+          <Sparkline values={trend!} height={env.size === 'L' ? 150 : small ? 40 : 56} zero={zero} />
         </div>
       ) : null}
     </div>

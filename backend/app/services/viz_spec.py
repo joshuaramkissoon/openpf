@@ -177,6 +177,7 @@ class Trend(_Strict):
     from_: str = Field(alias="from")
     field: FieldName
     x: FieldName = "date"
+    last: int | None = Field(default=None, ge=2, le=400)  # only the most recent N points
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -186,6 +187,12 @@ class Trend(_Strict):
         if not _FROM_RE.match(v):
             raise ValueError(f"trend 'from' must look like 'query.path', got '{v}'")
         return v
+
+
+class Breadth(_Strict):
+    """How many of the block's rows are up vs down on a signed field ("8 up · 14 down")."""
+
+    field: FieldName
 
 
 class HeroBlock(_Block):
@@ -199,6 +206,7 @@ class HeroBlock(_Block):
     name: FieldName | None = None  # a field of the block's first row naming what the number is about ("country")
     caption: str | None = Field(default=None, max_length=200)
     trend: Trend | None = None
+    breadth: Breadth | None = None
 
 
 class MeterBlock(_Block):
@@ -272,6 +280,7 @@ class BarsBlock(_Rows):
     secondaryLabel: str | None = Field(default=None, max_length=30)  # e.g. "% of account"
     highlight: Literal["max", "min", "first", "last", "all", "none"] | None = None
     details: Details | None = None
+    split: Literal["sign"] | None = None  # two labelled groups: the top `limit` up and the top `limit` down
 
 
 class Series(_Strict):

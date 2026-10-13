@@ -368,6 +368,7 @@ def test_adopted_cap_only_lifts_the_automatic_rule(db):
 
 
 def test_model_suggestions_are_validated_and_fall_back(db, store, monkeypatch):
+    monkeypatch.setattr(bs, "refine_available", lambda: True)
     monkeypatch.setattr(bs, "_model_suggestions", lambda *a: [
         {"kind": "play", "title": "AI", "tickers": ["NVDA", "NVDA", "FAKE", "tsm"], "why": "chips"},
         {"kind": "core", "title": "Core", "tickers": ["NVDA", "SPY"], "why": "index"},  # NVDA already used
@@ -383,40 +384,32 @@ def test_model_suggestions_are_validated_and_fall_back(db, store, monkeypatch):
     assert bs.generate_suggestions(db, use_model=True, book=BOOK)["source"] == "rules"
 
 
-def test_background_regroup_returns_rules_at_once_then_swaps_in_refined(db, store, monkeypatch):
-    import copy
+def test_regroup_waits_for_the_model_and_shows_its_groups(db, store, monkeypatch):
+    monkeypatch.setattr(bs, "refine_available", lambda: True)
+    monkeypatch.setattr(bs, "_model_suggestions", lambda *a: [{"kind": "play", "title": "Chips", "tickers": ["NVDA", "TSM"], "why": "x"}])
+    out = bs.generate_suggestions(db, use_model=True, book=BOOK)
+    assert out["source"] == "archie" and out["refine_error"] is None
+    assert [i["title"] for i in out["items"]] == ["Chips"]
+
+
+def test_regroup_falls_back_to_rules_when_the_model_is_too_slow(db, store, monkeypatch):
     import time as _t
 
-    started = []
     monkeypatch.setattr(bs, "refine_available", lambda: True)
-    monkeypatch.setattr(bs, "_refine_in_background", lambda gen, unsorted: started.append((gen, unsorted)))
+    monkeypatch.setattr(bs, "_model_suggestions", lambda *a: (_t.sleep(1.0), [{"kind": "play", "title": "Late", "tickers": ["NVDA"]}])[1])
     t0 = _t.monotonic()
-    out = bs.generate_suggestions(db, use_model=True, book=BOOK, background=True)
-    assert _t.monotonic() - t0 < 1.0
-    assert out["source"] == "rules" and out["refining"] is True and out["items"]
-    gen, unsorted = started[0]
-    monkeypatch.setattr(bs, "_model_suggestions", lambda *a: [{"kind": "play", "title": "Chips", "tickers": ["NVDA", "TSM"], "why": "x"}])
-    assert bs.apply_refinement(db, gen, unsorted) is True
-    after = bs.get_suggestions(db, book=BOOK)
-    assert after["source"] == "archie" and after["refining"] is False
-    assert [i["title"] for i in after["items"]] == ["Chips"]
-
-    # The user acted on a rules card meanwhile → the refinement doesn't clobber it.
-    out = bs.generate_suggestions(db, use_model=True, book=BOOK, background=True)
-    gen2 = started[-1][0]
-    bs.dismiss_suggestion(db, out["items"][0]["id"])
-    before = copy.deepcopy(store.data)
-    assert bs.apply_refinement(db, gen2, unsorted) is False
-    now = bs.get_suggestions(db, book=BOOK)
-    assert now["source"] == "rules" and now["refining"] is False
-    assert [i["id"] for i in now["items"]] == [i["id"] for i in bs._decorate(before[bs.SUGGESTIONS_KEY]["items"], unsorted)]
+    out = bs.generate_suggestions(db, use_model=True, book=BOOK, wait_s=0.1)
+    assert _t.monotonic() - t0 < 0.8
+    assert out["source"] == "rules" and out["items"] and "too long" in out["refine_error"]
+    _t.sleep(1.1)  # the late answer is dropped, never swapped in
+    assert bs.get_suggestions(db, book=BOOK)["source"] == "rules"
 
 
-def test_background_regroup_without_a_fast_model_just_shows_rules(db, store, monkeypatch):
+def test_regroup_without_a_fast_model_just_shows_rules(db, store, monkeypatch):
     monkeypatch.setattr(bs, "refine_available", lambda: False)
-    monkeypatch.setattr(bs, "_refine_in_background", lambda *a: pytest.fail("should not refine"))
-    out = bs.generate_suggestions(db, use_model=True, book=BOOK, background=True)
-    assert out["source"] == "rules" and out["refining"] is False
+    monkeypatch.setattr(bs, "_model_suggestions", lambda *a: pytest.fail("should not call a model"))
+    out = bs.generate_suggestions(db, use_model=True, book=BOOK)
+    assert out["source"] == "rules" and out["refine_error"] is None
 
 
 def test_proposals_answer_for_which_play(db):
