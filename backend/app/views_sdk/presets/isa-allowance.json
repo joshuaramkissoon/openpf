@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "ISA allowance",
-  "description": "How much of this tax year's £20,000 Stocks ISA allowance you've used, and the days left",
+  "description": "How much ISA allowance have I got left? This tax year's £20,000, what's used, and the pace to use the rest",
   "icon": "piggy-bank",
   "data": {"cf": {"source": "cashflows"}},
   "blocks": [
@@ -14,29 +14,30 @@
       "mark": {"field": "year_elapsed_pct"},
       "markLabel": "Share of the tax year gone",
       "format": "money",
-      "caption": "Tax year 6 April to 5 April. Withdrawals from your flexible Trading 212 ISA can be paid back this tax year without using allowance."
+      "caption": "The tax year runs 6 April to 5 April. Withdrawals from a flexible ISA can be paid back in the same tax year without using allowance.",
+      "width": "two-thirds"
     },
     {
       "type": "kpis",
       "from": "cf.tax_year",
+      "width": "third",
       "items": [
         {"label": "Left to use", "value": {"field": "isa_remaining"}, "format": "money", "hint": "before 5 April"},
-        {"label": "Days left", "value": {"field": "days_left"}, "format": "int", "hint": "in this tax year"},
-        {"label": "To max it", "value": {"field": "monthly_to_max"}, "format": "money", "hint": "per month from now"},
-        {"label": "Withdrawn", "value": {"field": "isa_withdrawn"}, "format": "money", "hint": "can be replaced"}
+        {"label": "To use it all", "value": {"field": "monthly_to_max"}, "format": "money", "hint": "a month from now on"},
+        {"label": "Days left", "value": {"field": "days_left"}, "format": "int", "hint": "in this tax year"}
       ]
     },
     {
       "type": "bars",
       "title": "ISA deposits by month",
-      "subtitle": "This tax year",
+      "subtitle": "The last 12 months; this tax year started 6 April",
       "from": "cf.items",
-      "transform": [{"filter": {"field": "account", "op": "=", "value": "stocks_isa"}}, {"filter": {"field": "type", "op": "=", "value": "DEPOSIT"}}, {"filter": {"field": "date", "op": ">=", "value": "$tax_year_start"}}, {"month": {"field": "date", "sum": "amount", "last": 12}}],
+      "transform": [{"filter": {"field": "account", "op": "=", "value": "stocks_isa"}}, {"filter": {"field": "type", "op": "=", "value": "DEPOSIT"}}, {"month": {"field": "date", "sum": "amount", "last": 12}}],
       "label": "label",
       "value": "amount",
       "orientation": "vertical",
       "format": "money",
-      "empty": "No ISA deposits yet this tax year.",
+      "empty": "No ISA deposits in the last 12 months.",
       "width": "two-thirds"
     },
     {
@@ -49,7 +50,7 @@
         {"field": "type", "label": "Type", "format": "text"},
         {"field": "amount", "label": "Amount", "format": "signedMoney"}
       ],
-      "limit": 8,
+      "limit": 6,
       "empty": "No ISA deposits or withdrawals found.",
       "width": "third"
     }

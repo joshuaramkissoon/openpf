@@ -1,24 +1,45 @@
 {
   "version": 1,
   "title": "Winners & losers",
-  "description": "What's made and lost you money since you bought, and how each name is doing today",
+  "description": "What's made and lost me money? Every holding's gain or loss since you bought",
   "icon": "trending-up",
   "controls": {"account": true},
   "data": {"pf": {"source": "portfolio"}},
   "blocks": [
     {
+      "type": "hero",
+      "label": "Unrealised gain",
+      "from": "pf.positions",
+      "value": {"agg": "sum", "field": "ppl"},
+      "format": "signedMoney",
+      "delta": {"agg": "sum", "field": "ppl", "per": {"agg": "sum", "field": "cost"}},
+      "deltaFormat": "signedPct",
+      "deltaLabel": "on what you paid",
+      "caption": "Across everything you still hold. Realised gains from sales aren't included.",
+      "width": "two-thirds"
+    },
+    {
       "type": "kpis",
       "from": "pf.positions",
+      "width": "third",
       "items": [
-        {"label": "Unrealised gain", "value": {"agg": "sum", "field": "ppl"}, "format": "signedMoney", "delta": {"agg": "sum", "field": "ppl", "per": {"agg": "sum", "field": "cost"}}, "deltaFormat": "signedPct", "hint": "on cost"},
-        {"label": "In profit", "value": {"agg": "count", "transform": [{"filter": {"field": "ppl", "op": ">", "value": 0}}]}, "format": "int", "hint": "holdings above cost"},
-        {"label": "Under water", "value": {"agg": "count", "transform": [{"filter": {"field": "ppl", "op": "<", "value": 0}}]}, "format": "int", "hint": "holdings below cost"},
-        {"label": "Best performer", "value": {"agg": "max", "field": "ppl_pct"}, "format": "signedPct", "hint": "return on cost"}
+        {"label": "In profit", "value": {"agg": "count", "transform": [{"filter": {"field": "ppl", "op": ">", "value": 0}}]}, "format": "int", "hint": "holdings above what you paid"},
+        {"label": "Under water", "value": {"agg": "count", "transform": [{"filter": {"field": "ppl", "op": "<", "value": 0}}]}, "format": "int", "hint": "holdings below what you paid"}
       ]
     },
     {
+      "type": "treemap",
+      "title": "Return on cost",
+      "subtitle": "Each holding sized by value, coloured by its % gain or loss since you bought",
+      "from": "pf.positions",
+      "label": "ticker",
+      "size": "value",
+      "color": "ppl_pct",
+      "colorFormat": "signedPct"
+    },
+    {
       "type": "bars",
-      "title": "Gain or loss since purchase",
+      "title": "Gain or loss in pounds",
       "subtitle": "Every holding, best to worst",
       "from": "pf.positions",
       "transform": [{"sort": {"by": "ppl", "dir": "desc"}}],
@@ -32,19 +53,7 @@
         {"field": "value", "label": "Value", "format": "money"},
         {"field": "cost", "label": "Cost", "format": "money"},
         {"field": "day_change_pct", "label": "Today", "format": "signedPct"}
-      ],
-      "width": "half"
-    },
-    {
-      "type": "treemap",
-      "title": "Return on cost",
-      "subtitle": "Sized by value, coloured by % gain since you bought",
-      "from": "pf.positions",
-      "label": "ticker",
-      "size": "value",
-      "color": "ppl_pct",
-      "colorFormat": "signedPct",
-      "width": "half"
+      ]
     }
   ]
 }
