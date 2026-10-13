@@ -25,7 +25,7 @@ const PHASES: PhaseDef[] = [
   { id: 'prices', label: 'Checking prices', source: 'Market data', Icon: CandlestickChart },
   { id: 'fundamentals', label: 'Reading fundamentals', source: 'Fundamentals', Icon: BookOpenText },
   { id: 'compare', label: 'Comparing candidates', source: 'Quant', Icon: Sigma },
-  { id: 'sizing', label: 'Sizing against your book', source: 'Your book & risk rails', Icon: Scale },
+  { id: 'sizing', label: 'Sizing against your book', source: 'Your book & limits', Icon: Scale },
   { id: 'done', label: 'Draft ready', source: 'Ready to review', Icon: Sparkles },
 ]
 const ORDER = PHASES.map((p) => p.id)

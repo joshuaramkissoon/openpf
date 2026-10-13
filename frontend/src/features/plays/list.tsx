@@ -13,7 +13,7 @@ import { getPerformance, listPlays } from './api'
 import { ArchieMark, Swatch, useBook } from './book'
 import { AllocationBar } from './book-card'
 import { SortHoldingsSheet } from './suggestions'
-import { EXAMPLE_IDEAS } from './new-play'
+import { PLAY_TEMPLATES } from './templates'
 import type { BookGroup, Play, PlayPerformance } from './types'
 import { Sparkline, StatusChip, VerdictChip } from './ui'
 
@@ -350,33 +350,46 @@ function DraftCard({ play, onOpen }: { play: Play; onOpen: () => void }) {
 
 function EmptyState() {
   const { navigate } = useAppActions()
+  const picks = PLAY_TEMPLATES.filter((t) => ['global-core', 'ai-infrastructure', 'defence'].includes(t.id))
   return (
-    <div className="mx-auto max-w-3xl py-10 text-center">
+    <div className="relative isolate mx-auto max-w-3xl py-10 text-center">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72"
+        style={{ background: 'radial-gradient(closest-side, color-mix(in oklab, var(--primary) 16%, transparent), transparent)' }}
+      />
       <Target className="mx-auto size-6 text-muted-foreground" />
-      <h2 className="mt-4 text-lg font-semibold tracking-tight">Bet on what you believe — sized like a professional</h2>
-      <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
-        Write a thesis in plain English. Archie turns it into a basket sized against your book, staged in over weeks, with kill
-        criteria it watches for you. Every order waits for your approval.
+      <h2 className="mt-4 text-2xl font-semibold tracking-tight">What do you believe?</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+        Write it in a sentence. Archie finds the names, sizes them to your book, and you approve each buy.
       </p>
-      <div className="mt-8 grid gap-3 text-left sm:grid-cols-3">
-        {EXAMPLE_IDEAS.map((ex) => (
+      <Button size="lg" className="mt-6 h-10 px-4" onClick={() => navigate('/plays?new=1')}>
+        <Plus className="size-4" />
+        New play
+      </Button>
+      <p className="mt-10 text-xs text-muted-foreground">Or start from a template</p>
+      <div className="mt-3 grid gap-3 text-left sm:grid-cols-3">
+        {picks.map((t) => (
           <button
-            key={ex.title}
+            key={t.id}
             type="button"
-            onClick={() => navigate(`/plays?new=1&idea=${encodeURIComponent(ex.idea)}`)}
-            className="group rounded-xl border border-border bg-card p-4 transition-colors hover:border-foreground/25"
+            onClick={() => navigate(`/plays?new=1&template=${t.id}`)}
+            className="group rounded-xl border border-border bg-card p-4 text-left transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-foreground/25"
           >
-            <p className="text-sm font-medium">{ex.title}</p>
-            <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted-foreground">{ex.idea}</p>
+            <span
+              className="flex size-8 items-center justify-center rounded-lg"
+              style={{ background: `color-mix(in oklab, var(--chart-${t.color}) 14%, transparent)`, color: `var(--chart-${t.color})` }}
+            >
+              <t.Icon className="size-4" />
+            </span>
+            <p className="mt-3 text-sm font-medium">{t.name}</p>
+            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{t.pitch}</p>
             <p className="mt-3 inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
-              Draft this <ArrowRight className="size-3" />
+              Use template <ArrowRight className="size-3" />
             </p>
           </button>
         ))}
       </div>
-      <Button className="mt-8" variant="outline" onClick={() => navigate('/plays?new=1')}>
-        Start from your own idea
-      </Button>
     </div>
   )
 }
