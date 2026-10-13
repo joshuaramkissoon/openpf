@@ -263,7 +263,7 @@ def cancel_order(
             status_code=400,
             detail=ClassifiedError(
                 CODE_VALIDATION,
-                f"no execution key configured for {account} (add it in Settings → Credentials)",
+                f"no execution key configured for {account} (add a trade key in Settings → Accounts → Trading 212)",
                 {"account_kind": account},
             ).as_detail(),
         )

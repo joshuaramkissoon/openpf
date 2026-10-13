@@ -190,7 +190,7 @@ export function PermissionsSettings({ suggestionId }: { suggestionId?: string | 
           prefill={prefill}
           onClose={() => {
             setEditing(null)
-            if (suggestionId) navigate("/settings/permissions", { replace: true })
+            if (suggestionId) navigate("/settings/safety?section=permissions", { replace: true })
           }}
           onSaved={() => void load()}
         />

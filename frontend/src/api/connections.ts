@@ -39,6 +39,17 @@ export interface Provider {
   fees?: { maker: number; taker: number }
   quote?: string
   sandbox_values?: Record<string, string>
+  /** Sandbox: the mock exchange's trade key, prefilled when "Read + trade" is picked. */
+  sandbox_trade_values?: Record<string, string>
+  /** The exact key boxes at the exchange, per mode: tick ("on"), leave unticked ("off") or optional. */
+  permissions?: Partial<Record<ConnectionMode, KeyPermission[]>>
+  /** How to turn an existing read-only key into a trade key at this exchange. */
+  upgrade?: string | null
+}
+
+export interface KeyPermission {
+  label: string
+  state: "on" | "off" | "optional"
 }
 
 export interface ProviderCatalog {

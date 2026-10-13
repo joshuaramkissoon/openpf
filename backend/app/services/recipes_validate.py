@@ -410,7 +410,7 @@ def screen_request(text: str) -> Screen:
             _auto_trade_alternative(t),
         )
     if _RAILS.search(t):
-        return Screen(False, "rails", "Recipes can't change your risk rails — only you can, in Settings → Risk.",
+        return Screen(False, "rails", "Recipes can't change your risk rails — only you can, in Settings → Safety.",
                       "A recipe can tell you when a rail is close to binding, e.g. “Warn me when a holding nears its concentration cap”.")
     if _UNREALISTIC.search(t):
         return Screen(

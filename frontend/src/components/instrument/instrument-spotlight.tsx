@@ -29,7 +29,8 @@ export interface RecentInstrument {
 export interface SpotlightCommand {
   id: string
   label: string
-  group: "Go to" | "Actions"
+  /** "Settings" entries only show once you type (e.g. "telegram", "daily limit"). */
+  group: "Go to" | "Actions" | "Settings"
   icon: LucideIcon
   keywords?: string
   shortcut?: string
@@ -41,7 +42,11 @@ const CONVICTION_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
 function matches(query: string, ...fields: (string | null | undefined)[]): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  return fields.some((f) => (f || "").toLowerCase().includes(q))
+  if (fields.some((f) => (f || "").toLowerCase().includes(q))) return true
+  // Every word somewhere across the fields: "daily limit" finds "Daily trading limit".
+  const hay = fields.map((f) => (f || "").toLowerCase()).join(" ")
+  const words = q.split(/\s+/)
+  return words.length > 1 && words.every((w) => hay.includes(w))
 }
 
 export function InstrumentSpotlight({
@@ -149,6 +154,7 @@ export function InstrumentSpotlight({
   )
   const navCommands = matchedCommands.filter((c) => c.group === "Go to")
   const actionCommands = matchedCommands.filter((c) => c.group === "Actions")
+  const settingsCommands = query.trim() ? matchedCommands.filter((c) => c.group === "Settings").slice(0, 6) : []
   const askText = query.trim()
 
   function runCommand(cmd: SpotlightCommand) {
@@ -188,6 +194,17 @@ export function InstrumentSpotlight({
               <c.icon className="size-3.5 text-muted-foreground" />
               <span>{c.label}</span>
               {c.shortcut ? <CommandShortcut className="ml-auto">{c.shortcut}</CommandShortcut> : null}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      ) : null}
+
+      {settingsCommands.length > 0 ? (
+        <CommandGroup heading="Settings">
+          {settingsCommands.map((c) => (
+            <CommandItem key={c.id} value={`cmd:${c.id}`} onSelect={() => runCommand(c)}>
+              <c.icon className="size-3.5 text-muted-foreground" />
+              <span>{c.label}</span>
             </CommandItem>
           ))}
         </CommandGroup>

@@ -5,6 +5,7 @@ import { toast } from "sonner"
 
 import { withAuth } from "@/api/auth"
 import { Section } from "@/components/kit"
+import { Disclosure } from "./ui"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -85,33 +86,52 @@ export function ModelsSection() {
   const agent = info.jobs.filter((j) => j.kind === "agent")
   const fast = info.jobs.filter((j) => j.kind === "fast")
 
+  const agentSelect = (j: JobRow) => (
+    <select
+      aria-label={`${j.label} model`}
+      className={selectClass}
+      value={j.model}
+      onChange={(e) => void save(j.key, { model: e.target.value === j.default_model ? "" : e.target.value })}
+    >
+      {[...new Set([j.model, ...info.claude_models])].map((m) => (
+        <option key={m} value={m}>
+          {m}
+          {m === j.default_model ? " (default)" : ""}
+        </option>
+      ))}
+    </select>
+  )
+  // Lead with the one job everyone cares about; the rest are expert knobs.
+  const [primary, ...others] = agent
+  const changed = others.filter((j) => j.model !== j.default_model).length
+
   return (
     <div className="space-y-8">
       <Section
-        title="Archie's agent work"
-        description="Jobs where Archie uses tools over several steps. These run on Claude through your sign-in."
+        title="Models"
+        description="Archie runs on Claude through your sign-in. Defaults balance quality and cost: Sonnet for most work, Opus only for deep analysis, Haiku for small checks."
       >
+        {primary ? (
+          <div className="divide-y divide-border rounded-xl border border-border">
+            <JobLine job={primary} busy={saving === primary.key}>
+              {agentSelect(primary)}
+            </JobLine>
+          </div>
+        ) : null}
+      </Section>
+
+      <Disclosure label="Per-job models" hint={`${others.length} jobs${changed ? `, ${changed} changed` : ", all default"}`}>
         <div className="divide-y divide-border rounded-xl border border-border">
-          {agent.map((j) => (
+          {others.map((j) => (
             <JobLine key={j.key} job={j} busy={saving === j.key}>
-              <select
-                aria-label={`${j.label} model`}
-                className={selectClass}
-                value={j.model}
-                onChange={(e) => void save(j.key, { model: e.target.value === j.default_model ? "" : e.target.value })}
-              >
-                {[...new Set([j.model, ...info.claude_models])].map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                    {m === j.default_model ? " (default)" : ""}
-                  </option>
-                ))}
-              </select>
+              {agentSelect(j)}
             </JobLine>
           ))}
         </div>
-      </Section>
+      </Disclosure>
 
+      <Disclosure label="Quick one-shot jobs and pricing" hint="defaults are tuned for cost and speed">
+      <div className="space-y-8">
       <Section
         title="Quick one-shot jobs"
         description="Single calls that return structured data in a few seconds. If the chosen provider fails, the next configured one takes over."
@@ -141,6 +161,8 @@ export function ModelsSection() {
       <Section title="Together pricing" description="Used to estimate the cost of Together calls in Usage. Set it to your account's rates.">
         <PriceEditor value={info.prices.together} onSave={savePrice} />
       </Section>
+      </div>
+      </Disclosure>
     </div>
   )
 }

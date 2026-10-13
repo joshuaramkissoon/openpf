@@ -47,19 +47,39 @@ export function readOnlyPlacement(intent: { read_only?: boolean; place_in?: stri
   return intent.place_in || accountInfo(intent.account_kind ?? "")?.broker || "your broker"
 }
 
-/** The footer note a read-only suggestion gets instead of Approve. */
-export function ReadOnlyNote({ broker, className }: { broker: string; className?: string }) {
+/** The exchange behind a read-only crypto account ("crypto:kraken" → "kraken"), or null. */
+function cryptoExchange(accountKind: string | null | undefined, broker: string): string | null {
+  const k = (accountKind ?? "").toLowerCase()
+  if (k.startsWith("crypto:")) return k.slice("crypto:".length)
+  if (k === "crypto") return broker.toLowerCase().split(/\s+/)[0] || null
+  return null
+}
+
+/**
+ * The footer note a read-only suggestion gets instead of Approve. On a crypto
+ * exchange (where OpenPF can trade with a trade key) it also offers the fix.
+ */
+export function ReadOnlyNote({ broker, accountKind, className }: { broker: string; accountKind?: string | null; className?: string }) {
+  const exchange = cryptoExchange(accountKind, broker)
   return (
-    <span
-      className={cn(
-        "ml-auto inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1 text-xs text-muted-foreground",
-        className,
-      )}
-      title="This account is connected read-only. OpenPF can't place the order — you do, in your broker."
-    >
-      <Eye className="size-3" />
-      Place it in <span className="font-medium text-foreground">{broker}</span>
-      <ArrowUpRight className="size-3" />
+    <span className={cn("ml-auto inline-flex flex-wrap items-center justify-end gap-2", className)}>
+      {exchange ? (
+        <a
+          href={`#/settings/accounts?add=${encodeURIComponent(exchange)}`}
+          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          title={`${broker} is connected read-only. Add a trade key to let Archie place the orders you approve there.`}
+        >
+          Enable trading
+        </a>
+      ) : null}
+      <span
+        className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1 text-xs text-muted-foreground"
+        title="This account is connected read-only. OpenPF can't place the order — you do, in your broker."
+      >
+        <Eye className="size-3" />
+        Place it in <span className="font-medium text-foreground">{broker}</span>
+        <ArrowUpRight className="size-3" />
+      </span>
     </span>
   )
 }

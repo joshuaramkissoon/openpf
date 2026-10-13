@@ -356,6 +356,43 @@ def test_sandbox_crypto_connections_are_mock_and_read_only(db, monkeypatch):
         client.place_market_order("SOL", "buy", 1.0)
 
 
+def test_sandbox_kraken_reads_and_trades_and_buys_through_the_gate(db, monkeypatch, tmp_path):
+    """The demo's Kraken is a read + trade connection: a crypto buy proposed by
+    Archie fills against the mock once approved. Withdraw keys are still refused."""
+    monkeypatch.setenv("OPENPF_SANDBOX", "1")
+    monkeypatch.setenv("OPENPF_CRYPTO_OFFLINE", "1")
+    monkeypatch.setenv("OPENPF_SANDBOX_STATE", str(tmp_path / "sb.json"))
+    from app.services import providers
+    from app.services.crypto_sandbox import SANDBOX_CRYPTO_CREDENTIALS
+
+    kraken = next(p for p in providers.public_catalog()["providers"] if p["id"] == "kraken")
+    assert kraken["sandbox_trade_values"] == SANDBOX_CRYPTO_CREDENTIALS  # the trade form is prefilled with a trade key
+    trade_boxes = {r["label"]: r["state"] for r in kraken["permissions"]["trade"]}
+    assert trade_boxes["Orders & Trades · Create & Modify Orders"] == "on"
+    assert trade_boxes["Funds · Withdraw Funds"] == "off"
+
+    # Reconnecting it for trading keeps it tradeable.
+    connections_service.add_connection(db, "kraken", dict(SANDBOX_CRYPTO_CREDENTIALS), mode="trade", conn_id="crypto")
+    (conn,) = [c for c in connections_service.list_connections(db)["connections"] if c["provider"] == "kraken"]
+    assert conn["mode"] == "trade" and "trade" in conn["capabilities"]
+
+    _book(db)
+    _refresh(db)
+    store = ConfigStore(db)
+    store.set_risk({**store.get_risk(), "max_crypto_pct_of_book": 0.5})  # room under the crypto cap for the demo buy
+    store.set_broker({"broker_mode": "live"})
+    out = proposal_service.propose_trade(db, side="buy", account_kind="crypto", symbol="BTC", notional_gbp=40,
+                                         rationale="demo buy")
+    assert out["ok"] and not out.get("read_only"), {k: out.get(k) for k in ("error", "violations", "blocked")}
+    intent = execution_service.execute_intent(db, out["intent"]["id"], approve=True)
+    assert intent.status == "executed" and intent.broker_order_id.startswith("SBX-")
+
+    for mode in ("read", "trade"):
+        with pytest.raises(connections_service.ConnectionError_, match="withdraw"):
+            connections_service.add_connection(db, "kraken", {"api_key": "sandbox-crypto-withdraw", "api_secret": "x"},
+                                               mode=mode, conn_id="crypto")
+
+
 def test_real_provider_requests_are_pinned_to_their_hosts():
     with pytest.raises(provider_clients.ProviderError, match="unexpected host"):
         provider_clients.assert_host("https://evil.example.com/v2/account", provider_clients.ALPACA_HOSTS)

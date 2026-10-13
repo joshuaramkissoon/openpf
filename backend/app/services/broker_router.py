@@ -111,10 +111,10 @@ def execute_crypto(db: Session, intent: TradeIntent, *, mode: str,
     assert_sandbox_safe(config, account)
     cfg = crypto_service.get_config(config, account)
     if not crypto_service.tradable(cfg):
-        raise error_cls("this crypto connection is read-only — reconnect it with a trade key (Settings → Connections)")
+        raise error_cls("this crypto connection is read-only — press Enable trading on it in Settings → Accounts and add a trade key")
     client = crypto_service.client_for(config, account)
     if client is None:
-        raise error_cls("no verified trade-only crypto exchange key is connected (Settings → Connections)")
+        raise error_cls("no verified trade-only crypto exchange key is connected (Settings → Accounts)")
     qty = float(intent.quantity or 0.0)
     if not math.isfinite(qty) or qty <= 0:
         raise error_cls("invalid crypto quantity")

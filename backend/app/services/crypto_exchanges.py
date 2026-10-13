@@ -48,24 +48,48 @@ EXCHANGES: dict[str, dict[str, Any]] = {
         "permission_check": "probe",
         "uk": "FCA-registered for cryptoasset activities (Payward Ltd). Supports GBP deposits and GBP pairs.",
         "key_url": "https://pro.kraken.com/app/settings/api",
+        # The exact boxes on Kraken Pro → Settings → API → Create API key, per mode.
+        # (label, "on" | "off" | "optional"). Shown as a checklist in Settings.
+        "permissions": {
+            "read": [
+                ("Funds · Query Funds", "on"), ("Funds · Deposit Funds", "off"), ("Funds · Withdraw Funds", "off"),
+                ("Orders & Trades · Query Open Orders & Trades", "on"),
+                ("Orders & Trades · Query Closed Orders & Trades", "on"),
+                ("Orders & Trades · Create & Modify Orders", "off"), ("Orders & Trades · Cancel/Close Orders", "off"),
+                ("Other · Query Ledger Entries", "optional"), ("Other · Export Data", "off"),
+                ("Other · Access WebSockets API", "off"),
+            ],
+            "trade": [
+                ("Funds · Query Funds", "on"), ("Funds · Deposit Funds", "off"), ("Funds · Withdraw Funds", "off"),
+                ("Orders & Trades · Query Open Orders & Trades", "on"),
+                ("Orders & Trades · Query Closed Orders & Trades", "on"),
+                ("Orders & Trades · Create & Modify Orders", "on"), ("Orders & Trades · Cancel/Close Orders", "on"),
+                ("Other · Query Ledger Entries", "optional"), ("Other · Export Data", "off"),
+                ("Other · Access WebSockets API", "off"),
+            ],
+        },
         "key_steps": [
-            "Kraken Pro → Settings → API → Create API key.",
-            "Funds permissions: tick Query. Leave Deposit and Withdraw UNTICKED.",
-            "Orders and trades: tick Query open orders & trades, Query closed orders & trades, Create & modify orders.",
-            "Leave Cancel & close orders, Export data, Earn and WebSocket permissions unticked.",
-            "Data: Query ledger entries is optional (lets OpenPF read your deposit history).",
-            "Optional: restrict the key to this machine's IP address.",
+            "Kraken Pro → profile icon (top right) → Settings → API → Create API key. Name it \"OpenPF trading\".",
+            "Funds: tick Query Funds. Leave Deposit Funds and Withdraw Funds UNTICKED.",
+            "Orders & Trades: tick all four — Query Open Orders & Trades, Query Closed Orders & Trades, "
+            "Create & Modify Orders, and Cancel/Close Orders.",
+            "Other: Query Ledger Entries is optional (lets OpenPF net deposits out of your returns). Leave Export Data "
+            "and Access WebSockets API unticked.",
+            "Optional: under IP whitelisting, add this machine's public IP address.",
+            "Generate key, then copy the API key and the Private key (it's shown once).",
         ],
         "notes": "OpenPF test-calls Kraken's withdrawal-info endpoint on connect: a key that is allowed to reach it is refused.",
         "read_steps": [
-            "Kraken Pro → Settings → API → Create API key. Name it \"OpenPF read-only\".",
-            "Funds permissions: tick Query only. Leave Deposit and Withdraw UNTICKED.",
-            "Orders and trades: tick Query open orders & trades and Query closed orders & trades. Leave Create & modify, "
-            "Cancel & close UNTICKED.",
-            "Data: tick Query ledger entries (lets OpenPF net deposits out of your returns). Leave Export data, Earn and "
-            "WebSocket unticked.",
-            "Generate the key and copy both the API key and the private key (secret).",
+            "Kraken Pro → profile icon (top right) → Settings → API → Create API key. Name it \"OpenPF read-only\".",
+            "Funds: tick Query Funds only. Leave Deposit Funds and Withdraw Funds UNTICKED.",
+            "Orders & Trades: tick Query Open Orders & Trades and Query Closed Orders & Trades. Leave Create & Modify "
+            "Orders and Cancel/Close Orders UNTICKED.",
+            "Other: tick Query Ledger Entries (lets OpenPF net deposits out of your returns). Leave Export Data and "
+            "Access WebSockets API unticked.",
+            "Generate key, then copy the API key and the Private key (it's shown once).",
         ],
+        "upgrade": "At Kraken, add Create & Modify Orders and Cancel/Close Orders to this key (or create a new "
+                   "trading key), then press Enable trading here and paste it. Withdraw Funds stays unticked.",
     },
     "coinbase": {
         "id": "coinbase",
@@ -83,6 +107,10 @@ EXCHANGES: dict[str, dict[str, Any]] = {
         "permission_check": "api",
         "uk": "Registered with the FCA for cryptoasset activities (CB Payments Ltd). Supports GBP pairs.",
         "key_url": "https://portal.cdp.coinbase.com/access/api",
+        "permissions": {
+            "read": [("View", "on"), ("Trade", "off"), ("Transfer", "off")],
+            "trade": [("View", "on"), ("Trade", "on"), ("Transfer", "off")],
+        },
         "key_steps": [
             "Coinbase Developer Platform → API keys → Create API key (an Advanced Trade / CDP key).",
             "Permissions: tick View and Trade. Leave Transfer UNTICKED.",
@@ -109,24 +137,45 @@ EXCHANGES: dict[str, dict[str, Any]] = {
         "min_slippage": 0.0005,
         "permission_check": "api",
         "uk": (
-            "Binance has not onboarded new UK customers since October 2023 and is not FCA-authorised. "
-            "Listed for users outside the UK."
+            "UK: Binance stopped onboarding new UK customers in October 2023 and isn't FCA-authorised. Existing UK "
+            "accounts keep access; new UK sign-ups aren't possible. Elsewhere, check Binance's own country list."
         ),
         "key_url": "https://www.binance.com/en/my/settings/api-management",
+        "permissions": {
+            "read": [
+                ("Enable Reading", "on"), ("Enable Spot & Margin Trading", "off"), ("Enable Withdrawals", "off"),
+                ("Enable Margin Loan, Repay & Transfer", "off"), ("Enable Futures", "off"),
+                ("Permits Universal Transfer", "off"), ("Enable Internal Transfer", "off"),
+            ],
+            "trade": [
+                ("Enable Reading", "on"), ("Enable Spot & Margin Trading", "on"), ("Enable Withdrawals", "off"),
+                ("Enable Margin Loan, Repay & Transfer", "off"), ("Enable Futures", "off"),
+                ("Permits Universal Transfer", "off"), ("Enable Internal Transfer", "off"),
+            ],
+        },
         "key_steps": [
-            "Binance → API Management → Create API (system-generated).",
+            "Binance → profile icon → Account → API Management → Create API → System generated. Name it "
+            "\"OpenPF trading\" and pass the security check.",
+            "On the new key press Edit restrictions.",
             "Tick Enable Reading and Enable Spot & Margin Trading.",
-            "Leave Enable Withdrawals, Enable Internal Transfer, Permits Universal Transfer, Margin and Futures UNTICKED.",
-            "Restrict access to trusted IPs (this machine).",
+            "NEVER tick Enable Withdrawals. Leave Margin Loan/Repay/Transfer, Futures, Universal Transfer and Internal "
+            "Transfer UNTICKED too — OpenPF only places spot orders.",
+            "IP access: choose Restrict access to trusted IPs only and add this machine's public IP (recommended; "
+            "Binance may also require it for trading keys).",
+            "Save, then copy the API key and the Secret key (the secret is shown once).",
         ],
         "notes": "OpenPF reads the key's restrictions from Binance on connect and refuses any key that can withdraw or transfer.",
         "read_steps": [
-            "Binance → Account → API Management → Create API → System generated. Name it \"OpenPF read-only\".",
-            "Edit restrictions: keep Enable Reading ticked and leave every other box UNTICKED (Spot & Margin Trading, "
-            "Withdrawals, Internal Transfer, Universal Transfer, Futures, Margin).",
-            "IP access: restricting to this machine's IP is safer; an unrestricted read-only key also works.",
-            "Copy the API key and the secret key (the secret is shown once).",
+            "Binance → profile icon → Account → API Management → Create API → System generated. Name it "
+            "\"OpenPF read-only\" and pass the security check.",
+            "New keys start with only Enable Reading ticked — keep it that way. Don't tick Enable Spot & Margin Trading, "
+            "Enable Withdrawals or any transfer, margin or futures box.",
+            "IP access: Restrict access to trusted IPs only (add this machine's public IP) is safer; Unrestricted also "
+            "works for a read-only key.",
+            "Copy the API key and the Secret key (the secret is shown once).",
         ],
+        "upgrade": "Binance lets you edit an existing key: API Management → Edit restrictions → tick Enable Spot & "
+                   "Margin Trading (never Enable Withdrawals), save, then press Enable trading here and paste the same key.",
     },
 }
 
