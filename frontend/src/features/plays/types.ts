@@ -151,10 +151,22 @@ export interface PlayPerformance {
   kill_status: (KillCriterion & { state: KillState; detail: string })[]
 }
 
+export type DraftPhase = 'portfolio' | 'research' | 'prices' | 'fundamentals' | 'compare' | 'sizing' | 'done'
+
+/** One drafting progress event. Newer jobs tag each with its phase, data source and tickers. */
+export interface DraftProgress {
+  at: string
+  text: string
+  phase?: DraftPhase
+  source?: 'portfolio' | 'web' | 'market' | 'fundamentals' | 'quant'
+  tickers?: string[]
+  basket?: { ticker: string; name?: string; weight?: number; role?: LegRole }[]
+}
+
 export interface DraftJob {
   job_id: string
   status: 'running' | 'done' | 'error'
-  progress: { at: string; text: string }[]
+  progress: DraftProgress[]
   play_id: string | null
   error: string | null
   error_kind?: 'unclear_idea' | 'no_instruments' | 'interrupted' | 'model' | 'failed' | null
