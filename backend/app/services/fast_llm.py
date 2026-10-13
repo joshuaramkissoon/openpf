@@ -203,7 +203,10 @@ async def together_chat(messages: list[dict[str, str]], *, schema: dict[str, Any
     key = key if key is not None else together_key()
     if not key:
         raise ProviderUnavailable("no Together API key")
-    body: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    # Hybrid reasoning models (DeepSeek V4.x) otherwise "think" for ~2k tokens
+    # first: ~11s instead of ~3s for these one-shot structured jobs.
+    body: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
+                            "reasoning": {"enabled": False}}
     if schema is not None:
         body["response_format"] = {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
     else:

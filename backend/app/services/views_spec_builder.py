@@ -145,6 +145,7 @@ class TogetherProvider:
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": 4000,
+            "reasoning": {"enabled": False},  # no "thinking" pass: seconds, not tens of seconds
             "response_format": {"type": "json_schema", "json_schema": {"name": "viz_spec_reply", "schema": schema}},
         }
         headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
