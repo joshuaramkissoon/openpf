@@ -51,6 +51,10 @@ import type { ArtifactDetail, SchedulerTask, SchedulerTaskLog } from '../types'
 
 interface Props {
   onError: (message: string | null) => void
+  /** Show only the jobs list (no Today tab) — used under Recipes → System jobs. */
+  jobsOnly?: boolean
+  /** Hide tasks of these kinds (e.g. 'recipe', which Recipes manages itself). */
+  excludeKinds?: string[]
 }
 
 const MODEL_OPTIONS = [
@@ -99,12 +103,12 @@ const RESULT_DISPLAY_MS = 10_000
 const MARKDOWN_PROSE =
   'space-y-2 text-sm leading-relaxed [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:font-semibold [&_strong]:font-semibold [&_table]:w-full [&_ul]:list-disc [&_ul]:pl-5'
 
-export function ScheduledJobsWorkspace({ onError }: Props) {
+export function ScheduledJobsWorkspace({ onError, jobsOnly = false, excludeKinds }: Props) {
   const [tasks, setTasks] = useState<SchedulerTask[]>([])
   const [busy, setBusy] = useState(false)
   const [deleting, setDeleting] = useState<Set<string>>(new Set())
   const [sortMode, setSortMode] = useState<SortMode>('status')
-  const [view, setView] = useState<'today' | 'alljobs'>('today')
+  const [view, setView] = useState<'today' | 'alljobs'>(jobsOnly ? 'alljobs' : 'today')
 
   // Per-task log viewing
   const [taskLogs, setTaskLogs] = useState<SchedulerTaskLog[]>([])
@@ -177,7 +181,7 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
     if (!silent) setBusy(true)
     try {
       const rows = await getSchedulerTasks()
-      setTasks(rows)
+      setTasks(excludeKinds?.length ? rows.filter((t) => !excludeKinds.includes(String(t.meta?.task_kind ?? 'claude'))) : rows)
       if (!silent) onError(null)
     } catch (err) {
       if (!silent) onError(err instanceof Error ? err.message : 'Failed to load scheduled tasks')
@@ -514,10 +518,12 @@ export function ScheduledJobsWorkspace({ onError }: Props) {
   return (
     <div className="space-y-6">
       <Tabs value={view} onValueChange={(v) => setView(v as 'today' | 'alljobs')}>
-        <TabsList>
-          <TabsTrigger value="today">Today</TabsTrigger>
-          <TabsTrigger value="alljobs">All jobs</TabsTrigger>
-        </TabsList>
+        {jobsOnly ? null : (
+          <TabsList>
+            <TabsTrigger value="today">Today</TabsTrigger>
+            <TabsTrigger value="alljobs">All jobs</TabsTrigger>
+          </TabsList>
+        )}
 
         <TabsContent value="today">
           <SectionCard title="Today">

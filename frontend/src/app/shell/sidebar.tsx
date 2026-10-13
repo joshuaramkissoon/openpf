@@ -11,6 +11,7 @@ import {
   Settings,
   Shield,
   Target,
+  Workflow,
   type LucideIcon,
 } from "lucide-react"
 
@@ -28,6 +29,7 @@ const PRIMARY: { key: string; label: string; icon: LucideIcon; path: string }[] 
   { key: "home", label: "Home", icon: Home, path: "/home" },
   { key: "archie", label: "Archie", icon: MessageSquare, path: "/archie" },
   { key: "plays", label: "Plays", icon: Target, path: "/plays" },
+  { key: "recipes", label: "Recipes", icon: Workflow, path: "/recipes" },
   { key: "activity", label: "Activity", icon: Activity, path: "/activity" },
 ]
 

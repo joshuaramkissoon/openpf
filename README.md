@@ -41,7 +41,7 @@ Staging a tranche creates proposals. Nothing executes without you.
 
 ![A view Archie built](docs/assets/view.png)
 
-**Automations.** A morning brief, a weekly review, and watchlist and earnings monitors run on a schedule. Results land on Home and, optionally, in Telegram.
+**Recipes: Archie writes his own routines.** Say "every Friday, check my plays against their kill rules and tell me what moved" and Archie writes a recipe. A recipe is a real skill (the steps, the tools to use, the shape of the output) plus a trigger and a delivery. The trigger can be a schedule or an event such as "a holding reports this week" or "a holding moves 6% in a day". Results land on Home and in Activity, and in Telegram if you want. It ships with built-ins: morning brief, weekly review, watchlist review, play check-in, deploy idle cash, macro on my book, earnings week prep, big-move explainer and ISA allowance top-up. Refine any recipe with a sentence ("shorter", "skip crypto"). Every change is versioned with a diff you can revert. Recipes are instructions only: they can't add tools, touch risk rails or place orders, so the most a recipe can do is propose. Changes Archie suggests during an unattended run wait for your approval.
 
 ## Safety model
 
