@@ -26,6 +26,19 @@ Design intent: **visual first, detail on demand.** Lead with one hero number or
 a KPI strip, then the picture (treemap, allocation, ranked bars, a curve).
 Tables are the drill-down layer, not the page. 3–6 blocks is typical.
 
+**No repeats.** Never follow a chart with a `table` of the same rows (same
+`from` and the same `groupBy`, or the chart's label column). Every chart
+already has a table-view toggle and drill-down; put the extra columns you'd
+have shown (value, weight, holdings count…) in the chart's `details` instead.
+A `table` is only for rows no chart on the page draws (upcoming ex-dividend
+dates, news, cash movements). The validator drops a duplicate table and moves
+its columns into the chart's `details`.
+
+**Honest titles.** A title names the dimension the block really uses: grouped
+by `sector` → "… by sector". `theme` is the owning play's title and falls back
+to the sector for holdings outside a play, so only say "theme" when grouping by
+`theme`. The validator retitles a mismatch ("by theme" on a sector grouping).
+
 ## Top level
 
 ```jsonc
@@ -89,6 +102,13 @@ A measure may carry its own `from` and `transform` (otherwise the block's are us
 `money` · `moneyCompact` · `signedMoney` · `pct` · `signedPct` · `num` · `int` · `date` · `text`.
 Money is in the display currency and honours privacy mode. Fractions are 0–1.
 
+### Details (chart blocks)
+
+`treemap`, `allocation` and `bars` take an optional `details` list (≤ 6) of
+extra per-row columns, shown in the hover tooltip and the table view:
+`"details": [{"field": "value", "label": "Value", "format": "money"}, {"field": "weight", "label": "Weight", "format": "pct"}, {"field": "count", "label": "Holdings", "format": "int"}]`.
+Labels are what the user reads: never a raw field name.
+
 ## Blocks
 
 **`hero`** — the one number the page leads with (one per page).
@@ -126,7 +146,7 @@ Fetches `prices` for each row's `ticker` field (≤ 12 rows).
 `{"type": "heatgrid", "mode": "returns", "from": "pf.positions", "label": "ticker", "ticker": "yf", "days": 10}` (daily % moves per holding, ≤ 15 rows) or
 `{"type": "heatgrid", "mode": "correlation", "from": "pf.positions", "label": "ticker", "ticker": "yf", "range": "6mo"}` (≤ 12 rows).
 
-**`table`** — detail rows (the drill-down layer; keep it below the visuals).
+**`table`** — detail rows no chart on the page draws (keep it below the visuals; never repeat a chart's rows — use `details`).
 `{"type": "table", "from": "...", "columns": [{"field": "ticker", "label": "Holding", "format": "text"}, {"field": "value", "label": "Value", "format": "money"}], "limit": 20?}`
 A column with `"field": "ticker"` opens the holding on click.
 

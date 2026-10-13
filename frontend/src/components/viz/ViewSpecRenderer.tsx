@@ -23,24 +23,24 @@ const ACCOUNTS: { id: Account; label: string }[] = [
   { id: 'stocks_isa', label: 'ISA' },
 ]
 
-export function VizProvider({ compact = false, size = null, children }: { compact?: boolean; size?: WidgetSize | null; children: ReactNode }) {
+export function VizProvider({ compact = false, size = null, onEditBlock, children }: { compact?: boolean; size?: WidgetSize | null; onEditBlock?: (block: Block) => void; children: ReactNode }) {
   const actions = useAppActions()
   const { currency } = useDisplayPrefs()
   const privacy = usePrivacyMode()
   const env = useMemo<VizEnv>(
-    () => ({ currency, privacy, openTicker: actions.openTicker, navigate: actions.navigate, compact: compact || !!size, size }),
-    [currency, privacy, actions.openTicker, actions.navigate, compact, size],
+    () => ({ currency, privacy, openTicker: actions.openTicker, navigate: actions.navigate, compact: compact || !!size, size, onEditBlock }),
+    [currency, privacy, actions.openTicker, actions.navigate, compact, size, onEditBlock],
   )
   return <VizEnvContext.Provider value={env}>{children}</VizEnvContext.Provider>
 }
 
 /** Renders a whole (already validated) viz spec as a page: controls row, then a 12-column block grid. */
-export function ViewSpecRenderer({ spec, compact = false, className }: { spec: VizSpec; compact?: boolean; className?: string }) {
+export function ViewSpecRenderer({ spec, compact = false, className, onEditBlock }: { spec: VizSpec; compact?: boolean; className?: string; onEditBlock?: (block: Block) => void }) {
   const { currency } = useDisplayPrefs()
   const [account, setAccount] = useState<Account>('all')
   const ctx: EngineCtx = { currency, account }
   return (
-    <VizProvider compact={compact}>
+    <VizProvider compact={compact} onEditBlock={onEditBlock}>
       <div className={cn('space-y-4', className)}>
         {spec.controls?.account ? (
           <div className="flex items-center gap-2" role="group" aria-label="Account">

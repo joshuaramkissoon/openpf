@@ -1,0 +1,161 @@
+/*
+ * View build state. A sketch of the layout that resolves block by block:
+ *   ghost    → a faint placeholder, fading in
+ *   sketched → outlines draw in (charts chosen)
+ *   inked    → soft fills arrive (data fetched)
+ * Then the real view reveals with a short stagger (.view-reveal).
+ */
+
+.build-block {
+  --ink: color-mix(in oklab, var(--muted-foreground) 12%, transparent);
+  --stroke: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+  --fill: color-mix(in oklab, var(--muted-foreground) 6%, transparent);
+  animation: build-in 600ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition: opacity 600ms ease;
+}
+.build-block[data-state='ghost'] { opacity: 0.55; }
+.build-block[data-state='sketched'] {
+  --ink: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+  --stroke: color-mix(in oklab, var(--primary) 45%, var(--muted-foreground) 20%);
+}
+.build-block[data-state='inked'] {
+  --ink: color-mix(in oklab, var(--muted-foreground) 22%, transparent);
+  --stroke: color-mix(in oklab, var(--primary) 55%, transparent);
+  --fill: color-mix(in oklab, var(--primary) 16%, transparent);
+}
+
+@keyframes build-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+.build-card {
+  border-color: color-mix(in oklab, var(--border) 80%, transparent);
+  background: color-mix(in oklab, var(--card) 70%, transparent);
+  transition: border-color 600ms ease, background-color 600ms ease;
+}
+.build-block[data-state='ghost'] .build-card { border-style: dashed; background: transparent; }
+
+.build-ink {
+  border-radius: 999px;
+  background: var(--ink);
+  transition: background-color 600ms ease;
+}
+.build-tile {
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  transition: border-color 600ms ease;
+}
+
+/* line + outline drawing */
+.build-draw path:not(.build-area-fill) {
+  fill: none;
+  stroke: var(--stroke);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke 600ms ease, fill 700ms ease;
+}
+.build-block[data-state='ghost'] .build-draw path { stroke: var(--ink); stroke-dashoffset: 0; }
+.build-block:not([data-state='ghost']) .build-draw path:not(.build-area-fill) { animation: build-stroke 1100ms cubic-bezier(0.45, 0, 0.2, 1) both; }
+
+/* treemap tiles settle into place one by one */
+.build-treemap rect {
+  fill: transparent;
+  stroke: var(--ink);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: stroke 600ms ease, fill 700ms ease;
+}
+.build-block:not([data-state='ghost']) .build-treemap rect { stroke: var(--stroke); animation: build-tile 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes build-tile { from { opacity: 0; transform: scale(0.94); } }
+@keyframes build-stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+.build-block[data-state='inked'] .build-treemap rect { fill: var(--fill); }
+.build-area-fill { fill: transparent; stroke: none; transition: fill 700ms ease; }
+.build-block[data-state='inked'] .build-area-fill { fill: var(--fill); }
+
+/* bars and segments grow from the baseline */
+.build-col {
+  background: var(--ink);
+  transform-origin: bottom center;
+  transition: background-color 600ms ease;
+}
+.build-block:not([data-state='ghost']) .build-col { animation: build-rise 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.build-block[data-state='inked'] .build-col { background: var(--fill); box-shadow: inset 0 0 0 1px var(--stroke); }
+@keyframes build-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+.build-bar, .build-seg {
+  background: var(--ink);
+  transform-origin: left center;
+  transition: background-color 600ms ease;
+}
+.build-bar[style*='right'] { transform-origin: right center; }
+.build-block:not([data-state='ghost']) .build-bar,
+.build-block:not([data-state='ghost']) .build-seg { animation: build-grow 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.build-block[data-state='inked'] .build-bar { background: var(--fill); box-shadow: inset 0 0 0 1px var(--stroke); }
+.build-block[data-state='inked'] .build-seg { background: color-mix(in oklab, var(--seg) 45%, transparent); }
+@keyframes build-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* a slow light passing over inked blocks: data arriving */
+.build-block[data-state='inked'] .build-card { position: relative; overflow: hidden; }
+.build-block[data-state='inked'] .build-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in oklab, var(--primary) 7%, transparent) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: build-sweep 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes build-sweep { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+
+/* stepper */
+.build-current { box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 40%, transparent); animation: build-ring 2.4s ease-out infinite; }
+@keyframes build-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 35%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 6px transparent; }
+}
+.build-copy { animation: build-copy 500ms ease both; }
+@keyframes build-copy { from { opacity: 0; transform: translateY(2px); } }
+
+.build-strip::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--primary) 60%, transparent), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: build-scan 2.2s ease-in-out infinite;
+}
+@keyframes build-scan { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+
+/* the reveal: blocks arrive in reading order */
+.view-reveal .grid > * { animation: view-reveal 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.view-reveal .grid > *:nth-child(2) { animation-delay: 70ms; }
+.view-reveal .grid > *:nth-child(3) { animation-delay: 140ms; }
+.view-reveal .grid > *:nth-child(4) { animation-delay: 210ms; }
+.view-reveal .grid > *:nth-child(5) { animation-delay: 280ms; }
+.view-reveal .grid > *:nth-child(n + 6) { animation-delay: 350ms; }
+@keyframes view-reveal {
+  from { opacity: 0; transform: translateY(8px); filter: blur(3px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+/* the view while an edit builds */
+.view-dimmed { opacity: 0.45; filter: saturate(0.6); pointer-events: none; transition: opacity 400ms ease, filter 400ms ease; }
+
+/* inline composer */
+.view-composer { animation: build-copy 220ms ease both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .build-block, .build-bar, .build-seg, .build-col, .build-current, .build-copy, .build-strip::after, .view-reveal .grid > *, .view-composer,
+  .build-block[data-state='inked'] .build-card::after,
+  .build-block:not([data-state='ghost']) .build-draw path:not(.build-area-fill),
+  .build-block:not([data-state='ghost']) .build-treemap rect { animation: none; }
+  .build-draw path { stroke-dashoffset: 0; }
+}

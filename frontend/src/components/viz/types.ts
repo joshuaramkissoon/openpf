@@ -36,8 +36,10 @@ export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; fo
 export type MeterBlock = Base & { type: 'meter'; label: string; value: Measure; max: Measure | number; format?: VizFormat; mark?: Measure; markLabel?: string; caption?: string }
 export type KpiItem = { label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; hint?: string }
 export type KpisBlock = Base & { type: 'kpis'; items: KpiItem[] }
-export type TreemapBlock = Base & { type: 'treemap'; label: string; size: string; color?: string; group?: string; format?: VizFormat; colorFormat?: VizFormat }
-export type AllocationBlock = Base & { type: 'allocation'; label: string; value: string; style?: 'bar' | 'donut'; format?: VizFormat }
+/** Extra per-row columns a chart shows in its tooltip and table view. */
+export type Detail = { field: string; label: string; format?: VizFormat }
+export type TreemapBlock = Base & { type: 'treemap'; label: string; size: string; color?: string; group?: string; format?: VizFormat; colorFormat?: VizFormat; details?: Detail[] }
+export type AllocationBlock = Base & { type: 'allocation'; label: string; value: string; style?: 'bar' | 'donut'; format?: VizFormat; details?: Detail[] }
 export type BarsBlock = Base & {
   type: 'bars'
   label: string
@@ -47,6 +49,7 @@ export type BarsBlock = Base & {
   limit?: number
   secondary?: string
   secondaryFormat?: VizFormat
+  details?: Detail[]
 }
 export type TimeseriesBlock = Base & { type: 'timeseries'; x?: string; series: { field: string; label: string }[]; style?: 'area' | 'line'; format?: VizFormat }
 export type MultiplesBlock = Base & { type: 'multiples'; label: string; ticker?: string; range?: string; value?: string; valueFormat?: VizFormat }

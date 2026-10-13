@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import type { DiffLine, RecipeRun } from '@/types/recipes'
+import type { DiffLine, Recipe, RecipeRun } from '@/types/recipes'
 
 dayjs.extend(calendar)
 
@@ -80,6 +80,20 @@ export function RecipeIcon({ icon, size = 'md', muted = false }: { icon: string;
       <Icon className={size === 'lg' ? 'size-5' : 'size-4'} strokeWidth={2} />
     </span>
   )
+}
+
+/** "Weekdays at 07:00" → "Every weekday at 07:00". */
+export function whenSentence(r: Pick<Recipe, 'trigger' | 'trigger_summary'>): string {
+  if (r.trigger.kind === 'manual') return 'Only when you run it'
+  const s = r.trigger_summary || ''
+  const m = s.match(/^(Weekdays|Daily|Every day|Mondays|Tuesdays|Wednesdays|Thursdays|Fridays|Saturdays|Sundays)\b(.*)$/)
+  if (!m) return s
+  const day = m[1] === 'Weekdays' ? 'weekday' : m[1] === 'Daily' || m[1] === 'Every day' ? 'day' : m[1].slice(0, -1)
+  return `Every ${day}${m[2]}`
+}
+
+export function deliverySentence(r: Pick<Recipe, 'delivery'>): string {
+  return r.delivery.telegram ? 'results on Home and Telegram' : 'results on Home'
 }
 
 export function ago(iso: string | null | undefined): string {

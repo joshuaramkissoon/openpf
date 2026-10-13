@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ChartNoAxesColumn, Table2 } from 'lucide-react'
+import { ChartNoAxesColumn, Sparkles, Table2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { num, resolveMeasure, resolveRows, type EngineCtx } from './engine'
-import { useVizEnv } from './shared'
+import { fieldLabel, useVizEnv } from './shared'
 import type { Block, Row, VizSpec } from './types'
 import { Allocation } from './blocks/Allocation'
 import { Bars } from './blocks/Bars'
@@ -30,16 +30,41 @@ const SKELETON_H: Record<Block['type'], number> = {
   note: 40,
 }
 
+/** A chart's `details` columns, minus any it already shows. */
+function extra(block: Block, shown: TableColumn[]): TableColumn[] {
+  const details = 'details' in block ? (block.details ?? []) : []
+  return details.filter((d) => !shown.some((c) => c.field === d.field)).map((d) => ({ field: d.field, label: d.label || fieldLabel(d.field), format: d.format ?? 'text' }))
+}
+
 /** Table-view twin of a chart block (accessibility + exact values). */
 function tableFor(block: Block, rows: Row[]): { columns: TableColumn[]; rows: Row[] } | null {
+  const t = tableBase(block, rows)
+  return t ? { ...t, columns: [...t.columns, ...extra(block, t.columns)] } : null
+}
+
+/**
+ * Keep titles honest at render time: "theme" is the owning play, falling back
+ * to the sector. When no row in the block belongs to a play, every "theme" is
+ * really a sector, so the title says so.
+ */
+function honestTitle(block: Block, rows: Row[]): string | undefined {
+  const title = block.title
+  if (!title || !/\bthemes?\b/i.test(title)) return title
+  const flat = rows.flatMap((r) => (Array.isArray(r.items) ? (r.items as Row[]) : [r]))
+  const marked = flat.filter((r) => typeof r.__theme_play === 'boolean')
+  if (!marked.length || marked.some((r) => r.__theme_play)) return title
+  return title.replace(/\b(T|t)heme(s?)\b/g, (_m, t: string, s: string) => `${t === 'T' ? 'S' : 's'}ector${s}`)
+}
+
+function tableBase(block: Block, rows: Row[]): { columns: TableColumn[]; rows: Row[] } | null {
   switch (block.type) {
     case 'treemap':
       return {
         columns: [
-          ...(block.group ? [{ field: block.group, label: block.group.replace(/_/g, ' '), format: 'text' as const }] : []),
+          ...(block.group ? [{ field: block.group, label: fieldLabel(block.group), format: 'text' as const }] : []),
           { field: block.label, label: 'Name', format: 'text' },
           { field: block.size, label: 'Value', format: block.format ?? 'money' },
-          ...(block.color ? [{ field: block.color, label: block.color === 'day_change_pct' ? 'Today' : block.color.replace(/_/g, ' '), format: block.colorFormat ?? 'signedPct' }] : []),
+          ...(block.color ? [{ field: block.color, label: fieldLabel(block.color), format: block.colorFormat ?? 'signedPct' }] : []),
         ],
         rows,
       }
@@ -58,15 +83,15 @@ function tableFor(block: Block, rows: Row[]): { columns: TableColumn[]; rows: Ro
       return {
         columns: [
           { field: block.label, label: 'Name', format: 'text' },
-          { field: block.value, label: block.title ?? 'Value', format: block.format ?? 'money' },
-          ...(block.secondary ? [{ field: block.secondary, label: block.secondary.replace(/_/g, ' '), format: block.secondaryFormat ?? 'signedPct' }] : []),
+          { field: block.value, label: fieldLabel(block.value), format: block.format ?? 'money' },
+          ...(block.secondary && block.secondary !== block.value ? [{ field: block.secondary, label: fieldLabel(block.secondary), format: block.secondaryFormat ?? 'signedPct' }] : []),
         ],
         rows,
       }
     case 'timeseries':
       return { columns: [{ field: block.x ?? 'date', label: 'Date', format: 'date' }, ...block.series.map((s) => ({ field: s.field, label: s.label, format: block.format ?? 'money' }))], rows: [...rows].reverse() }
     case 'multiples':
-      return { columns: [{ field: block.label, label: 'Name', format: 'text' }, ...(block.value ? [{ field: block.value, label: block.value.replace(/_/g, ' '), format: block.valueFormat ?? 'signedPct' }] : [])], rows }
+      return { columns: [{ field: block.label, label: 'Name', format: 'text' }, ...(block.value ? [{ field: block.value, label: fieldLabel(block.value), format: block.valueFormat ?? 'signedPct' }] : [])], rows }
     default:
       return null
   }
@@ -124,6 +149,7 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
   }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const table = data && block.type !== 'table' ? tableFor(block, data.rows) : null
+  const shown = data ? ({ ...block, title: honestTitle(block, data.rows) } as Block) : block
 
   let body: React.ReactNode
   if (error) body = <p className="py-6 text-center text-sm text-muted-foreground">{error}</p>
@@ -179,20 +205,21 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
   if (bare || !chrome) {
     return (
       <div className="viz-in">
-        {!bare && (block.title || block.subtitle) ? <BlockHeader block={block} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} /> : null}
+        {!bare && (block.title || block.subtitle) ? <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} /> : null}
         {inner}
       </div>
     )
   }
   return (
-    <section className="viz-in min-w-0 rounded-xl border border-border bg-card p-5">
-      <BlockHeader block={block} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} />
+    <section className="group/block viz-in min-w-0 rounded-xl border border-border bg-card p-5">
+      <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} />
       {inner}
     </section>
   )
 }
 
 function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table: boolean; asTable: boolean; onToggle: () => void }) {
+  const env = useVizEnv()
   if (!block.title && !block.subtitle && !table) return null
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
@@ -200,6 +227,17 @@ function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table:
         {block.title ? <h3 className="text-sm font-semibold tracking-tight">{block.title}</h3> : null}
         {block.subtitle ? <p className="mt-0.5 text-xs text-muted-foreground">{block.subtitle}</p> : null}
       </div>
+      <div className="flex shrink-0 items-center gap-0.5">
+      {env.onEditBlock ? (
+        <button
+          type="button"
+          onClick={() => env.onEditBlock?.(block)}
+          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/block:opacity-100 [@media(hover:none)]:hidden"
+          title="Change this chart"
+        >
+          <Sparkles className="size-3.5 text-primary" /> Change
+        </button>
+      ) : null}
       {table ? (
         <button
           type="button"
@@ -212,6 +250,7 @@ function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table:
           {asTable ? <ChartNoAxesColumn className="size-4" /> : <Table2 className="size-4" />}
         </button>
       ) : null}
+      </div>
     </div>
   )
 }

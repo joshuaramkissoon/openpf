@@ -11,12 +11,15 @@ problem, so the builder can repair it in one pass.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.services.views_data import SOURCES
+
+logger = logging.getLogger(__name__)
 
 MAX_SPEC_BYTES = 32 * 1024
 MAX_BLOCKS = 12
@@ -223,6 +226,17 @@ class KpisBlock(_Block):
     items: list[KpiItem] = Field(min_length=1, max_length=5)
 
 
+class Column(_Strict):
+    field: FieldName
+    label: str = Field(max_length=40)
+    format: Format = "text"
+
+
+# Extra per-row fields a chart carries into its tooltip and table view, so a
+# separate table never has to repeat the chart's rows to show them.
+Details = Annotated[list[Column], Field(max_length=6)]
+
+
 class TreemapBlock(_Rows):
     type: Literal["treemap"]
     label: FieldName
@@ -231,6 +245,7 @@ class TreemapBlock(_Rows):
     group: FieldName | None = None
     format: Format = "money"
     colorFormat: Format = "signedPct"
+    details: Details | None = None
 
 
 class AllocationBlock(_Rows):
@@ -239,6 +254,7 @@ class AllocationBlock(_Rows):
     value: FieldName
     style: Literal["bar", "donut"] = "bar"
     format: Format = "money"
+    details: Details | None = None
 
 
 class BarsBlock(_Rows):
@@ -250,6 +266,7 @@ class BarsBlock(_Rows):
     limit: int = Field(default=12, ge=1, le=40)
     secondary: FieldName | None = None
     secondaryFormat: Format = "signedPct"
+    details: Details | None = None
 
 
 class Series(_Strict):
@@ -293,12 +310,6 @@ class HeatgridBlock(_Rows):
         if self.mode != "pivot" and not self.label:
             raise ValueError(f"heatgrid mode '{self.mode}' needs 'label'")
         return self
-
-
-class Column(_Strict):
-    field: FieldName
-    label: str = Field(max_length=40)
-    format: Format = "text"
 
 
 class TableBlock(_Rows):
@@ -398,7 +409,11 @@ def validate_spec(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
         spec = VizSpec.model_validate(raw)
     except ValidationError as exc:
         return None, _explain(exc)
-    return spec.model_dump(by_alias=True, exclude_none=True), []
+    out = spec.model_dump(by_alias=True, exclude_none=True)
+    tidied, notes = tidy_spec(out)
+    for note in notes:
+        logger.info("viz spec '%s': %s", out.get("title"), note)
+    return tidied, []
 
 
 # ── normalise near-misses from fast models ─────────────────────────────
@@ -450,3 +465,122 @@ def normalize_spec(spec: Any) -> Any:
                 _fix_measure(item.get("value"))
                 _fix_measure(item.get("delta"))
     return spec
+
+
+# ── tidy: warnings + auto-fixes for redundant or dishonest layouts ──────
+_CHARTS = ("bars", "allocation", "treemap")
+# Grouping dimensions a title may name ("… by sector").
+_DIMENSIONS = {
+    "sector": "sector",
+    "industry": "industry",
+    "country": "country",
+    "theme": "theme",
+    "play": "play",
+    "account": "account",
+    "asset_type": "asset type",
+    "exposure_currency": "currency",
+    "instrument_currency": "currency",
+}
+_DIM_WORDS = r"(sectors?|industry|industries|country|countries|themes?|plays?|accounts?|asset types?|currency|currencies)"
+_PLURAL = {"industry": "industries", "country": "countries", "currency": "currencies"}
+
+
+def _group_key(block: dict[str, Any]) -> str | None:
+    """The field a block's rows are grouped by (last groupBy step), if any."""
+    key = None
+    for step in block.get("transform") or []:
+        if isinstance(step, dict) and "groupBy" in step:
+            key = step["groupBy"]
+    return key
+
+
+def _duplicates(table: dict[str, Any], chart: dict[str, Any]) -> bool:
+    """True when ``table`` lists the same rows ``chart`` already draws."""
+    if table.get("from") != chart.get("from"):
+        return False
+    tkey, ckey = _group_key(table), _group_key(chart)
+    if tkey or ckey:
+        # A table grouped by X repeats a chart grouped by X, or a treemap whose
+        # tiles nest under X headers.
+        return bool(tkey) and (tkey == ckey or (chart.get("type") == "treemap" and chart.get("group") == tkey))
+    label = chart.get("label")
+    return bool(label) and any(c.get("field") == label for c in table.get("columns") or [])
+
+
+def spec_warnings(spec: dict[str, Any]) -> list[str]:
+    """Layout problems the tidy pass fixes (also useful as builder feedback)."""
+    return tidy_spec(spec)[1]
+
+
+def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Fix a valid spec's layout smells. Returns ``(spec, notes)``.
+
+    * A ``table`` that repeats a chart's rows (same source and grouping) is
+      dropped; its extra columns (value, weight, holdings…) move into the
+      chart's ``details`` so they show in the tooltip and the table view.
+    * A chart titled "… by theme" that actually groups by sector (or any other
+      mismatch) is retitled to name the dimension it really uses.
+    """
+    blocks = [dict(b) for b in spec.get("blocks") or []]
+    notes: list[str] = []
+    keep: list[dict[str, Any]] = []
+    charts = [b for b in blocks if b.get("type") in _CHARTS]
+    for b in blocks:
+        if b.get("type") == "table":
+            twin = next((c for c in charts if _duplicates(b, c)), None)
+            if twin is not None:
+                shown = {twin.get(k) for k in ("label", "value", "size", "color", "secondary", "group")}
+                details = list(twin.get("details") or [])
+                have = {d["field"] for d in details}
+                for col in b.get("columns") or []:
+                    if col["field"] not in shown and col["field"] not in have and len(details) < 6:
+                        details.append(dict(col))
+                        have.add(col["field"])
+                if details:
+                    twin["details"] = details
+                notes.append(
+                    f"dropped table '{b.get('title') or 'untitled'}': it repeats the rows of chart "
+                    f"'{twin.get('title') or twin.get('type')}' (its extra columns moved into the chart's tooltip and table view)"
+                )
+                continue
+        keep.append(b)
+    for b in keep:
+        title = b.get("title")
+        key = _group_key(b) or (b.get("group") if b.get("type") == "treemap" else None)
+        if not key and b.get("type") in _CHARTS and b.get("label") in _DIMENSIONS:
+            key = b.get("label")
+        if not title or key not in _DIMENSIONS:
+            continue
+        actual = _DIMENSIONS[key]
+        m = re.search(rf"\b(by|per|across)\s+{_DIM_WORDS}\b", title, re.I)
+        if not m:
+            continue
+        said = m.group(2).lower()
+        if said.startswith(actual[:5]):
+            continue
+        plural = said.endswith("s") and not said.endswith("ss")
+        word = _PLURAL.get(actual, actual + "s") if plural else actual
+        fixed = title[: m.start(2)] + word + title[m.end(2) :]
+        notes.append(f"retitled '{title}' to '{fixed}': the chart groups by {actual}")
+        b["title"] = fixed
+    # The page title too, when every grouped block agrees on one dimension.
+    out = {**spec, "blocks": keep}
+    used = {
+        _DIMENSIONS[k]
+        for b in keep
+        for k in (_group_key(b), b.get("group") if b.get("type") == "treemap" else None)
+        if k in _DIMENSIONS
+    }
+    page = spec.get("title") or ""
+    m = re.search(rf"\b(by|per|across)\s+{_DIM_WORDS}\b", page, re.I)
+    if m and len(used) == 1:
+        actual = next(iter(used))
+        said = m.group(2).lower()
+        if not said.startswith(actual[:5]):
+            plural = said.endswith("s") and not said.endswith("ss")
+            word = _PLURAL.get(actual, actual + "s") if plural else actual
+            out["title"] = page[: m.start(2)] + word + page[m.end(2) :]
+            notes.append(f"retitled the page '{page}' to '{out['title']}'")
+    if len(keep) == len(blocks) and not notes:
+        return spec, []
+    return out, notes

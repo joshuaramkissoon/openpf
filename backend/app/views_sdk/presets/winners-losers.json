@@ -28,6 +28,11 @@
       "secondary": "ppl_pct",
       "secondaryFormat": "signedPct",
       "limit": 30,
+      "details": [
+        {"field": "value", "label": "Value", "format": "money"},
+        {"field": "cost", "label": "Cost", "format": "money"},
+        {"field": "day_change_pct", "label": "Today", "format": "signedPct"}
+      ],
       "width": "half"
     },
     {
@@ -40,20 +45,6 @@
       "color": "ppl_pct",
       "colorFormat": "signedPct",
       "width": "half"
-    },
-    {
-      "type": "table",
-      "title": "All holdings",
-      "from": "pf.positions",
-      "transform": [{"sort": {"by": "ppl_pct", "dir": "desc"}}],
-      "columns": [
-        {"field": "ticker", "label": "Holding", "format": "text"},
-        {"field": "value", "label": "Value", "format": "money"},
-        {"field": "cost", "label": "Cost", "format": "money"},
-        {"field": "ppl", "label": "Gain", "format": "signedMoney"},
-        {"field": "ppl_pct", "label": "Return", "format": "signedPct"},
-        {"field": "day_change_pct", "label": "Today", "format": "signedPct"}
-      ]
     }
   ]
 }

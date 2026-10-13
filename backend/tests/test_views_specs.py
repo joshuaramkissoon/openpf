@@ -405,3 +405,79 @@ def test_api_retry_rebuilds_failed_shell(views_dir, monkeypatch):
     monkeypatch.setattr(builder, "start_job", lambda job: started.append(job))
     r = TestClient(app).post(f"/api/views/{vid}/retry")
     assert r.status_code == 200 and r.json()["kind"] == "create" and started[0].view_id == vid
+
+
+# ── tidy pass: no table that repeats a chart, honest titles ────────────
+def _sector_bars(title="Today's move by sector"):
+    return {
+        "type": "bars",
+        "title": title,
+        "from": "pf.positions",
+        "transform": [{"enrich": ["sector"]}, {"groupBy": "sector"}],
+        "label": "sector",
+        "value": "day_change_pct",
+        "format": "signedPct",
+    }
+
+
+def test_tidy_drops_table_that_repeats_a_chart_and_keeps_its_columns():
+    from app.services.viz_spec import spec_warnings
+
+    raw = {
+        "version": 1,
+        "title": "Today",
+        "blocks": [
+            _sector_bars(),
+            {
+                "type": "table",
+                "title": "Details",
+                "from": "pf.positions",
+                "transform": [{"enrich": ["sector"]}, {"groupBy": "sector"}],
+                "columns": [
+                    {"field": "sector", "label": "Sector"},
+                    {"field": "value", "label": "Value", "format": "money"},
+                    {"field": "weight", "label": "Weight", "format": "pct"},
+                    {"field": "count", "label": "Holdings", "format": "int"},
+                ],
+            },
+        ],
+    }
+    assert any("dropped table 'Details'" in w for w in spec_warnings(raw))
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert [b["type"] for b in spec["blocks"]] == ["bars"]
+    assert [d["field"] for d in spec["blocks"][0]["details"]] == ["value", "weight", "count"]
+
+
+def test_tidy_keeps_tables_with_rows_no_chart_draws():
+    raw = {
+        "version": 1,
+        "title": "Income",
+        "data": {"div": {"source": "dividends"}},
+        "blocks": [
+            {"type": "bars", "title": "Who pays you", "from": "div.by_ticker", "label": "ticker", "value": "amount"},
+            {"type": "table", "title": "Coming up", "from": "pf.positions", "columns": [{"field": "ticker", "label": "Holding"}]},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems and len(spec["blocks"]) == 2
+
+
+def test_tidy_retitles_a_chart_that_names_the_wrong_dimension():
+    spec, problems = validate_spec({"version": 1, "title": "Today", "blocks": [_sector_bars("Today's move by theme")]})
+    assert not problems
+    assert spec["blocks"][0]["title"] == "Today's move by sector"
+    spec, _ = validate_spec({"version": 1, "title": "Today by theme", "blocks": [_sector_bars("Move across themes")]})
+    assert spec["blocks"][0]["title"] == "Move across sectors"
+    assert spec["title"] == "Today by sector"
+    # A real theme grouping keeps its words.
+    spec, _ = validate_spec(GOOD)
+    assert spec["title"] == "Today by theme"
+
+
+def test_presets_have_no_duplicate_tables():
+    from app.services.viz_spec import spec_warnings
+    from app.views_sdk import preset_specs
+
+    for slug, spec in preset_specs().items():
+        assert not spec_warnings(spec), slug

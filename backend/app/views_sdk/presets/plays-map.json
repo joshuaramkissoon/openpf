@@ -34,22 +34,12 @@
       "label": "title",
       "value": "exposure",
       "format": "money",
-      "empty": "No plays yet — a play is a theme bet with a thesis, a basket and kill criteria. Create one from Plays.",
-      "width": "half"
-    },
-    {
-      "type": "table",
-      "title": "Plays",
-      "from": "plays.plays",
-      "columns": [
-        {"field": "title", "label": "Play", "format": "text"},
+      "details": [
         {"field": "status", "label": "Status", "format": "text"},
         {"field": "owned_count", "label": "Owned", "format": "int"},
-        {"field": "bench_count", "label": "Bench", "format": "int"},
-        {"field": "exposure", "label": "Exposure", "format": "money"}
+        {"field": "bench_count", "label": "On the bench", "format": "int"}
       ],
-      "empty": "No plays yet.",
-      "width": "half"
+      "empty": "No plays yet — a play is a theme bet with a thesis, a basket and kill criteria. Create one from Plays."
     }
   ]
 }
