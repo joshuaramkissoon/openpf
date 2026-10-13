@@ -481,3 +481,80 @@ def test_presets_have_no_duplicate_tables():
 
     for slug, spec in preset_specs().items():
         assert not spec_warnings(spec), slug
+
+
+def test_tidy_drops_a_hero_sparkline_the_page_already_charts():
+    raw = {
+        "version": 1,
+        "title": "Cash",
+        "data": {"hist": {"source": "history", "params": {"range": "1y"}}},
+        "blocks": [
+            {"type": "hero", "label": "Idle cash", "from": "pf.account", "value": {"field": "free_cash"}, "trend": {"from": "hist.points", "field": "free_cash"}, "width": "half"},
+            {"type": "timeseries", "title": "Cash over the year", "from": "hist.points", "series": [{"field": "free_cash", "label": "Cash"}], "width": "half"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert "trend" not in spec["blocks"][0]
+    # A sparkline of a series nothing else draws stays.
+    raw["blocks"][1]["series"] = [{"field": "total", "label": "Value"}]
+    spec, _ = validate_spec(raw)
+    assert spec["blocks"][0]["trend"]["field"] == "free_cash"
+
+
+def test_tidy_labels_what_a_percentage_is_a_share_of():
+    raw = {
+        "version": 1,
+        "title": "Cash",
+        "blocks": [
+            {"type": "hero", "label": "Idle cash", "from": "pf.account", "value": {"field": "free_cash"},
+             "delta": {"from": "pf.metrics", "field": "cash_ratio"}, "deltaFormat": "pct", "width": "half"},
+            {"type": "bars", "title": "Cash by account", "from": "pf.accounts", "label": "account", "value": "free_cash",
+             "transform": [{"compute": {"as": "cash_share", "op": "ratio", "a": "free_cash", "b": "total"}}],
+             "secondary": "cash_share", "secondaryFormat": "pct", "width": "half"},
+            {"type": "bars", "title": "Largest", "from": "pf.positions", "label": "ticker", "value": "weight", "format": "pct"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    hero, cash, largest = spec["blocks"]
+    assert hero["deltaLabel"] == "of your book"
+    assert cash["secondaryLabel"] == "% of account"
+    assert largest["valueLabel"] == "% of book"
+
+
+def test_tidy_warns_when_a_percentage_basis_cannot_be_inferred():
+    from app.services.viz_spec import spec_warnings
+
+    raw = {
+        "version": 1,
+        "title": "X",
+        "blocks": [{"type": "hero", "label": "Odd", "from": "pf.account", "value": {"field": "total"}, "delta": {"field": "ppl"}, "deltaFormat": "pct"}],
+    }
+    assert any("no basis" in w for w in spec_warnings(raw))
+
+
+def test_tidy_fills_short_rows_so_the_grid_has_no_voids():
+    def block(width):
+        return {"type": "note", "text": "x", "width": width}
+
+    widths = ["half", "full", "third", "third", "third", "third", "half"]
+    spec, _ = validate_spec({"version": 1, "title": "X", "blocks": [block(w) for w in widths]})
+    assert [b["width"] for b in spec["blocks"]] == ["full", "full", "third", "third", "third", "third", "two-thirds"]
+    spec, _ = validate_spec({"version": 1, "title": "X", "blocks": [block("third"), block("third")]})
+    assert [b["width"] for b in spec["blocks"]] == ["half", "half"]
+
+
+def test_spec_accepts_honesty_and_labelling_fields():
+    raw = {
+        "version": 1,
+        "title": "X",
+        "data": {"hist": {"source": "history"}},
+        "blocks": [
+            {"type": "timeseries", "from": "hist.points", "series": [{"field": "free_cash", "label": "Cash"}], "zero": True, "curve": "step"},
+            {"type": "bars", "from": "pf.positions", "label": "ticker", "value": "value", "valueLabel": "Value", "highlight": "none"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert spec["blocks"][0]["curve"] == "step" and spec["blocks"][1]["highlight"] == "none"

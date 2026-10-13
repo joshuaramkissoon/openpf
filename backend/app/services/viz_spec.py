@@ -195,6 +195,7 @@ class HeroBlock(_Block):
     format: Format = "money"
     delta: Measure | None = None
     deltaFormat: Format = "signedPct"
+    deltaLabel: str | None = Field(default=None, max_length=40)  # what the delta is relative to: "of your book"
     caption: str | None = Field(default=None, max_length=200)
     trend: Trend | None = None
 
@@ -266,6 +267,9 @@ class BarsBlock(_Rows):
     limit: int = Field(default=12, ge=1, le=40)
     secondary: FieldName | None = None
     secondaryFormat: Format = "signedPct"
+    valueLabel: str | None = Field(default=None, max_length=30)  # column header over the values
+    secondaryLabel: str | None = Field(default=None, max_length=30)  # e.g. "% of account"
+    highlight: Literal["max", "min", "first", "last", "all", "none"] | None = None
     details: Details | None = None
 
 
@@ -280,6 +284,8 @@ class TimeseriesBlock(_Rows):
     series: list[Series] = Field(min_length=1, max_length=4)
     style: Literal["area", "line"] = "area"
     format: Format = "moneyCompact"
+    zero: bool | None = None  # y-axis from 0; default on for amounts
+    curve: Literal["linear", "step"] | None = None  # step for balances; auto when omitted
 
 
 class MultiplesBlock(_Rows):
@@ -512,6 +518,119 @@ def spec_warnings(spec: dict[str, Any]) -> list[str]:
     return tidy_spec(spec)[1]
 
 
+_PCT = {"pct", "signedPct"}
+_SPAN = {"full": 12, "two-thirds": 8, "half": 6, "third": 4}
+_WIDTH = {v: k for k, v in _SPAN.items()}
+
+
+def _basis_of(m: Any) -> str | None:
+    """What a % measure is a share of, when its shape says so unambiguously."""
+    if not isinstance(m, dict):
+        return None
+    per = m.get("per")
+    if isinstance(per, dict):
+        field = per.get("field")
+        if field == "total":
+            return "of your book"
+        if field == "invested":
+            return "of what's invested"
+        if field == "cost":
+            return "on cost"
+        if field == "value" and per.get("agg") == "sum":
+            return "of holdings"
+        return None
+    if m.get("field") in ("cash_ratio", "cash_pct"):
+        return "of your book"
+    return None
+
+
+def _secondary_basis(block: dict[str, Any]) -> str | None:
+    field = block.get("secondary")
+    if field == "weight":
+        return "% of book"
+    for step in block.get("transform") or []:
+        comp = step.get("compute") if isinstance(step, dict) else None
+        if not isinstance(comp, dict) or comp.get("as") != field:
+            continue
+        if comp.get("op") == "share":
+            return "% of total"
+        if comp.get("op") == "ratio" and comp.get("b") == "total":
+            return "% of account" if block.get("label") == "account" else "% of total"
+    return None
+
+
+def _label_percentages(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """Every % says what it's a share of. Fill the basis when the measure's shape
+    gives it away; otherwise leave a note for the builder."""
+    for b in blocks:
+        kind = b.get("type")
+        if kind == "hero" and b.get("delta") and b.get("deltaFormat", "signedPct") in _PCT and not b.get("deltaLabel"):
+            basis = _basis_of(b["delta"])
+            if basis:
+                b["deltaLabel"] = basis
+                notes.append(f"labelled hero '{b.get('label')}' delta '{basis}' (a % must say what it's a share of)")
+            else:
+                notes.append(f"hero '{b.get('label')}': its % delta has no basis; add deltaLabel (e.g. \"of your book\")")
+        if kind == "bars":
+            if b.get("secondary") and b.get("secondaryFormat", "signedPct") == "pct" and not b.get("secondaryLabel"):
+                basis = _secondary_basis(b)
+                if basis:
+                    b["secondaryLabel"] = basis
+                    notes.append(f"labelled bars '{b.get('title') or b.get('value')}' % column '{basis}'")
+                else:
+                    notes.append(f"bars '{b.get('title') or b.get('value')}': the % column has no basis; add secondaryLabel (e.g. \"% of account\")")
+            if b.get("format") == "pct" and b.get("value") == "weight" and not b.get("valueLabel"):
+                b["valueLabel"] = "% of book"
+                notes.append(f"labelled bars '{b.get('title') or 'weight'}' values '% of book'")
+
+
+def _drop_duplicate_trends(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """A hero sparkline of a series the page already charts is the same picture twice."""
+    charted = {
+        (b.get("from"), s.get("field"))
+        for b in blocks
+        if b.get("type") == "timeseries"
+        for s in b.get("series") or []
+        if isinstance(s, dict)
+    }
+    for b in blocks:
+        trend = b.get("trend") if b.get("type") == "hero" else None
+        if isinstance(trend, dict) and (trend.get("from"), trend.get("field")) in charted:
+            del b["trend"]
+            notes.append(f"dropped hero '{b.get('label')}' sparkline: the page already charts {trend.get('field')} from {trend.get('from')}")
+
+
+def _fill_rows(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """Rows on the 12-column grid always fill: a short row widens instead of
+    leaving a void (equal blocks share it; otherwise the last takes the rest)."""
+    row: list[dict[str, Any]] = []
+    used = 0
+
+    def close() -> None:
+        nonlocal row, used
+        rest = 12 - used
+        if row and rest > 0:
+            spans = [_SPAN.get(b.get("width") or "full", 12) for b in row]
+            if len(set(spans)) == 1 and 12 % len(row) == 0 and 12 // len(row) in _WIDTH:
+                new = [12 // len(row)] * len(row)
+            else:
+                new = spans[:-1] + [spans[-1] + rest]
+            if all(n in _WIDTH for n in new):
+                for b, n in zip(row, new):
+                    b["width"] = _WIDTH[n]
+                names = ", ".join(str(b.get("title") or b.get("label") or b.get("type")) for b in row)
+                notes.append(f"widened a short row so it fills the grid: {names}")
+        row, used = [], 0
+
+    for b in blocks:
+        span = _SPAN.get(b.get("width") or "full", 12)
+        if used + span > 12:
+            close()
+        row.append(b)
+        used += span
+    close()
+
+
 def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Fix a valid spec's layout smells. Returns ``(spec, notes)``.
 
@@ -520,6 +639,12 @@ def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
       chart's ``details`` so they show in the tooltip and the table view.
     * A chart titled "… by theme" that actually groups by sector (or any other
       mismatch) is retitled to name the dimension it really uses.
+    * A hero sparkline of a series a timeseries on the page already draws is
+      dropped (one series, drawn once).
+    * A % with no stated basis gets one when the measure's shape gives it away
+      (``per`` the account total -> "of your book"; a ratio over ``total`` by
+      account -> "% of account"); otherwise a note asks for it.
+    * A row that doesn't fill the 12-column grid is widened (no voids).
     """
     blocks = [dict(b) for b in spec.get("blocks") or []]
     notes: list[str] = []
@@ -581,6 +706,9 @@ def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             word = _PLURAL.get(actual, actual + "s") if plural else actual
             out["title"] = page[: m.start(2)] + word + page[m.end(2) :]
             notes.append(f"retitled the page '{page}' to '{out['title']}'")
+    _drop_duplicate_trends(keep, notes)
+    _label_percentages(keep, notes)
+    _fill_rows(keep, notes)
     if len(keep) == len(blocks) and not notes:
         return spec, []
     return out, notes
