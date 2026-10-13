@@ -134,6 +134,15 @@ def start_draft(payload: PlayDraftRequest, db: Session = Depends(get_db)) -> dic
         raise _bad(exc) from exc
 
 
+@router.post("/draft/detect")
+def detect_names(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Company names / tickers written in an idea, matched to Trading 212 listings (for Include chips)."""
+    from app.services import instrument_names
+
+    idea = str((payload or {}).get("idea") or "")[:2000]
+    return {"items": instrument_names.detect_in_text(db, idea)}
+
+
 @router.get("/draft/{job_id}")
 def draft_status(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     job = ps.get_draft_job(db, job_id)

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
-import { CircleAlert, CircleCheck } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CircleAlert, CircleCheck, Loader2, Search, X } from 'lucide-react'
 
 import { AssetIcon } from '@/components/kit'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { accountLabel } from '@/utils/format'
-import { getInstrumentNames, type InstrumentName } from './api'
+import { getInstrumentNames, searchInstrumentNames, type InstrumentName } from './api'
 
 /**
  * Readable instrument names for market symbols ("BA.L" → "BAE Systems · BA, UK").
@@ -304,6 +304,169 @@ export function LegName({ symbol, hint, className }: { symbol: string; hint?: st
   return (
     <span className={className} title={`${n.ticker}${n.exchange && n.exchange.code !== 'US' ? ` · ${n.exchange.venue}` : ''}`}>
       {n.name ?? n.ticker}
+    </span>
+  )
+}
+
+/** Put rows we already have (typeahead picks, detected names) in the shared cache. */
+export function rememberNames(rows: InstrumentName[]) {
+  let added = false
+  for (const r of rows) {
+    if (r.symbol && !cache.has(r.symbol.toUpperCase())) {
+      cache.set(r.symbol.toUpperCase(), r)
+      added = true
+    }
+  }
+  if (added) notify()
+}
+
+/**
+ * Typeahead over Trading 212's instrument list: type a company or ticker, pick a
+ * listing. Results carry the market symbol, the company name and the venue.
+ */
+export function NameSearch({
+  onPick,
+  placeholder = 'Company or ticker…',
+  autoFocus,
+  skip = [],
+  className,
+}: {
+  onPick: (row: InstrumentName) => void
+  placeholder?: string
+  autoFocus?: boolean
+  /** Symbols already chosen: hidden from the results. */
+  skip?: string[]
+  className?: string
+}) {
+  const [q, setQ] = useState('')
+  const [rows, setRows] = useState<InstrumentName[]>([])
+  const [loading, setLoading] = useState(false)
+  const [active, setActive] = useState(0)
+  const seq = useRef(0)
+
+  useEffect(() => {
+    const term = q.trim()
+    if (!term) {
+      setRows([])
+      return
+    }
+    const n = ++seq.current
+    setLoading(true)
+    const t = window.setTimeout(() => {
+      searchInstrumentNames(term)
+        .then((r) => {
+          if (n !== seq.current) return
+          const skipSet = new Set(skip.map((x) => x.toUpperCase()))
+          setRows(r.filter((x) => !skipSet.has(x.symbol.toUpperCase())))
+          setActive(0)
+        })
+        .catch(() => n === seq.current && setRows([]))
+        .finally(() => n === seq.current && setLoading(false))
+    }, 180)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q])
+
+  function pick(r: InstrumentName) {
+    rememberNames([r])
+    onPick(r)
+    setQ('')
+    setRows([])
+  }
+
+  return (
+    <div className={cn('w-full', className)}>
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input
+          autoFocus={autoFocus}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setActive((a) => Math.min(a + 1, rows.length - 1))
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setActive((a) => Math.max(a - 1, 0))
+            } else if (e.key === 'Enter' && rows[active]) {
+              e.preventDefault()
+              pick(rows[active])
+            }
+          }}
+          placeholder={placeholder}
+          aria-label="Search Trading 212 instruments"
+          className="h-8 w-full rounded-md border border-border bg-background pr-7 pl-8 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+        />
+        {loading ? <Loader2 className="absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" /> : null}
+      </div>
+      {rows.length ? (
+        <ul role="listbox" className="mt-1.5 max-h-64 overflow-y-auto">
+          {rows.map((r, i) => (
+            <li key={r.instrument_code ?? r.symbol} role="option" aria-selected={i === active}>
+              <button
+                type="button"
+                onMouseEnter={() => setActive(i)}
+                onClick={() => pick(r)}
+                className={cn('flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left', i === active && 'bg-muted')}
+              >
+                <AssetIcon symbol={r.ticker} size={22} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm">{r.name ?? r.ticker}</span>
+                  <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span className="font-mono">{r.ticker}</span>
+                    <ExchangeTag n={r} />
+                    {r.currency ? <span>{r.currency === 'GBX' ? 'GBp' : r.currency}</span> : null}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : q.trim() && !loading ? (
+        <p className="mt-2 px-1 text-xs text-muted-foreground">Nothing on Trading 212 matches “{q.trim()}”.</p>
+      ) : null}
+    </div>
+  )
+}
+
+/** A removable name chip (include / exclude lists). */
+export function NameTag({
+  n,
+  onRemove,
+  tone = 'default',
+  hint,
+}: {
+  n: InstrumentName
+  onRemove?: () => void
+  tone?: 'default' | 'muted' | 'suggested'
+  hint?: string
+}) {
+  return (
+    <span
+      title={hint}
+      className={cn(
+        'inline-flex max-w-full items-center gap-1.5 rounded-full border py-0.5 pr-1 pl-0.5 text-xs',
+        tone === 'suggested' ? 'border-dashed border-foreground/25' : 'border-border',
+        tone === 'muted' ? 'text-muted-foreground line-through decoration-muted-foreground/50' : 'text-foreground',
+        n.tradable === false && 'border-warning/50',
+      )}
+    >
+      <AssetIcon symbol={n.ticker} size={18} className="rounded-full" />
+      <span className="truncate">{n.name ?? n.ticker}</span>
+      {n.name ? <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{n.ticker}</span> : null}
+      <ExchangeTag n={n} />
+      {n.tradable === false ? <CircleAlert className="size-3 shrink-0 text-warning" aria-label="Not on Trading 212" /> : null}
+      {onRemove ? (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${n.name ?? n.ticker}`}
+          className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      ) : null}
     </span>
   )
 }

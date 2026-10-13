@@ -119,6 +119,13 @@ export interface Play {
     conviction_source?: 'user' | 'archie'
     origin?: 'adopted'
     dropped_legs?: string[]
+    /** Legs the draft couldn't keep, with why (not on Trading 212 / you excluded it). */
+    dropped?: { ticker: string; name?: string; reason: string }[]
+    /** Archie's conviction when it differs from the one the user picked. */
+    suggested_conviction?: Conviction
+    /** Must-have names the draft couldn't keep, with Archie's reason. */
+    left_out?: { ticker: string; reason: string }[]
+    include?: { query: string; symbol: string; name: string | null; tradable: boolean | null }[]
   }
 }
 
@@ -316,6 +323,9 @@ export interface DraftRequest {
   conviction?: Conviction | null
   horizon_months?: number | null
   account_kind?: PlayAccount | null
+  /** Must-have names (market symbols or company names). */
+  include?: string[]
+  exclude?: string[]
 }
 
 export interface StageResult {

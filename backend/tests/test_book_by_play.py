@@ -54,12 +54,15 @@ def db(engine):
         yield s
 
 
+REAL_RESOLVE = ps.resolve_instrument
+
+
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     """No market data / instrument list: every ticker resolves unverified-but-ok."""
     monkeypatch.setattr(ps, "basket_volatility", lambda legs, *a, **k: None)
     monkeypatch.setattr(ps, "instruments_known", lambda db: False)
-    monkeypatch.setattr(ps, "resolve_instrument", lambda db, t: (f"{t.split('.')[0]}_US_EQ", True))
+    monkeypatch.setattr(ps, "resolve_instrument", lambda db, t, name=None: (f"{t.split('.')[0]}_US_EQ", True))
 
 
 def _play(db, title="AI power", legs=("NVDA", "AVGO", "VRT"), status="active", **kw) -> Play:
@@ -199,7 +202,7 @@ def test_related_and_bench_rings(db):
 def test_bench_rejects_tickers_not_on_t212(db, monkeypatch):
     ai = _play(db)
     monkeypatch.setattr(ps, "instruments_known", lambda db: True)
-    monkeypatch.setattr(ps, "resolve_instrument", lambda db, t: ("X", False))
+    monkeypatch.setattr(ps, "resolve_instrument", lambda db, t, name=None: ("X", False))
     with pytest.raises(bs.OwnershipError, match="isn't available on Trading 212"):
         bs.add_bench(db, ai, "FAKE", "", book=BOOK)
 
@@ -474,7 +477,7 @@ def test_draft_drops_unlisted_legs_or_fails_kindly(db, monkeypatch):
 
     monkeypatch.setattr(ps, "instruments_known", lambda db: True)
     listed = {"VST", "CEG"}
-    monkeypatch.setattr(ps, "resolve_instrument", lambda db, t: (f"{t}_US_EQ", t in listed))
+    monkeypatch.setattr(ps, "resolve_instrument", lambda db, t, name=None: (f"{t}_US_EQ", t in listed))
     monkeypatch.setattr("app.services.config_store.ConfigStore.get_risk", lambda self: RISK)
     kills = [{"text": "a", "rule": {"type": "drawdown_pct", "value": 30}},
              {"text": "b", "rule": {"type": "price_below", "ticker": "VST", "value": 50}}]
@@ -537,7 +540,7 @@ def test_draft_job_failures_are_friendly(db, jobs, monkeypatch):
     async def unclear(*a, **k):
         return {"unclear": "That reads like a goal — what do you believe will happen?"}
     monkeypatch.setattr(ps, "_run_structured", unclear)
-    monkeypatch.setattr(ps, "_mcp_servers", lambda: {})
+    monkeypatch.setattr(ps, "_mcp_servers", lambda *a: {})
     job = ps.start_draft_job(db, {"idea": "something about the future of things"}, run=False)
     ps.run_draft_job(ps.DraftJob(job["job_id"], job["request"]))
     db.expire_all()
@@ -631,3 +634,50 @@ def test_draft_progress_events_carry_phase_source_and_tickers():
     assert ps._phase_for("Book: £10,000 across 8 holdings")["phase"] == "portfolio"
     assert ps._phase_for("Sizing against your book and risk rails")["phase"] == "sizing"
     assert ps._phase_for("Draft ready")["phase"] == "done"
+
+
+def test_european_draft_keeps_listed_legs_honours_includes_and_flags_conviction(db, jobs, monkeypatch):
+    """A defence draft across London/Xetra/Paris/Milan resolves, an unlisted Korean
+    name is dropped (and named), a must-have the model forgot is asked for again,
+    an excluded name never lands, and a different conviction is offered, not applied."""
+    from app.services import instrument_names, portfolio_service
+    from tests.test_instrument_names import META
+
+    monkeypatch.setattr(portfolio_service, "_instrument_meta_map", lambda db: META)
+    monkeypatch.setattr(instrument_names, "_index_cache", None)
+    monkeypatch.setattr(ps, "resolve_instrument", REAL_RESOLVE)
+    monkeypatch.setattr(ps, "instruments_known", lambda db: True)
+    monkeypatch.setattr(ps, "book_context", lambda db: BOOK)
+    monkeypatch.setattr(ps, "_mcp_servers", lambda *a: {})
+    monkeypatch.setattr(ps, "basket_volatility", lambda legs, *a, **k: 0.25)
+    monkeypatch.setattr("app.services.config_store.ConfigStore.get_risk", lambda self: RISK)
+    kills = [{"text": "a", "rule": {"type": "drawdown_pct", "value": 30}},
+             {"text": "b", "rule": {"type": "price_below", "ticker": "RHM.DE", "value": 700}}]
+    leg = lambda t, n: {"ticker": t, "name": n, "role": "core", "weight": 0.2, "rationale": "r"}  # noqa: E731
+    base = [leg("BA.L", "BAE Systems"), leg("RHM.DE", "Rheinmetall"), leg("HO.PA", "Thales"),
+            leg("LDO.MI", "Leonardo"), leg("000660.KS", "SK Hynix")]
+    prompts: list[str] = []
+
+    async def model(prompt, **k):
+        prompts.append(prompt)
+        legs = list(base) + ([leg("SAAB-B.ST", "Saab")] if len(prompts) > 1 else []) + [leg("RR.L", "Rolls-Royce")]
+        return {"title": "European rearmament", "thesis": "t", "what_would_change_my_mind": "w", "legs": legs,
+                "kill_criteria": kills, "suggested_conviction": "medium"}
+
+    monkeypatch.setattr(ps, "_run_structured", model)
+    job = ps.start_draft_job(db, {"idea": "European defence rearmament", "account_kind": "stocks_isa",
+                                  "conviction": "high", "include": ["Saab"], "exclude": ["RR.L"]}, run=False)
+    ps.run_draft_job(ps.DraftJob(job["job_id"], job["request"]))
+    db.expire_all()
+    got = ps.get_draft_job(db, job["job_id"])
+    assert got["status"] == "done", got["error"]
+    assert "must_include" in prompts[0] and "SAAB-B.ST" in prompts[1]  # retried with the miss spelled out
+    play = db.get(ps.Play, got["play_id"])
+    tickers = [l["ticker"] for l in play.legs]
+    assert {"BA.L", "RHM.DE", "HO.PA", "LDO.MI", "SAAB-B.ST"} <= set(tickers)
+    assert "RR.L" not in tickers and "000660.KS" not in tickers
+    assert all(l["instrument_verified"] for l in play.legs)
+    reasons = {d["ticker"]: d["reason"] for d in play.meta["dropped"]}
+    assert reasons == {"RR.L": "you excluded it", "000660.KS": "not on Trading 212"}
+    assert play.conviction == "high" and play.meta["suggested_conviction"] == "medium"
+    assert any("Dropped 000660.KS" in p["text"] for p in got["progress"])

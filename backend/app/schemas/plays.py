@@ -20,6 +20,19 @@ class PlayDraftRequest(BaseModel):
     horizon_months: int | None = Field(default=None, ge=1, le=120)
     account_kind: AccountKind | None = None
     source_session_id: str | None = None
+    # Names the user wants in (must-haves) or out: market symbols or company names.
+    include: list[str] = Field(default_factory=list, max_length=12)
+    exclude: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("include", "exclude")
+    @classmethod
+    def _clean_names(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for x in v:
+            x = " ".join(str(x).split())[:60]
+            if x and x.lower() not in {o.lower() for o in out}:
+                out.append(x)
+        return out
 
 
 class PlayLegIn(BaseModel):
@@ -120,6 +133,11 @@ class DraftKillCriterion(BaseModel):
     rule: KillRule | None = None
 
 
+class LeftOut(BaseModel):
+    ticker: str = Field(description="A name the user asked to include that is not in legs")
+    reason: str = Field(description="One sentence: why it's not in the basket (e.g. not on Trading 212)")
+
+
 class PlayDraftOut(BaseModel):
     # Set (with legs/kill_criteria empty) when the idea isn't an investable theme.
     unclear: str | None = Field(default=None, description="Only when the idea can't be drafted: one friendly sentence why")
@@ -131,6 +149,8 @@ class PlayDraftOut(BaseModel):
     suggested_conviction: Conviction = "medium"
     benchmark: str = "SPY"
     key_risks: list[str] = Field(default_factory=list, max_length=5)
+    left_out: list[LeftOut] = Field(default_factory=list, max_length=12,
+                                    description="Only for must-have names you could not keep, with why")
 
     @model_validator(mode="after")
     def _complete_unless_unclear(self) -> "PlayDraftOut":
