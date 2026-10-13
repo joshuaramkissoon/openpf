@@ -31,10 +31,15 @@
   All servers are declared once in `backend/app/services/mcp_registry.py`.
 - **Subagents**: researcher (Sonnet — web + marketdata + fundamentals), quant (Opus — Bash +
   `app.quant` + marketdata + forecast). There is no execution subagent.
-- **Execution gate**: the agent can only propose trades (`proposed` TradeIntents). A human approves;
+- **Execution gate**: the agent can only propose trades (`proposed` TradeIntents). A human approves,
+  or a user-granted standing permission does (`permissions_service`, `approved_by="permission:<id>"`,
+  applied by a backend sweeper — never from an agent/MCP process);
   `execution_service.execute_intent` is the single path to a live order and re-checks every rail.
+  No MCP tool may create or loosen a permission (Archie can only `suggest_permission`).
   The leveraged engine places orders itself only under its own rails and the user's
   `auto_execute_enabled` flag.
+- **Track record**: `track_record_service` marks every proposal at 1d/1w/1m/3m/close vs a benchmark
+  (`proposal_outcomes`); `/api/track-record`, MCP `get_track_record`.
 - **Leveraged engine**: regime-aware 3x ISA ETP scan/monitor/execute under hard daily rails.
   T212 has **no short selling** — downside is via **INVERSE ETPs (ISA-only)**.
 - **Autonomous loop**: scheduled morning cycle, midday/EOD monitors, weekly review, daily alpha goal.
