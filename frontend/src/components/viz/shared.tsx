@@ -14,6 +14,8 @@ export type VizEnv = {
   compact: boolean
   /** Widget size (Home grid): S 1×1, M 2×1, L 2×2. null = page/chat layout. */
   size: WidgetSize | null
+  /** Views: "change this chart" hover action on a block. */
+  onEditBlock?: (block: import('./types').Block) => void
 }
 
 export type WidgetSize = 'S' | 'M' | 'L'

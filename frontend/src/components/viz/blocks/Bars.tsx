@@ -150,6 +150,61 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const posMax = Math.max(0, ...values)
   const negMax = Math.max(0, ...values.map((v) => -v))
   const negShare = signed ? negMax / (posMax + negMax || 1) : 0
+
+  // Diverging bars with room to spare: labels sit at the zero line on the side
+  // opposite their bar and values ride the bar end, so nothing floats in a gap.
+  const PAD = block.secondary ? 112 : 64
+  const inner = Math.max(0, width - PAD * 2)
+  const zeroX = PAD + negShare * inner
+  const scale = inner / (posMax + negMax || 1)
+  const axisLabels =
+    signed && !env.size && width > 0 && zeroX - 10 >= labelCol.px && (negMax === 0 || width - zeroX - 10 >= labelCol.px) && !labelCol.short
+  if (axisLabels) {
+    return (
+      <div ref={hostRef} className="relative">
+        <div ref={ref} className="relative">
+          <span className="pointer-events-none absolute inset-y-0 w-px bg-[var(--viz-axis)]" style={{ left: zeroX }} aria-hidden />
+          {data.map((r, i) => {
+            const v = values[i]
+            const w = Math.max(v === 0 ? 0 : 2, Math.abs(v) * scale)
+            const pos = v >= 0
+            const drillable = Array.isArray(r.items) || (typeof r.ticker === 'string' && !r.__other)
+            const sec = block.secondary ? r[block.secondary] : null
+            return (
+              <button
+                key={`${labelOf(r)}-${i}`}
+                type="button"
+                disabled={!drillable}
+                onClick={() => click(r)}
+                onPointerMove={(e) => show(e, tipFor(r))}
+                onPointerLeave={hide}
+                className={cn('relative block h-8 w-full rounded-md text-left text-sm', drillable && 'hover:bg-muted/50')}
+              >
+                <span
+                  className="absolute top-1/2 -translate-y-1/2 truncate font-medium"
+                  style={pos ? { right: width - zeroX + 10, maxWidth: zeroX - 10, textAlign: 'right' } : { left: zeroX + 10, maxWidth: width - zeroX - 10 }}
+                >
+                  {labelOf(r)}
+                </span>
+                <span
+                  className={cn('absolute inset-y-2', pos ? 'rounded-r-[4px]' : 'rounded-l-[4px]')}
+                  style={{ left: pos ? zeroX : zeroX - w, width: w, background: v === 0 ? 'var(--viz-mid)' : colorOf(v) }}
+                />
+                <span
+                  className="absolute top-1/2 flex -translate-y-1/2 items-baseline gap-1.5 whitespace-nowrap"
+                  style={pos ? { left: zeroX + w + 8 } : { right: width - (zeroX - w) + 8, flexDirection: 'row-reverse' }}
+                >
+                  <span className={cn('tabular-nums', blur(block.format))}>{fmt(v, block.format)}</span>
+                  {sec != null ? <span className="text-xs tabular-nums text-muted-foreground">{fmt(sec, block.secondaryFormat)}</span> : null}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <Tooltip tip={tip} hostWidth={width} />
+      </div>
+    )
+  }
   return (
     <div ref={hostRef} className="relative">
       <div ref={ref} className="space-y-1">

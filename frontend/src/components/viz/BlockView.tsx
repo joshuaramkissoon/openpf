@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChartNoAxesColumn, Table2 } from 'lucide-react'
+import { ChartNoAxesColumn, Sparkles, Table2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { num, resolveMeasure, resolveRows, type EngineCtx } from './engine'
@@ -211,7 +211,7 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
     )
   }
   return (
-    <section className="viz-in min-w-0 rounded-xl border border-border bg-card p-5">
+    <section className="group/block viz-in min-w-0 rounded-xl border border-border bg-card p-5">
       <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} />
       {inner}
     </section>
@@ -219,6 +219,7 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
 }
 
 function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table: boolean; asTable: boolean; onToggle: () => void }) {
+  const env = useVizEnv()
   if (!block.title && !block.subtitle && !table) return null
   return (
     <div className="mb-4 flex items-start justify-between gap-3">
@@ -226,6 +227,17 @@ function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table:
         {block.title ? <h3 className="text-sm font-semibold tracking-tight">{block.title}</h3> : null}
         {block.subtitle ? <p className="mt-0.5 text-xs text-muted-foreground">{block.subtitle}</p> : null}
       </div>
+      <div className="flex shrink-0 items-center gap-0.5">
+      {env.onEditBlock ? (
+        <button
+          type="button"
+          onClick={() => env.onEditBlock?.(block)}
+          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/block:opacity-100 [@media(hover:none)]:hidden"
+          title="Change this chart"
+        >
+          <Sparkles className="size-3.5 text-primary" /> Change
+        </button>
+      ) : null}
       {table ? (
         <button
           type="button"
@@ -238,6 +250,7 @@ function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table:
           {asTable ? <ChartNoAxesColumn className="size-4" /> : <Table2 className="size-4" />}
         </button>
       ) : null}
+      </div>
     </div>
   )
 }
