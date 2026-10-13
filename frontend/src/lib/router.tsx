@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
  * static host and deep links survive a reload.
  *
  * Top-level route keys (first path segment):
- *   home · archie · plays · activity · views · settings · labs
+ *   home · archie · plays · recipes · activity · views · settings · labs
  */
 export type Route = {
   /** Full path, always starting with `/` (e.g. `/plays/abc123`). */

@@ -17,6 +17,7 @@ from app.services.claude_sdk_config import (
     runtime_info as sdk_runtime_info,
 )
 from app.services import mcp_registry
+from app.services.claude_sdk_config import recipe_plugins as recipes_plugins_option
 
 settings = get_settings()
 
@@ -378,6 +379,8 @@ class ClaudeChatRuntime:
             mcp_servers=mcp_servers if mcp_servers else {},
             hooks=build_security_hooks(),
             agents=build_subagents(),
+            # The user's recipes, loaded as native skills (recipes:<slug>).
+            plugins=recipes_plugins_option(),
         )
 
     def _build_can_use_tool(self, chat_session_id: str) -> CanUseTool:

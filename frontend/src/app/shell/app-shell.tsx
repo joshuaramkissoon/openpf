@@ -18,6 +18,7 @@ import {
   Sparkles,
   Target,
   Wallet,
+  Workflow,
   X,
 } from "lucide-react"
 
@@ -31,6 +32,7 @@ import { ActivityPage } from "@/features/activity"
 import { ArchiePage } from "@/features/archie"
 import { HomePage } from "@/features/home"
 import { PlaysPage } from "@/features/plays"
+import { RecipesPage } from "@/features/recipes"
 import { SettingsPage } from "@/features/settings"
 import { ViewsPage } from "@/features/views"
 import { AppActionsProvider, type AppActions } from "@/lib/app-actions"
@@ -48,12 +50,13 @@ import { BrokerBadge, SandboxBanner } from "./broker-badge"
 import { BackendOfflineBanner, RouteErrorBoundary } from "./resilience"
 import { AppSidebar, SidebarBody } from "./sidebar"
 
-const KNOWN = new Set(["home", "archie", "plays", "activity", "views", "settings", "labs"])
+const KNOWN = new Set(["home", "archie", "plays", "recipes", "activity", "views", "settings", "labs"])
 
 const TITLES: Record<string, string> = {
   home: "Home",
   archie: "Archie",
   plays: "Plays",
+  recipes: "Recipes",
   activity: "Activity",
   views: "Views",
   settings: "Settings",
@@ -204,6 +207,7 @@ function useCommands(actions: AppActions, cyclePrivacy: () => void, reload: (o?:
       { id: "ask", label: "Ask Archie…", group: "Actions", icon: Sparkles, keywords: "chat question", onSelect: () => actions.askArchie("") },
       { id: "new-play", label: "New play", group: "Actions", icon: Plus, keywords: "theme bet basket", onSelect: () => navigate("/plays?new=1") },
       { id: "new-view", label: "New view", group: "Actions", icon: LayoutGrid, keywords: "page build", onSelect: () => navigate("/views/new") },
+      { id: "new-recipe", label: "New recipe", group: "Actions", icon: Workflow, keywords: "automation routine schedule skill", onSelect: () => navigate("/recipes/new") },
       { id: "refresh", label: "Refresh portfolio", group: "Actions", icon: RefreshCw, keywords: "sync reload", onSelect: () => reload({ live: true, force: true }) },
       { id: "privacy", label: "Cycle privacy mode", group: "Actions", icon: Eye, shortcut: "P", keywords: "blur scramble hide", onSelect: cyclePrivacy },
       {
@@ -217,11 +221,12 @@ function useCommands(actions: AppActions, cyclePrivacy: () => void, reload: (o?:
       go("home", "Home", "/home", Home),
       go("archie", "Archie", "/archie", MessageSquare, "chat"),
       go("plays", "Plays", "/plays", Target, "themes watchlist"),
+      go("recipes", "Recipes", "/recipes", Workflow, "automations routines schedules briefing skills"),
       go("holdings", "Holdings", "/home/holdings", Wallet, "positions allocation"),
       go("signals", "Signals", "/home/signals", Bell, "alerts attention"),
       go("proposals", "Proposals", "/activity/proposals", Activity, "intents approve"),
       go("orders", "Orders", "/activity/orders", ListOrdered, "broker"),
-      go("automations", "Automations", "/activity/automations", CalendarClock, "scheduled jobs briefing reports"),
+      go("automations", "Automation runs", "/activity/automations", CalendarClock, "scheduled jobs briefing reports log"),
       go("settings", "Settings", "/settings/general", Settings, "keys broker risk"),
       go("help", "Help", "/settings/help", HelpCircle, "guide"),
     ]
@@ -364,6 +369,8 @@ function Page(props: LayoutProps) {
       return <PlaysPage route={route} />
     case "views":
       return <ViewsPage route={route} />
+    case "recipes":
+      return <RecipesPage route={route} />
     case "activity":
       return (
         <ActivityPage

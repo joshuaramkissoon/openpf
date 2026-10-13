@@ -5,7 +5,7 @@ import { ChevronRight, Inbox } from "lucide-react"
 import { ArtifactsWorkspace } from "@/components/ArtifactsWorkspace"
 import { EventsFeed } from "@/components/EventsFeed"
 import { OrdersWorkspace } from "@/components/OrdersWorkspace"
-import { ScheduledJobsWorkspace } from "@/components/ScheduledJobsWorkspace"
+import { TodayTimeline } from "@/components/scheduled-jobs/TodayTimeline"
 import { Money, PageHeader, TabNav } from "@/components/kit"
 import { useAppActions } from "@/lib/app-actions"
 import type { Route } from "@/lib/router"
@@ -49,7 +49,7 @@ export function ActivityPage({
         tabs={[
           { value: "proposals", label: "Proposals", count: proposals.pending.length },
           { value: "orders", label: "Orders" },
-          { value: "automations", label: "Automations" },
+          { value: "automations", label: "Runs" },
           { value: "audit", label: "Audit" },
         ]}
       />
@@ -58,8 +58,19 @@ export function ActivityPage({
       ) : null}
       {tab === "orders" ? <OrdersWorkspace onError={onError} /> : null}
       {tab === "automations" ? (
-        <div className="space-y-6">
-          <ScheduledJobsWorkspace onError={onError} />
+        <div className="space-y-8">
+          <section>
+            <div className="mb-3 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Today</h2>
+                <p className="text-xs text-muted-foreground">What ran and what's next. Set up and change routines in Recipes.</p>
+              </div>
+              <button type="button" onClick={() => navigate("/recipes")} className="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+                Manage recipes →
+              </button>
+            </div>
+            <TodayTimeline onError={onError} onViewTask={() => navigate("/recipes")} />
+          </section>
           <ArtifactsWorkspace onError={onError} />
         </div>
       ) : null}

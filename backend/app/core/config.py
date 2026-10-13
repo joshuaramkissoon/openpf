@@ -156,6 +156,11 @@ class Settings(BaseSettings):
     # mode defaults it to .demo/runtime and refuses the live folder.
     openpf_runtime_dir: str = Field(default="", alias="OPENPF_RUNTIME_DIR")
 
+    # Recipes — Archie's own harness (skills + triggers). User/Archie-made recipes
+    # are personal data and live here (gitignored); built-ins ship in the repo.
+    recipes_data_dir: str = Field(default="data/recipes", alias="RECIPES_DATA_DIR")
+    recipes_model: str = Field(default="claude-sonnet-4-6", alias="RECIPES_MODEL")
+
     @model_validator(mode="after")
     def _legacy_sqlite_fallback(self) -> "Settings":
         self.database_url = resolve_legacy_sqlite_url(self.database_url)
@@ -204,6 +209,8 @@ def _apply_sandbox_isolation(settings: "Settings") -> None:
         settings.database_url = f"sqlite:///{demo / 'openpf-demo.db'}"
     if not os.environ.get("VIEWS_DATA_DIR"):
         settings.views_data_dir = str(demo / "views")
+    if not os.environ.get("RECIPES_DATA_DIR"):
+        settings.recipes_data_dir = str(demo / "recipes")
     if not os.environ.get("OPENPF_RUNTIME_DIR"):
         settings.openpf_runtime_dir = str(demo / "runtime")
     if not os.environ.get("AGENT_WORKSPACE"):
@@ -219,6 +226,9 @@ def _apply_sandbox_isolation(settings: "Settings") -> None:
     if is_within(settings.views_data_dir if Path(settings.views_data_dir).is_absolute() else backend / settings.views_data_dir,
                  backend / "data" / "views"):
         raise SandboxViolation("sandbox mode refuses the live views folder — set VIEWS_DATA_DIR elsewhere")
+    if is_within(settings.recipes_data_dir if Path(settings.recipes_data_dir).is_absolute() else backend / settings.recipes_data_dir,
+                 backend / "data" / "recipes"):
+        raise SandboxViolation("sandbox mode refuses the live recipes folder — set RECIPES_DATA_DIR elsewhere")
     runtime = Path(settings.openpf_runtime_dir).expanduser()
     if not runtime.is_absolute():
         runtime = repo_root() / runtime

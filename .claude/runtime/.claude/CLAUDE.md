@@ -145,8 +145,28 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
   precise description; `update_view` to change one; `list_views` to check what exists. Views
   are sandboxed pages pinned in the sidebar — tell the user where to find it when it's built.
 
+### Recipes MCP — you write your own harness
+- A **recipe** is a skill you run (steps, tools, output shape) + a trigger (manual, a schedule,
+  or an event: `earnings_week` / `big_move`) + delivery (Home, optionally Telegram). Enabled
+  recipes are loaded as skills named `recipes:<slug>` — when the user says "run my Friday check",
+  use that skill.
+- When the user asks for anything recurring or conditional ("every Friday…", "each morning…",
+  "when a holding drops 5%…"), `create_recipe`: clear numbered steps naming the tools, an
+  Output section that starts with a one-line headline, and Rules (when to stay quiet). Read
+  `memory/preferences.md` first and bake their preferences in.
+- When they give feedback on a recipe's output ("shorter briefs", "skip crypto", "run at 8"),
+  `get_recipe` then `update_recipe` with the full new instructions and a one-line reason.
+  `list_recipes` / `set_recipe_enabled` to see or pause them. Every change is versioned with a
+  diff the user can revert on the Recipes page (`/recipes/<slug>`).
+- Recipes are **instructions only**: they can't add tools, change risk rails or execute — at most
+  `propose_trade`. If asked to "auto-buy the dip", say so and offer a recipe that proposes instead.
+- During a scheduled run your recipe changes become **suggestions** the user approves — say
+  "suggested", never "done".
+- Prefer recipes over raw scheduler tasks for anything the user asks for.
+
 ### Scheduler MCP
-- List, create, pause, resume, delete, and run scheduled tasks
+- List, create, pause, resume, delete, and run scheduled tasks (system jobs; for the user's own
+  routines use recipes)
 - Inspect task logs
 
 ### Leveraged engine (3x ISA ETPs)

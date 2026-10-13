@@ -421,6 +421,46 @@ def _touches_other_instance(paths: list[str], cwd: str | None) -> bool:
     return False
 
 
+# Recipes (Archie's own harness) change only through the versioned recipes tools,
+# so every edit has a diff the user can see and revert — never via raw file
+# writes into the skills plugin.
+_RECIPES_DENY_REASON = "recipes are edited only through the recipes tools (versioned and reviewable)"
+_BASH_RECIPES_DENY = re.compile(r"data/recipes|recipes/plugin|\.claude-plugin|recipes_service|RecipeVersion", re.IGNORECASE)
+
+
+def _recipes_dir() -> Path | None:
+    try:
+        from app.services.recipes_service import data_dir
+
+        return data_dir()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _in_recipes_dir(raw_path: str, cwd: str | None) -> bool:
+    root = _recipes_dir()
+    if not raw_path or root is None:
+        return False
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd or resolve_sdk_cwd()) / path
+    try:
+        path.resolve().relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def recipe_plugins() -> list[dict[str, str]]:
+    """``ClaudeAgentOptions(plugins=...)`` for the user's recipes (as skills)."""
+    try:
+        from app.services.recipes_service import plugins_option
+
+        return plugins_option()
+    except Exception:  # noqa: BLE001 — a recipes problem must never stop a runtime
+        return []
+
+
 async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
     command = str((input_data.get("tool_input") or {}).get("command", ""))
     _, marker = _other_instance_roots()
@@ -429,6 +469,9 @@ async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, conte
     for pattern, reason in _BASH_DENY:
         if pattern.search(command):
             return _deny(reason)
+    root = _recipes_dir()
+    if _BASH_RECIPES_DENY.search(command) or (root is not None and str(root) in command):
+        return _deny(_RECIPES_DENY_REASON)
     for pattern, reason in _SECRET_PATTERNS:
         if pattern.search(command):
             return _deny(reason)
@@ -485,6 +528,8 @@ async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, conte
         return _deny(_OTHER_INSTANCE_REASON)
     if str(input_data.get("tool_name", "")) in _WRITE_TOOLS:
         write_target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        if _in_recipes_dir(write_target, input_data.get("cwd")):
+            return _deny(_RECIPES_DENY_REASON)
         if _outside_agent_area(write_target, input_data.get("cwd")):
             return _deny("writes are limited to agent state under .claude/ — app code and config are read-only")
     return {}

@@ -26,7 +26,8 @@
 ## Agent Capabilities (for prompt/context work)
 - **MCP tool servers**: `marketdata` (price/history/technicals/risk/correlation/compare),
   `fundamentals` (fundamentals/valuation/statements/earnings), `forecast` (Kronos p10/p50/p90),
-  `scheduler` (cron tasks), `trading212` (read-only account data), `proposals` (`propose_trade`).
+  `scheduler` (cron tasks), `trading212` (read-only account data), `proposals` (`propose_trade`),
+  `recipes` (Archie-written routines: skills + triggers, versioned; see `recipes_service.py`).
   All servers are declared once in `backend/app/services/mcp_registry.py`.
 - **Subagents**: researcher (Sonnet — web + marketdata + fundamentals), quant (Opus — Bash +
   `app.quant` + marketdata + forecast). There is no execution subagent.

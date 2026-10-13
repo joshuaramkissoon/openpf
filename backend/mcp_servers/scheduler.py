@@ -97,6 +97,12 @@ def create_scheduled_task(
         task_kind: One of claude|leveraged_cycle|leveraged_scan|leveraged_monitor.
         description: Optional metadata description.
     """
+    if os.environ.get("OPENPF_MCP_CONTEXT", "chat").strip().lower() != "chat":
+        # An unattended run (a scheduled task or recipe reading news, etc.) must
+        # not plant new prompts that run later; that is how an injection would
+        # persist. Only an attended chat can add tasks — recipes have their own
+        # approval flow for unattended suggestions.
+        return json.dumps({"ok": False, "error": "Scheduled tasks can only be created from a chat with the user. Suggest it to them instead."})
     logger.info("create_scheduled_task name=%s schedule=%s", name, schedule)
     init_db()
     db = SessionLocal()

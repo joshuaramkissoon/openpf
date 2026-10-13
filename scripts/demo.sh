@@ -45,6 +45,7 @@ echo "→ starting API (sandbox broker) on :$API_PORT"
   DATABASE_URL="sqlite:///$DEMO_DIR/openpf-demo.db" \
   OPENPF_SANDBOX_STATE="$DEMO_DIR/sandbox_state.json" \
   VIEWS_DATA_DIR="$DEMO_DIR/views" \
+  RECIPES_DATA_DIR="$DEMO_DIR/recipes" \
   OPENPF_RUNTIME_DIR="$DEMO_DIR/runtime" \
   "$ROOT/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" --log-level warning
 ) &

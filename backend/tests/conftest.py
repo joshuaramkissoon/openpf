@@ -12,5 +12,6 @@ import tempfile
 _TMP = tempfile.mkdtemp(prefix="openpf-tests-")
 os.environ["DATABASE_URL"] = f"sqlite:///{_TMP}/test.db"
 os.environ["OPENPF_RUNTIME_DIR"] = os.path.join(_TMP, "runtime")
+os.environ.setdefault("RECIPES_DATA_DIR", os.path.join(_TMP, "recipes"))
 os.environ.setdefault("VIEWS_DATA_DIR", os.path.join(_TMP, "views"))
 os.environ["INPROC_SCHEDULER_ENABLED"] = "false"
