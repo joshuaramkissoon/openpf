@@ -950,19 +950,28 @@ def _basket_series(legs: list[dict[str, Any]], since: date, benchmark: str,
 
 def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = None,
                      history_fn: Callable[[str, int], list[tuple[date, float]]] = _history_closes,
-                     price_fn: Callable[[str], float | None] = last_price) -> dict[str, Any]:
+                     price_fn: Callable[[str], float | None] = last_price,
+                     owned: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """``owned``: the positions this play owns, when the caller resolved ownership
+    itself (e.g. off-thread, with no DB session)."""
     book = book or book_context(db)
     # Count what the play owns (any account) — see book_service for ownership.
-    try:
-        from app.services import book_service
+    if owned is not None:
+        mine = owned
+    else:
+        try:
+            from app.services import book_service
 
-        mine = book_service.owned_positions(db, play, book["positions"])
-        if play.status == "draft":
-            owners = book_service.resolve_owners(book["positions"], book_service.owning_plays(db), book_service.explicit_rows(db))
-            mine = book_service.available_for_play(play, book["positions"], owners)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("ownership unavailable for performance: %s", exc)
-        mine = [p for p in book["positions"] if p.get("account_kind") == play.account_kind]
+            mine = book_service.owned_positions(db, play, book["positions"])
+            if play.status == "draft":
+                owners = book_service.resolve_owners(book["positions"], book_service.owning_plays(db), book_service.explicit_rows(db))
+                mine = book_service.available_for_play(play, book["positions"], owners)
+        except Exception as exc:  # noqa: BLE001
+            # Without ownership, count only the basket's own names. Never every
+            # holding in the account: they'd all land "off basket" and inflate the
+            # play's share of the book (tripping its concentration rule).
+            logger.info("ownership unavailable for performance: %s", exc)
+            mine = [p for p in book["positions"] if any(_position_matches(p, _leg_keys(l)) for l in play.legs or [])]
     legs_out = []
     held_total = 0.0
     for leg in play.legs or []:
