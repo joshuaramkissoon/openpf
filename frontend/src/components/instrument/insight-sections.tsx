@@ -1,5 +1,19 @@
 import { useState } from "react"
-import { ChevronDown, ExternalLink } from "lucide-react"
+import {
+  BarChart3,
+  CalendarClock,
+  ChevronDown,
+  CircleCheck,
+  CircleDashed,
+  CircleHelp,
+  CircleX,
+  ExternalLink,
+  type LucideIcon,
+  Newspaper,
+  ShieldAlert,
+  Target,
+  TriangleAlert,
+} from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { navigate } from "@/lib/router"
@@ -13,25 +27,40 @@ import type {
 } from "@/api/instruments"
 import { fmtBig, fmtDate, fmtPct, num, relDays, timeAgo } from "./insight-format"
 
+/** A stock-sheet section: a divider, an icon + title header, then content. Every
+ *  section shares this header so the sheet reads as one rhythm. */
 export function Section({
   title,
+  icon: Icon,
   children,
   aside,
   className,
 }: {
-  title: string
+  title: React.ReactNode
+  icon?: LucideIcon
   children: React.ReactNode
   aside?: React.ReactNode
   className?: string
 }) {
   return (
-    <section className={cn("flex flex-col gap-3", className)}>
-      <div className="flex items-baseline gap-2">
-        <h3 className="text-[13px] font-semibold tracking-tight text-foreground">{title}</h3>
-        {aside ? <div className="ml-auto text-xs text-muted-foreground">{aside}</div> : null}
-      </div>
+    <section className={cn("flex flex-col gap-4 border-t border-border/70 pt-6", className)}>
+      <SectionHeader title={title} icon={Icon} aside={aside} />
       {children}
     </section>
+  )
+}
+
+export function SectionHeader({ title, icon: Icon, aside }: { title: React.ReactNode; icon?: LucideIcon; aside?: React.ReactNode }) {
+  return (
+    <div className="flex min-h-6 items-center gap-2.5">
+      {Icon ? (
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground" aria-hidden>
+          <Icon className="size-3.5" />
+        </span>
+      ) : null}
+      <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
+      {aside ? <div className="ml-auto flex min-w-0 items-center text-xs text-muted-foreground">{aside}</div> : null}
+    </div>
   )
 }
 
@@ -88,7 +117,7 @@ export function RiskSection({ risk, held }: { risk: InsightRisk; held: boolean }
   const share = risk.risk_share
   const heavy = value != null && share != null && share > value * 1.25
   return (
-    <Section title="Should I worry?">
+    <Section title="Should I worry?" icon={ShieldAlert}>
       <div className="flex flex-col gap-3 text-sm leading-relaxed">
         {held && value != null && share != null ? (
           <div className="flex flex-col gap-2">
@@ -112,19 +141,30 @@ export function RiskSection({ risk, held }: { risk: InsightRisk; held: boolean }
           </div>
         ) : null}
         {risk.moves_with.length ? (
-          <p>
-            <span className="text-muted-foreground">{held ? "Moves with" : "Would move with your"} </span>
-            {risk.moves_with.map((m, i) => (
-              <span key={m.ticker}>
-                {i > 0 ? (i === risk.moves_with.length - 1 ? " and " : ", ") : ""}
-                <span className="font-medium">{m.label}</span>
-                <span className={cn("text-xs text-muted-foreground", num)}> {m.corr.toFixed(2)}</span>
-              </span>
-            ))}
-            <span className="text-muted-foreground">
-              {risk.moves_with[0].corr >= 0.6 ? " — closely, so they tend to fall together." : "."}
+          <div className="flex flex-col gap-2">
+            <span className="text-xs text-muted-foreground">
+              {held ? "Moves most with" : "Would move most with your"}
+              {risk.moves_with[0].corr >= 0.6 ? " — closely, so they tend to fall together" : " (1-year correlation)"}
             </span>
-          </p>
+            <ul className="flex flex-wrap gap-1.5" aria-label="Most correlated holdings">
+              {risk.moves_with.map((m) => (
+                <li
+                  key={m.ticker}
+                  className="flex items-center gap-2 rounded-md border border-border/80 py-1 pr-2 pl-2.5 text-xs"
+                  title={`Correlation ${m.corr.toFixed(2)} over the past year`}
+                >
+                  <span className="font-medium">{m.label}</span>
+                  <span className="h-1 w-8 overflow-hidden rounded-full bg-muted" aria-hidden>
+                    <span
+                      className={cn("block h-full rounded-full", m.corr >= 0.6 ? "bg-warning" : "bg-muted-foreground/60")}
+                      style={{ width: `${Math.max(6, Math.min(100, Math.abs(m.corr) * 100))}%` }}
+                    />
+                  </span>
+                  <span className={cn("text-muted-foreground", num)}>{m.corr.toFixed(2)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
         <p>
           {volWords(risk)}
@@ -153,43 +193,82 @@ export function EventsSection({ events }: { events: InsightEvents }) {
       note: events.ex_dividend.amount ? `${events.ex_dividend.amount} per share` : undefined,
     })
   if (!rows.length) return null
+  rows.sort((x, y) => x.days - y.days)
   return (
-    <Section title="Coming up">
-      <div className="flex flex-col divide-y divide-border/60">
-        {rows.map((r) => (
-          <div key={r.label} className="flex items-baseline gap-3 py-2 text-sm first:pt-0 last:pb-0">
-            <span className="w-24 shrink-0 text-muted-foreground">{r.label}</span>
-            <span className={cn("font-medium", num)}>{fmtDate(r.date, true)}</span>
-            <span className={cn("text-xs", r.days <= 7 ? "text-warning" : "text-muted-foreground")}>{relDays(r.days)}</span>
-            {r.note ? <span className={cn("ml-auto text-xs text-muted-foreground", num)}>{r.note}</span> : null}
-          </div>
-        ))}
-      </div>
+    <Section title="Coming up" icon={CalendarClock}>
+      <ol className="relative flex flex-col gap-3" aria-label="Upcoming events">
+        <span aria-hidden className="absolute top-2 bottom-5 left-[19px] w-px bg-border" />
+        <li className="relative flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="flex w-10 justify-center">
+            <span className="relative size-2 rounded-full bg-foreground ring-4 ring-popover" />
+          </span>
+          Today
+        </li>
+        {rows.map((r) => {
+          const d = new Date(`${r.date}T00:00:00`)
+          const soon = r.days <= 7
+          return (
+            <li key={r.label} className="relative flex items-center gap-3">
+              <span
+                className={cn(
+                  "flex w-10 shrink-0 flex-col items-center rounded-md border bg-popover py-1 leading-none",
+                  soon ? "border-warning/50" : "border-border",
+                )}
+              >
+                <span className="text-[9px] font-medium tracking-wider text-muted-foreground uppercase">
+                  {d.toLocaleDateString(undefined, { month: "short" })}
+                </span>
+                <span className={cn("mt-0.5 text-sm font-semibold", num)}>{d.getDate()}</span>
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">{r.label}</p>
+                <p className={cn("text-xs text-muted-foreground", num)}>
+                  {fmtDate(r.date, true)}
+                  {r.note ? ` · ${r.note}` : ""}
+                </p>
+              </div>
+              <span
+                className={cn(
+                  "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                  soon ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground",
+                )}
+              >
+                {relDays(r.days)}
+              </span>
+            </li>
+          )
+        })}
+      </ol>
     </Section>
   )
 }
 
 // ── Why do I own it? ────────────────────────────────────────────────────────
 
-const STATUS: Record<string, { label: string; dot: string; text: string }> = {
-  fine: { label: "Fine", dot: "bg-positive", text: "text-positive" },
-  watch: { label: "Watch", dot: "bg-warning", text: "text-warning" },
-  triggered: { label: "Triggered", dot: "bg-negative", text: "text-negative" },
-  judgement: { label: "Judgement", dot: "bg-muted-foreground", text: "text-muted-foreground" },
-  unknown: { label: "Not checked", dot: "bg-muted-foreground/50", text: "text-muted-foreground" },
+const STATUS: Record<string, { label: string; Icon: LucideIcon; chip: string }> = {
+  fine: { label: "Fine", Icon: CircleCheck, chip: "border-positive/30 bg-positive/10 text-positive" },
+  watch: { label: "Close", Icon: TriangleAlert, chip: "border-warning/30 bg-warning/10 text-warning" },
+  triggered: { label: "Triggered", Icon: CircleX, chip: "border-negative/30 bg-negative/10 text-negative" },
+  judgement: { label: "Judgement", Icon: CircleDashed, chip: "border-border bg-muted/50 text-muted-foreground" },
+  unknown: { label: "Not checked", Icon: CircleHelp, chip: "border-border bg-transparent text-muted-foreground" },
 }
 
-const VERDICT: Record<string, string> = { on_track: "On track", watch: "Watch", broken: "Broken" }
+const VERDICT: Record<string, { label: string; cls: string }> = {
+  on_track: { label: "On track", cls: "bg-positive/10 text-positive" },
+  watch: { label: "Watch", cls: "bg-warning/10 text-warning" },
+  broken: { label: "Broken", cls: "bg-negative/10 text-negative" },
+}
 
 export function ThesisSection({ play, theses, held }: { play: InsightPlay | null; theses: InsightThesis[]; held: boolean }) {
   if (!play && !theses.length) return null
   return (
     <Section
       title={held ? "Why you own it" : "Why it's on your radar"}
+      icon={Target}
       aside={
         play?.verdict ? (
-          <span className={cn(play.verdict === "broken" ? "text-negative" : play.verdict === "watch" ? "text-warning" : "text-positive")}>
-            {VERDICT[play.verdict] ?? play.verdict}
+          <span className={cn("rounded-md px-1.5 py-0.5 text-[11px] font-medium", VERDICT[play.verdict]?.cls ?? "bg-muted")}>
+            {VERDICT[play.verdict]?.label ?? play.verdict}
           </span>
         ) : null
       }
@@ -206,21 +285,24 @@ export function ThesisSection({ play, theses, held }: { play: InsightPlay | null
             </p>
           ) : null}
           {play.rules.length ? (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <span className="text-xs text-muted-foreground">Exit rules</span>
-              <ul className="flex flex-col gap-1.5">
+              <ul className="flex flex-col divide-y divide-border/60 rounded-lg border border-border/70">
                 {play.rules.map((r, i) => {
-                  const s = STATUS[r.status ?? "unknown"] ?? STATUS.unknown
+                  const st = STATUS[r.status ?? "unknown"] ?? STATUS.unknown
+                  const StIcon = st.Icon
                   return (
-                    <li key={i} className="flex items-start gap-2.5">
-                      <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", s.dot)} />
+                    <li key={i} className="flex items-start gap-3 px-3 py-2.5">
                       <span className="min-w-0 flex-1">
                         {r.text}
                         {r.detail && r.status !== "judgement" ? (
                           <span className={cn("block text-xs text-muted-foreground", num)}>{r.detail}</span>
                         ) : null}
                       </span>
-                      <span className={cn("shrink-0 text-xs font-medium", s.text)}>{s.label}</span>
+                      <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium", st.chip)}>
+                        <StIcon className="size-3" />
+                        {st.label}
+                      </span>
                     </li>
                   )
                 })}
@@ -268,6 +350,7 @@ export function NewsSection({ news }: { news: InsightNews[] }) {
   return (
     <Section
       title="News"
+      icon={Newspaper}
       aside={
         news.length > 3 ? (
           <button className="hover:text-foreground" onClick={() => setAll((v) => !v)}>
@@ -314,9 +397,12 @@ export function FundamentalsSection({ f, currency }: { f: InsightFundamentals; c
     .filter(Boolean)
     .join(" · ")
   return (
-    <section className="flex flex-col gap-3">
-      <button className="flex items-baseline gap-2 text-left" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <h3 className="text-[13px] font-semibold tracking-tight">Fundamentals</h3>
+    <section className="flex flex-col gap-4 border-t border-border/70 pt-6">
+      <button className="flex w-full items-center gap-2.5 text-left" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground" aria-hidden>
+          <BarChart3 className="size-3.5" />
+        </span>
+        <h3 className="text-sm font-semibold tracking-tight">Fundamentals</h3>
         {!open ? <span className={cn("min-w-0 truncate text-xs text-muted-foreground", num)}>{summary}</span> : null}
         <ChevronDown className={cn("ml-auto size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
