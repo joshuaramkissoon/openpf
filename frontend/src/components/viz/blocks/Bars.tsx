@@ -62,15 +62,18 @@ function SplitBars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const valued = rows.map((r) => ({ r, v: num(r[block.value]) })).filter((x): x is { r: Row; v: number } => x.v != null)
   const ups = valued.filter((x) => x.v > 0)
   const downs = valued.filter((x) => x.v < 0)
-  const best = [...ups].sort((a, b) => b.v - a.v).slice(0, n)
-  const worst = [...downs].sort((a, b) => a.v - b.v).slice(0, n)
+  // Stacked (narrow) the two groups share the height, so each side shows fewer rows.
+  const stackedCap = env.size === 'L' ? 4 : env.size ? 2 : n
+  const perSide = width > 0 && width < 380 ? Math.min(n, stackedCap) : n
+  const best = [...ups].sort((a, b) => b.v - a.v).slice(0, perSide)
+  const worst = [...downs].sort((a, b) => a.v - b.v).slice(0, perSide)
   if (!best.length && !worst.length) return <EmptyNote>{block.empty ?? 'Nothing moved yet today.'}</EmptyNote>
   const scale = Math.max(...[...best, ...worst].map((x) => Math.abs(x.v))) || 1
   const sideBySide = width >= 380
   // Widgets keep the bar readable: compact amounts, and the % column only where there's room (it's in the tooltip).
   const compact = env.size === 'S' || env.size === 'M'
   const showSec = !compact && (!sideBySide || width >= 640)
-  const roomy = env.size === 'L' || !env.size
+  const roomy = (env.size === 'L' && sideBySide) || !env.size
   // Whole pounds read faster in a ranked list; pennies only under £10.
   const amount = (v: number) => (money && Math.abs(v) >= 10 ? fmt(Math.round(v), block.format, compact).replace(/\.00$/, '') : fmt(v, block.format, compact))
   // Fixed value columns: every bar track is the same width, so bars share one scale.
@@ -111,7 +114,7 @@ function SplitBars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
                   style={{ gridTemplateColumns: cols }}
                   className={cn(
                     'grid w-full items-center gap-2.5 rounded-md px-1 text-left',
-                    roomy ? 'py-3 text-sm' : env.size === 'S' ? 'py-0.5 text-[13px]' : 'py-[3px] text-sm',
+                    roomy ? 'py-3 text-sm' : env.size === 'S' || (env.size === 'M' && !sideBySide) ? 'py-0.5 text-[13px]' : 'py-[3px] text-sm',
                     drillable && 'hover:bg-muted/50',
                   )}
                 >
@@ -140,7 +143,7 @@ function SplitBars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
 
   return (
     <div ref={hostRef} className="relative">
-      <div ref={ref} className={cn(sideBySide ? 'grid grid-cols-2 gap-x-6' : 'flex flex-col gap-2.5')}>
+      <div ref={ref} className={cn(sideBySide ? 'grid grid-cols-2 gap-x-6' : env.size === 'L' || !env.size ? 'flex flex-col gap-2.5' : 'flex flex-col gap-1.5')}>
         {group('up', best, ups.length)}
         {group('down', worst, downs.length)}
       </div>

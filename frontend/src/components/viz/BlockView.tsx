@@ -197,7 +197,7 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
           <Bars
             block={
               env.size && block.orientation !== 'vertical'
-                ? { ...block, limit: Math.min(block.limit ?? 12, block.split ? (env.size === 'L' ? 6 : env.size === 'M' ? 3 : 2) : env.size === 'L' ? 10 : env.size === 'M' ? 4 : 3) }
+                ? { ...block, limit: Math.min(block.limit ?? 12, block.split ? (env.size === 'L' ? 6 : env.size === 'M' ? 4 : 2) : env.size === 'L' ? 10 : env.size === 'M' ? 4 : 3) }
                 : block
             }
             rows={data.rows}

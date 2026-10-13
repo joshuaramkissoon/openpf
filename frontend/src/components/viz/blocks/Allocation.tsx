@@ -83,7 +83,7 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
   }
 
   const legend = (
-    <ul className={cn('grid gap-y-0.5', donutL ? 'min-w-0 flex-1 basis-44 grid-cols-[minmax(0,1fr)]' : block.style === 'donut' && !env.size ? 'min-w-0 flex-1 basis-56' : env.size === 'S' ? 'mt-3' : env.size ? 'mt-4 gap-x-6 sm:grid-cols-2' : 'mt-5')}>
+    <ul className={cn('grid grid-cols-[minmax(0,1fr)] gap-y-0.5', donutL ? 'min-w-0 max-w-md flex-1 basis-44' : block.style === 'donut' && !env.size ? 'min-w-0 flex-1 basis-56' : env.size === 'S' ? 'mt-3' : env.size ? 'mt-4 gap-x-6 sm:grid-cols-2' : 'mt-5')}>
       {env.size && !donutL ? null : (
         <li className="flex items-end gap-2 px-1.5 pb-1" aria-hidden>
           <span className="flex-1" />
@@ -117,9 +117,11 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
     // total in the centre, a direct % on each slice big enough to hold one,
     // and the legend beside it carrying names and values.
     const big = env.size === 'L'
-    const r = big ? 76 : 70
-    const stroke = big ? 22 : 18
-    const pad = 40 // room for the direct % labels outside the ring
+    // A large widget on a phone: a smaller ring beside the legend (which carries every %), no outside labels.
+    const narrow = big && width > 0 && width < 480
+    const r = narrow ? 50 : big ? 76 : 70
+    const stroke = narrow ? 16 : big ? 22 : 18
+    const pad = narrow ? 4 : 40 // room for the direct % labels outside the ring
     const size = (r + stroke / 2 + pad) * 2
     const c = size / 2
     const circ = 2 * Math.PI * r
@@ -133,8 +135,11 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
       return a
     })
     return (
-      <div ref={hostRef} className={cn('relative flex flex-wrap items-center', big ? 'h-full content-center gap-x-4 gap-y-2' : 'gap-6')}>
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-my-4 shrink-0" role="img" aria-label={block.title ?? 'Allocation'}>
+      <div
+        ref={hostRef}
+        className={cn('relative flex items-center', narrow ? 'h-full flex-nowrap gap-4' : big ? 'h-full flex-wrap content-center justify-center gap-x-4 gap-y-2' : 'flex-wrap gap-6')}
+      >
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={cn('shrink-0', !narrow && '-my-4')} role="img" aria-label={block.title ?? 'Allocation'}>
           <g transform={`rotate(-90 ${c} ${c})`}>
             {arcs.map(({ s, len, offset }) => (
               <circle
@@ -155,7 +160,7 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
             ))}
           </g>
           {arcs.map(({ s, mid }) => {
-            if (s.value / total < 0.06) return null
+            if (narrow || s.value / total < 0.06) return null
             const ang = mid * Math.PI * 2 - Math.PI / 2
             const lr = r + stroke / 2 + 13
             const x = c + Math.cos(ang) * lr
@@ -166,12 +171,14 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
               </text>
             )
           })}
-          <text x="50%" y="47%" textAnchor="middle" className={cn('fill-foreground font-semibold', big ? 'text-[17px]' : 'text-[15px]', blur(block.format))}>
+          <text x="50%" y={narrow ? '52%' : '47%'} textAnchor="middle" className={cn('fill-foreground font-semibold', big && !narrow ? 'text-[17px]' : narrow ? 'text-[13px]' : 'text-[15px]', blur(block.format))}>
             {fmt(total, 'moneyCompact')}
           </text>
-          <text x="50%" y="57%" textAnchor="middle" className="fill-muted-foreground text-[11px]">
-            total
-          </text>
+          {narrow ? null : (
+            <text x="50%" y="57%" textAnchor="middle" className="fill-muted-foreground text-[11px]">
+              total
+            </text>
+          )}
         </svg>
         {legend}
         <Tooltip tip={tip} hostWidth={width || 400} />

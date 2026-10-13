@@ -508,9 +508,16 @@ function Actions({
         <Kbd>T</Kbd>
       </Button>
       {onDeepAnalysis ? (
-        <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={onDeepAnalysis} title="Archie runs a full workup and finishes with a verdict">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          onClick={onDeepAnalysis}
+          title="Archie runs a full workup and finishes with a verdict"
+          aria-label="Deep analysis"
+        >
           <Telescope className="size-3.5" />
-          Deep analysis
+          <span className="hidden min-[400px]:inline">Deep analysis</span>
         </Button>
       ) : null}
     </div>
