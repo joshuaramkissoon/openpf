@@ -11,7 +11,7 @@ Macro headlines are only useful once mapped onto the user's actual exposures. Do
 4. For each development, decide which holdings it actually touches and in which direction. Use `get_price_snapshot` to see whether the market is already reacting.
 
 ## Output
-- **Headline** — "Macro: nothing material for your book today", or the one development that matters.
+- **Summary headline** (goes in the closing `summary` block, not at the top) — "Macro: nothing material for your book today", or the one development that matters.
 - For each material development: what happened → which holdings are exposed (rough % of book) → direction → "consider:" (hold / watch a level / trim / hedge idea).
 - **Currency line** — how GBP/USD moved and what that did to US holdings in GBP terms.
 
@@ -19,3 +19,4 @@ Macro headlines are only useful once mapped onto the user's actual exposures. Do
 - Silence is a valid output. Don't stretch a weak link between a headline and a holding.
 - If a hedge or trim is clearly warranted, describe it; use `propose_trade` only when the case is strong, and never more than once.
 - Never present a macro view as certain.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).

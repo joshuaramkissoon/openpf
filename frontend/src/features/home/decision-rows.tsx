@@ -97,6 +97,7 @@ export function ProposalRow({
   onReject,
   onAsk,
   onViewTicker,
+  askLabel = "Ask Archie",
 }: {
   intent: TradeIntent
   rail: { ok: boolean; label: string }
@@ -106,6 +107,8 @@ export function ProposalRow({
   onReject: () => void
   onAsk: () => void
   onViewTicker: (ticker: string) => void
+  /** Label for the ask button (Archie's inline card says "Ask why"). */
+  askLabel?: string
 }) {
   const preset = intent.account_kind === "stocks_isa" || intent.account_kind === "invest" ? intent.account_kind : null
   const [account, setAccount] = useState<ExecAccount | null>(preset)
@@ -168,7 +171,7 @@ export function ProposalRow({
           ) : null}
           <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={onAsk}>
             <Sparkles className="size-3.5" />
-            <span className="hidden sm:inline">Ask Archie</span>
+            <span className="hidden sm:inline">{askLabel}</span>
           </Button>
           <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onReject} disabled={working || executing}>
             Reject

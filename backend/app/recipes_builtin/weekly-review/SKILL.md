@@ -13,7 +13,7 @@ A calm, honest look back at the week and a short plan for the next. Data first, 
 6. Risk: `get_risk_metrics` on the largest positions; flag concentration over ~20% of the book.
 
 ## Output
-- **Headline** — the week in one line (value change and the main reason).
+- **Summary headline** (goes in the closing `summary` block, not at the top) — the week in one line (value change and the main reason).
 - **Scoreboard** — a small table: book vs SPY/QQQ, best and worst three holdings.
 - **What happened** — 3–4 bullets on the moves that mattered and why.
 - **Decisions** — proposals made/approved/rejected; anything still waiting for the user.
@@ -22,4 +22,5 @@ A calm, honest look back at the week and a short plan for the next. Data first, 
 
 ## Rules
 - Never claim a trade happened unless it's in the order history.
-- Keep it to one screen. Tables beat paragraphs.
+- Keep it to one screen. Tables only for genuinely tabular data.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).

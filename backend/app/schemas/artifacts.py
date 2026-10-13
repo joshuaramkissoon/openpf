@@ -13,6 +13,9 @@ class ArtifactItem(BaseModel):
     task_name: str | None = None
     tags: list[str] = Field(default_factory=list)
     size_bytes: int
+    # {"headline", "points", "action", "signal": none|low|high} — or a derived
+    # fallback ({"headline", "derived": true, "signal": null}) for older reports.
+    summary: dict[str, Any] | None = None
 
 
 class ArtifactDetail(BaseModel):

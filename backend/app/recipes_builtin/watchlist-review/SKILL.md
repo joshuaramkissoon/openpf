@@ -12,10 +12,11 @@ Each watchlist item's note is the *reason* it's being watched. That note is your
 5. If a name has clearly graduated to a real setup, you may `update_watchlist_item` (conviction, target price/direction, a dated note).
 
 ## Output
-- **Headline** — e.g. "2 of 9 ideas moved: NVDA setup triggered, SHEL thesis breaking."
+- **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "2 of 9 ideas moved: NVDA setup triggered, SHEL thesis breaking."
 - One line per item: PLAYING OUT / BREAKING / UNCHANGED + a few words.
 - What you flagged, and why.
 
 ## Rules
 - Don't flag routine noise. If nothing is material, flag nothing and say so.
 - A one-minute read.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).

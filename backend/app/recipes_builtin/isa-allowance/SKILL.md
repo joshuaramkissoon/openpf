@@ -15,10 +15,11 @@ The UK ISA allowance is £20,000 per tax year (6 April – 5 April) and unused a
 5. In the first fortnight of a new tax year, remind the user the allowance has reset to £20,000.
 
 ## Output
-- **Headline** — e.g. "£6,400 of ISA allowance left · 38 days to 5 April."
+- **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "£6,400 of ISA allowance left · 38 days to 5 April."
 - Contributions this tax year (and how they were estimated), remaining allowance, days left.
 - Suggested actions, most valuable first.
 
 ## Rules
 - Information, not tax advice; flag uncertainty clearly.
 - You can't move money between accounts — tell the user exactly what to do.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).

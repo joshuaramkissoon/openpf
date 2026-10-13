@@ -23,6 +23,7 @@ from app.services.claude_sdk_config import (
 )
 from app.services import mcp_registry
 from app.services import costs_service
+from app.services.artifact_service import extract_summary, summary_frontmatter_line
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import (
     _daily_entry_count,
@@ -232,6 +233,36 @@ def _persist_goal_proposals(
 # plain prompts. They're now built-in *recipes* (backend/app/recipes_builtin):
 # real skills the user can edit, version and revert. recipes_service adopts any
 # existing rows (and their run history) on first sync.
+
+SUMMARY_RULES = (
+    "END every report with a fenced block tagged `summary` containing one JSON object — it is what the "
+    "user sees on Home, so it must be high signal, specific to their book, and never filler: "
+    "```summary\n"
+    '{"headline": "...", "points": ["..."], "action": "..." or null, "signal": "none" | "low" | "high"}\n'
+    "``` "
+    "headline: ONE sentence, the single most important takeaway, concrete and about this book "
+    "(e.g. 'NVDA + PLTR are now 55% of your money — up from 48% last week'). "
+    "points: at most 3 short lines, each ONLY if it changes what the user would do (empty list is fine). "
+    "action: what to do now in a few words, with a link where one exists — '[Review the NVDA trim](proposal:<id>)' "
+    "or '[Open the play](#/plays/<id>)' — or null. "
+    "signal: 'high' if the user should act or look today, 'low' if worth a glance, 'none' if nothing needs "
+    "them. Saying nothing is worth their attention is a valid, good answer: use signal 'none' and a plain "
+    "headline like 'Nothing worth your attention today'. "
+    "If the task also asks for a JSON block, put that before the summary block."
+)
+
+REPORT_FORMAT = (
+    "REPORT FORMAT (the app renders this richly — follow it exactly): "
+    "Start with '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- Week: +2.4%', '- Cash: £5,055'). "
+    "Then short '##' sections, most important first. Use '## What stands out' for highlights and "
+    "'## Risks' for risk notes (both render as callouts). Tables only for genuinely tabular data, with "
+    "numbers in their own columns and explicit signs on moves. Bold sparingly — never whole sentences. "
+    "No emoji traffic lights. Reference a proposal you created as '[label](proposal:<intent_id>)' on its own line. "
+    "Do NOT write a TL;DR section: the summary block below becomes the TL;DR. "
+    f"{SUMMARY_RULES}"
+)
+
+
 _DEFAULT_TASKS: list[dict[str, Any]] = [
     {
         "name": "watch_cycle",
@@ -639,7 +670,8 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
                 "Use mcp__trading212__ tools ONLY for account-specific reads: positions, balances, "
                 "pending/historical orders, dividends, and transaction history. "
                 "Never use T212 tools to look up prices or market data — T212 has strict API rate limits "
-                "(1 req/s for positions, 1 req/50s for instrument search)."
+                "(1 req/s for positions, 1 req/50s for instrument search). "
+                f"{REPORT_FORMAT}"
             ),
         },
         model=task.model or settings.claude_model,
@@ -681,13 +713,24 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
 
     output, cost_info = anyio.run(_run)
     meta: dict[str, Any] = {}
-    parsed = _extract_json_block(output)
+    # The ```summary block feeds Home's digest. JSON extraction must not mistake
+    # it for the task's JSON block; the output itself keeps it so any caller of
+    # _cron_log_path (scheduled tasks, recipes) stores it as frontmatter.
+    summary, without_summary = extract_summary(output)
+    if summary:
+        meta["summary"] = summary
+    parsed = _extract_json_block(without_summary)
     if parsed:
         meta["json"] = parsed
     return output, meta, cost_info
 
 
-def _cron_log_path(task_name: str, content: str, *, task_kind: str = "", description: str = "") -> str:
+def _cron_log_path(
+    task_name: str, content: str, *, task_kind: str = "", description: str = "", summary: dict[str, Any] | None = None
+) -> str:
+    # Parse + strip a trailing ```summary block; it's stored as frontmatter.
+    found, content = extract_summary(content)
+    summary = summary or found
     root = artifacts_dir() / "scheduled" / task_name
     root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -698,7 +741,7 @@ task_name: {task_name}
 task_kind: {task_kind}
 created_at: {datetime.now(tz=timezone.utc).isoformat()}
 title: {description or task_name}
----
+{summary_frontmatter_line(summary)}---
 
 """
     path = root / f"{stamp}.md"
@@ -1130,7 +1173,9 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
 
     goal_context = _build_goal_context(db, task) if kind == "claude_with_goal" else ""
     output, meta, cost_info = _run_claude_prompt(task, goal_context=goal_context)
-    path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
+    path = _cron_log_path(
+        task.name, output or "(no output)", task_kind=kind, description=description, summary=meta.get("summary")
+    )
 
     policy_updates = None
     rejected_updates: dict[str, str] = {}

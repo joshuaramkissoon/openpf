@@ -477,6 +477,18 @@ export interface ArtifactItem {
   task_name?: string
   tags?: string[]
   size_bytes: number
+  /** The report's ```summary block (or a derived fallback for older reports). */
+  summary?: ReportSummary | null
+}
+
+/** What Home shows for a report. `signal` is null for derived (pre-summary) reports. */
+export interface ReportSummary {
+  headline: string
+  points: string[]
+  /** Markdown: a `[label](proposal:id)` / `[label](#/plays/id)` link, or plain text. */
+  action: string | null
+  signal: 'none' | 'low' | 'high' | null
+  derived?: boolean
 }
 
 export interface ArtifactDetail {

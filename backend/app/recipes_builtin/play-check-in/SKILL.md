@@ -12,10 +12,11 @@ Plays are theme bets with written kill rules. Hold them to their own rules so co
 5. Decide per play: **On track**, **Watch** (a kill rule is near or the thesis is wobbling), **Kill rule tripped**, or **Tranche due** (the next tranche's trigger is met).
 
 ## Output
-- **Headline** — e.g. "3 plays: 2 on track, Nuclear near its drawdown rule."
+- **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "3 plays: 2 on track, Nuclear near its drawdown rule."
 - One block per play: verdict · P&L since start · what moved and why (a line per mover) · kill rules (only near/tripped ones) · next tranche status.
 - If a tranche is due, say which and suggest staging it from the play page. Only call `stage_play_tranche` if `memory/preferences.md` says the user wants due tranches staged as proposals.
 
 ## Rules
 - A tripped kill rule goes first and is stated plainly — don't argue the user out of their own rule.
 - Proposals only; nothing happens without the user.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).

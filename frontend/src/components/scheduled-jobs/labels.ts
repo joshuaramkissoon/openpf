@@ -23,3 +23,10 @@ export function humanizeTaskName(name: string): string {
     })
     .join(' ')
 }
+
+/** Friendly sentence-case label for a report type: "weekly_review" → "Weekly review". */
+export function reportTypeLabel(taskName?: string | null, fallback = 'Report'): string {
+  if (!taskName) return fallback
+  const words = humanizeTaskName(taskName).split(' ')
+  return words.map((w, i) => (i === 0 || /^[A-Z&]{2,}$/.test(w) ? w : w.toLowerCase())).join(' ')
+}

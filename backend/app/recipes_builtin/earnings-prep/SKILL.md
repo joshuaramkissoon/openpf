@@ -16,10 +16,11 @@ Earnings are scheduled volatility. Prepare for each print rather than react to i
 3. Decide per name: **Hold through**, **Consider trimming before** (position large relative to the usual move), or **Opportunity** (a play or watchlist target wants a post-print entry).
 
 ## Output
-- **Headline** — e.g. "This week: NVDA (Wed, after close) and SHEL (Thu, pre-open) — 18% of your book."
+- **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "This week: NVDA (Wed, after close) and SHEL (Thu, pre-open) — 18% of your book."
 - One compact block per name: date · exposure · usual move (±x%) · what to watch · verdict.
 - If a trim is warranted you may `propose_trade` it with a rationale; otherwise just advise.
 
 ## Rules
 - Don't predict the result. Frame the risk and what would matter.
 - A few lines per name.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).

@@ -16,7 +16,7 @@ Cash drag is a quiet cost. Check for idle cash and, if there's enough to matter,
 6. Propose at most **three** trades with `propose_trade`, each with an explicit account (prefer the ISA for long-term holdings while allowance remains), a size in GBP, and a rationale that says what would invalidate it. If `propose_trade` reports a rail violation, resize within the cap.
 
 ## Output
-- **Headline** — e.g. "£1,840 idle in the ISA — 2 proposals waiting for you."
+- **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "£1,840 idle in the ISA — 2 proposals waiting for you."
 - Table: account · idle cash · deployed by proposals · left after.
 - Each proposal: ticker, account, size, why now, invalidation.
 - Anything you deliberately skipped and why (earnings, concentration, preference).
@@ -25,3 +25,4 @@ Cash drag is a quiet cost. Check for idle cash and, if there's enough to matter,
 - Proposals only; the user approves each one in the app.
 - Never push any single name above ~20% of the whole book.
 - If the market is in a sharp drawdown (VIX above 30 in `get_macro_snapshot`), propose smaller, staged sizes and say why.
+- Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
