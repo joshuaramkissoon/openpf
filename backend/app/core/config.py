@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # Caps for scheduled agent-mode runs (recipes that investigate, alpha loop).
     scheduled_max_turns: int = Field(default=20, alias="SCHEDULED_MAX_TURNS")
     scheduled_max_budget_usd: float | None = Field(default=1.0, alias="SCHEDULED_MAX_BUDGET_USD")
+    # MCP tool search (Claude Code ENABLE_TOOL_SEARCH): "true" defers every MCP tool
+    # except always-load servers (quant, trading212, marketdata, proposals, plays)
+    # behind ToolSearch; "false" loads all upfront; "auto"/"auto:N" = threshold mode.
+    claude_tool_search: str = Field(default="true", alias="CLAUDE_TOOL_SEARCH")
     claude_setting_sources: str = Field(default="project", alias="CLAUDE_SETTING_SOURCES")
     claude_project_cwd: str = Field(default=".claude/runtime", alias="CLAUDE_PROJECT_CWD")
     claude_chat_allow_writes: bool = Field(default=True, alias="CLAUDE_CHAT_ALLOW_WRITES")

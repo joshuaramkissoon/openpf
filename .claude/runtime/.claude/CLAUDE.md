@@ -114,6 +114,22 @@ When producing reports, analysis, or reviews (especially from scheduled tasks), 
 - `get_correlation_matrix` — correlation across holdings/instruments
 - `compare_assets` — relative performance / ranking across symbols
 
+### Quant MCP — every size, risk and allocation number comes from here
+Tested maths on the user's real book (whole-book exposure, GBP returns, shrinkage covariance,
+their risk rails). Each tool returns `summary` lines with the numbers — quote them; **never do
+sizing, weight, volatility, drawdown, correlation, rebalance or tax arithmetic yourself.**
+- `size_position` — how big a position or theme basket should be (conviction / vol-target / Kelly /
+  fixed budget; inverse-vol / risk-parity / HRP split), net of what's held, with rails + tranches
+- `analyse_risk` — book, play or holdings: concentration, risk contribution, drawdown, tail loss
+  (CVaR), beta and tilts, correlation clusters (`view="overview"` for all)
+- `what_if` — trades before → after: weights, book vol, tail loss, cash, rails, realised gains
+- `rebalance_plan` — band rebalancing (5/25 rule) within a turnover budget
+- `deploy_cash` — where idle cash goes, and lump sum vs staged with the odds
+- `placement` — ISA vs Invest for buys, which account to sell from, CGT, allowance, Bed & ISA
+- Workflows (skills): `size-theme-bet`, `derisk-concentrated-book`, `deploy-cash-plan`,
+  `macro-shock-response`, `isa-year-end` — follow them for those questions.
+- If a quant tool returns `ok: false`, say what was missing; don't estimate the number instead.
+
 ### Fundamentals MCP — company facts, valuation, statements, earnings
 - `get_fundamentals` — profile, profitability, growth, balance-sheet health
 - `get_valuation` — valuation ratios (P/E, P/S, EV/EBITDA, etc.)
@@ -294,13 +310,20 @@ How to talk about it:
 - A weekly `portfolio_rebalance_check` scheduled task exists (disabled by default) to run this check weekly.
 
 ### Tool Routing Rule
-When you need a price, quote, candle data, technical indicator, risk metric, or correlation: **always use marketdata MCP**.
+**Numbers come from tools, not from you.** If a figure needs arithmetic, a tool computes it.
+When the question is about the user's book or a decision — how big, how risky, what if I trade,
+rebalance, deploy cash, which account: **use quant MCP**. It already includes their holdings,
+GBP conversion and rails.
+When you need a single instrument's price, candles, technicals, or its standalone risk metrics: **use marketdata MCP**.
 When you need valuation, financials, fundamentals, or earnings dates: **use fundamentals MCP**.
 When you need a forward price cone: **use forecast MCP** (`forecast_prices`, p10/p50/p90).
 When you need account balances, held positions, or pending orders: **use T212 MCP** (read-only).
 When you want to act on a trade idea: **use `propose_trade`** — a human approves it (or a standing
 permission the user granted does, within its caps).
 Never call `search_instruments` or other T212 endpoints to look up market data — use yfinance-backed marketdata tools instead.
+Some tools load on demand: if fundamentals, intel, forecast, watchlist, views, recipes or
+scheduler tools aren't in your list, find them with `ToolSearch` (e.g. "earnings calendar",
+"create view") — never conclude a capability is missing without searching.
 
 ### CRITICAL: No Cached Prices
 The portfolio context contains **cost basis data only** (quantity, average_price, total_cost). It does NOT contain current market prices. **Never quote a price without fetching it live from marketdata MCP first.** If you cannot fetch a price, say so — do not guess or use stale data.

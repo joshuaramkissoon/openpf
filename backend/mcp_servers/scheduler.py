@@ -243,5 +243,14 @@ def seed_default_scheduled_tasks() -> str:
         db.close()
 
 
+# Per-context trimming from the registry (mcp_registry.McpServerSpec.hidden):
+# hidden tools aren't registered, so the model never sees them.
+for _hidden in filter(None, os.environ.get("OPENPF_MCP_HIDE_TOOLS", "").split(",")):
+    try:
+        mcp.remove_tool(_hidden.strip())
+    except Exception:  # noqa: BLE001 — unknown name: nothing to hide
+        pass
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -30,7 +30,10 @@
   `recipes` (Archie-written routines: skills + triggers, versioned; see `recipes_service.py`),
   `smart_money` (insider Form 4 / 13F / Congress disclosures + trend detector; `app/services/smart_money/`).
   `crypto` (read-only, keyless view of the connected crypto exchange + the Starter crypto play draft).
-  All servers are declared once in `backend/app/services/mcp_registry.py`.
+  `quant` (sizing / risk / what-if / rebalance / deploy cash / ISA placement on `app.quant`;
+  see `docs/archie-toolkit.md`).
+  All servers are declared once in `backend/app/services/mcp_registry.py` (incl. which load
+  upfront vs behind tool search, and per-context hidden tools).
 - **Subagents**: researcher (Sonnet — web + marketdata + fundamentals), quant (Opus — Bash +
   `app.quant` + marketdata + forecast). There is no execution subagent.
 - **Execution gate**: the agent can only propose trades (`proposed` TradeIntents). A human approves,

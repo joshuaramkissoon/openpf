@@ -199,30 +199,36 @@ def last_price(ticker: str) -> float | None:
 # ── Sizing (pure) ────────────────────────────────────────────────────────────
 
 def basket_volatility(legs: list[dict[str, Any]], history_fn: Callable[[str, int], list[tuple[date, float]]] = _history_closes) -> float | None:
-    """Annualised volatility of the weighted basket's daily returns (last ~6 months)."""
-    series: dict[str, dict[date, float]] = {}
+    """Annualised volatility of the weighted basket's daily returns (last ~6 months).
+
+    The realised vol of a *fixed* basket, so plain sample statistics (no
+    shrinkage — nothing is inverted); computed with ``app.quant``.
+    """
+    import pandas as pd
+
+    from app.quant import QuantDataError
+    from app.quant import returns as qret
+    from app.quant.risk import annualized_volatility
+
+    series: dict[str, pd.Series] = {}
     for leg in legs:
         try:
             closes = history_fn(leg["ticker"], 200)
         except Exception:  # noqa: BLE001
             continue
-        rets = {}
-        for (_, p0), (d1, p1) in zip(closes, closes[1:]):
-            if p0 > 0:
-                rets[d1] = p1 / p0 - 1
+        rets = qret.simple_returns(pd.Series([p for _, p in closes], index=[d for d, _ in closes], dtype="float64"))
         if len(rets) > 20:
             series[leg["ticker"]] = rets
     if not series:
         return None
     weights = {leg["ticker"]: float(leg.get("target_weight") or 0.0) for leg in legs if leg["ticker"] in series}
     wsum = sum(weights.values()) or 1.0
-    common = set.intersection(*(set(s) for s in series.values()))
-    if len(common) < 20:
+    try:
+        aligned = qret.align_returns(series, min_obs=20)
+    except QuantDataError:
         return None
-    basket = [sum(series[t][d] * weights[t] / wsum for t in series) for d in sorted(common)]
-    mean = sum(basket) / len(basket)
-    var = sum((r - mean) ** 2 for r in basket) / (len(basket) - 1)
-    return math.sqrt(var) * math.sqrt(252)
+    basket = qret.portfolio_returns(aligned, {t: w / wsum for t, w in weights.items()})
+    return annualized_volatility(basket, ddof=1)
 
 
 def compute_sizing(
@@ -247,10 +253,12 @@ def compute_sizing(
     only counts up to that leg's slice); then capped by the account's free cash.
     A user-supplied budget wins but is flagged when above the cap.
     """
+    from app.quant.sizing import stress_loss, vol_scaled_weight
+
     conviction = conviction if conviction in CONVICTION_PCT else "medium"
     base_pct = CONVICTION_PCT[conviction]
-    vol_factor = 1.0 if not basket_vol else _clamp(REFERENCE_VOL / basket_vol, *VOL_FACTOR_BOUNDS)
-    target_pct = min(base_pct * vol_factor, max_play_pct)
+    scaled_pct, vol_factor = vol_scaled_weight(base_pct, basket_vol, REFERENCE_VOL, VOL_FACTOR_BOUNDS)
+    target_pct = min(scaled_pct, max_play_pct)
     target_gbp = book_gbp * target_pct
     cap_gbp = book_gbp * max_play_pct
     steps: list[str] = []
@@ -325,7 +333,7 @@ def compute_sizing(
     if daily and tranches and max(t["pct_of_budget"] for t in tranches) * budget > daily:
         warnings.append(f"Each tranche still exceeds the {_fmt_gbp(daily)} daily rail — stage over several days.")
 
-    max_loss = round(budget * STRESS_DRAWDOWN, 2)
+    max_loss = round(stress_loss(budget, STRESS_DRAWDOWN), 2)
     steps.append(f"A {STRESS_DRAWDOWN:.0%} drawdown on the full position would cost ~{_fmt_gbp(max_loss)} ({max_loss / book_gbp:.1%} of book)." if book_gbp else "")
 
     return {

@@ -7,7 +7,7 @@ The UK ISA allowance is £20,000 per tax year (6 April – 5 April) and unused a
 ## Steps
 1. Work out where we are in the tax year: days until the next 5 April. If more than 75 days remain and this isn't the first fortnight of a new tax year, keep the whole output to a single status line.
 2. Estimate contributions to the Stocks ISA since the last 6 April using `get_transaction_history` (deposits and transfers in). If the data is incomplete, say so and give a best estimate with the caveat — never invent a number.
-3. Remaining allowance = £20,000 − contributions. Check `get_account_summary` for the ISA's and the Invest account's free cash.
+3. Remaining allowance = £20,000 − contributions. Check `get_account_summary` for the ISA's and the Invest account's free cash. `placement` (quant) gives the allowance left, days to 5 April, CGT room and Bed & ISA candidates — pass `isa_subscribed_gbp` with your estimate from step 2.
 4. If allowance remains and the deadline is within 75 days:
    - Suggest moving cash into the ISA (the user makes the transfer — you can't move money).
    - If the ISA already holds idle cash, propose up to two purchases with `propose_trade` (account_kind=stocks_isa), preferring existing core holdings or an active play's next tranche.

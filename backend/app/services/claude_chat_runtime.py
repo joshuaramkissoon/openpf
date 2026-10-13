@@ -78,6 +78,14 @@ _TOOL_LABELS: dict[str, str] = {
     # Proposals MCP tools
     "mcp__proposals__propose_trade": "Proposing a trade",
     "mcp__proposals__list_proposals": "Checking trade proposals",
+    # Quant MCP tools
+    "mcp__quant__size_position": "Sizing the position",
+    "mcp__quant__analyse_risk": "Analysing portfolio risk",
+    "mcp__quant__what_if": "Testing the trades on your book",
+    "mcp__quant__rebalance_plan": "Planning a rebalance",
+    "mcp__quant__deploy_cash": "Planning where the cash goes",
+    "mcp__quant__placement": "Choosing ISA vs Invest",
+    "ToolSearch": "Looking up a tool",
 }
 
 

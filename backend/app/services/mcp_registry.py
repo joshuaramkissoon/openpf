@@ -58,10 +58,24 @@ class McpServerSpec:
     contexts: frozenset[str]
     # Only the broker read server gets (read-only) T212 credentials.
     needs_t212_read_keys: bool = False
+    # Tool navigation (see docs/archie-toolkit.md). With tool search on, every
+    # server's tools are deferred behind ToolSearch except ``always_load`` ones —
+    # the few Archie needs on most turns.
+    always_load: bool = False
+    # Tools a context should not see at all ({context: (tool, ...)}): left out of
+    # allowed_tools and unregistered by the server itself (OPENPF_MCP_HIDE_TOOLS).
+    hidden: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def tool_ids(self) -> list[str]:
         return [f"mcp__{self.name}__{tool}" for tool in self.tools]
+
+    def hidden_in(self, context: str) -> tuple[str, ...]:
+        return next((tools for ctx, tools in self.hidden if ctx == context), ())
+
+    def tool_ids_for(self, context: str) -> list[str]:
+        hide = set(self.hidden_in(context))
+        return [f"mcp__{self.name}__{tool}" for tool in self.tools if tool not in hide]
 
     @property
     def script_path(self) -> Path:
@@ -86,6 +100,7 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
         ),
         contexts=ALL_CONTEXTS,
         needs_t212_read_keys=True,
+        always_load=True,
     ),
     McpServerSpec(
         name="marketdata",
@@ -100,6 +115,16 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
             "compare_assets",
         ),
         contexts=ALL_CONTEXTS,
+        always_load=True,
+    ),
+    # Tested portfolio maths: sizing, risk, what-if, rebalancing, deploying cash,
+    # ISA/Invest placement. Read-only — it never proposes or places anything.
+    McpServerSpec(
+        name="quant",
+        script="quant.py",
+        tools=("size_position", "analyse_risk", "what_if", "rebalance_plan", "deploy_cash", "placement"),
+        contexts=frozenset({CHAT, RESEARCH, SCHEDULED}),
+        always_load=True,
     ),
     McpServerSpec(
         name="scheduler",
@@ -116,6 +141,12 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
             "seed_default_scheduled_tasks",
         ),
         contexts=frozenset({CHAT, AGENT, SCHEDULED}),
+        # Maintenance ops: a chat or a scheduled run has no business running every
+        # due task or re-seeding defaults (user routines are recipes).
+        hidden=(
+            (CHAT, ("run_due_scheduled_tasks", "seed_default_scheduled_tasks")),
+            (SCHEDULED, ("run_due_scheduled_tasks", "seed_default_scheduled_tasks")),
+        ),
     ),
     McpServerSpec(
         name="forecast",
@@ -167,6 +198,7 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
         script="proposals.py",
         tools=("propose_trade", "list_proposals", "get_track_record", "suggest_permission"),
         contexts=frozenset({CHAT, SCHEDULED}),
+        always_load=True,
     ),
     # Theme bets. Staging a tranche only creates 'proposed' intents.
     McpServerSpec(
@@ -176,6 +208,7 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
                "get_book_by_play", "assign_owner", "add_related", "remove_related", "add_bench",
                "remove_bench", "suggest_plays"),
         contexts=frozenset({CHAT, SCHEDULED}),
+        always_load=True,
     ),
     # Crypto exchange, read-only and keyless: balances/positions from the
     # backend's snapshots, public prices, fee schedule, risk. The only write is
@@ -269,6 +302,11 @@ def sdk_env() -> dict[str, str]:
     ``ClaudeAgentOptions(env=...)``). Contains no broker credentials."""
     env = _scrubbed_inherited_env()
     env["PYTHONPATH"] = str(BACKEND_ROOT)
+    # Tool search: defer every MCP tool except always_load servers' behind the
+    # CLI's ToolSearch (true | false | auto | auto:N; see docs/archie-toolkit.md).
+    mode = str(getattr(get_settings(), "claude_tool_search", "") or "").strip()
+    if mode:
+        env["ENABLE_TOOL_SEARCH"] = mode
     return env
 
 
@@ -307,11 +345,23 @@ def build_mcp_servers(context: str) -> tuple[dict[str, Any], list[str]]:
         env = mcp_server_env(spec)
         # Lets a server tell attended (chat) from unattended (scheduled) calls.
         env["OPENPF_MCP_CONTEXT"] = context
+        hidden = spec.hidden_in(context)
+        if hidden:
+            env["OPENPF_MCP_HIDE_TOOLS"] = ",".join(hidden)
         servers[spec.name] = {
             "type": "stdio",
             "command": sys.executable,
             "args": [str(spec.script_path)],
             "env": env,
         }
-        allowed.extend(spec.tool_ids)
+        if spec.always_load:
+            servers[spec.name]["alwaysLoad"] = True
+        allowed.extend(spec.tool_ids_for(context))
+    if tool_search_enabled():
+        allowed.append("ToolSearch")  # how deferred MCP tools are found and loaded
     return servers, allowed
+
+
+def tool_search_enabled() -> bool:
+    mode = str(getattr(get_settings(), "claude_tool_search", "") or "").strip().lower()
+    return mode not in ("", "false", "0", "off")

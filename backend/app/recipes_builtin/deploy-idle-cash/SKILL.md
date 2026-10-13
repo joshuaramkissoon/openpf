@@ -13,7 +13,8 @@ Cash drag is a quiet cost. Check for idle cash and, if there's enough to matter,
    b. **Underweight core holdings** versus the user's targets or their own recent weights (`get_positions`).
    c. **Watchlist names whose setup has triggered** (`list_watchlist`, `get_price_snapshot`, `get_technical_snapshot`).
 5. Check each candidate's price, trend and any earnings in the next 5 days (`get_earnings`) — don't add size right before a print unless the user prefers to.
-6. Propose at most **three** trades with `propose_trade`, each with an explicit account (prefer the ISA for long-term holdings while allowance remains), a size in GBP, and a rationale that says what would invalidate it. If `propose_trade` reports a rail violation, resize within the cap.
+6. Size with the quant tools, not by hand: `deploy_cash` (allocation, lump sum vs staged) for underweights, `what_if` to check the trades against the rails, `placement` if either account could take it.
+7. Propose at most **three** trades with `propose_trade`, each with an explicit account (prefer the ISA for long-term holdings while allowance remains), a size in GBP, and a rationale that says what would invalidate it. If `propose_trade` reports a rail violation, resize within the cap.
 
 ## Output
 - **Summary headline** (goes in the closing `summary` block, not at the top) — e.g. "£1,840 idle in the ISA — 2 proposals waiting for you."
