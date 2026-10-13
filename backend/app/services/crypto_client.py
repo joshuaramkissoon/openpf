@@ -161,6 +161,41 @@ class SandboxCryptoBroker(CryptoBroker):
         return [{**d, "type": "DEPOSIT"} for d in self._sbx.deposits()]
 
 
+class SandboxFixtureCryptoBroker(SandboxCryptoBroker):
+    """A read-only sandbox exchange with fixed balances (Binance / Coinbase / a
+    query-only Kraken key) — never trades, never touches the mock order book."""
+
+    def __init__(self, exchange_id: str, api_key: str, api_secret: str):
+        super().__init__(api_key, api_secret)
+        self.exchange_id = exchange_id
+        self.quote = EXCHANGES[exchange_id]["quote"]
+        self._fixture = self._sbx.FIXTURE_BALANCES.get(exchange_id) or {"balances": {}, "cost_mult": {}}
+
+    def _to_quote(self) -> float:
+        from app.services.crypto_exchanges import quote_ccy
+        from app.services.fx import get_fx_rate
+
+        return get_fx_rate("GBP", quote_ccy(self.quote))
+
+    def fetch_balances(self) -> dict[str, float]:
+        self._auth()
+        return {k: float(v) for k, v in self._fixture["balances"].items()}
+
+    def fetch_ticker(self, asset: str) -> dict[str, float]:
+        rate = self._to_quote()
+        return {k: v * rate for k, v in self._sbx.ticker(asset).items()}
+
+    def place_market_order(self, asset: str, side: str, amount: float, *, reference_price: float | None = None) -> dict[str, Any]:
+        raise CryptoNotPlaced("this sandbox exchange is read-only")
+
+    def cost_basis(self) -> dict[str, float]:
+        rate = self._to_quote()
+        return {a: self._sbx.price_gbp(a) * m * rate for a, m in self._fixture["cost_mult"].items()}
+
+    def fiat_deposits(self) -> list[dict[str, Any]]:
+        return []
+
+
 # ── Real exchanges via CCXT ────────────────────────────────────────────────
 
 class CcxtCryptoBroker(CryptoBroker):
@@ -364,5 +399,9 @@ def build_crypto_client(exchange_id: str, api_key: str, api_secret: str) -> Cryp
     from app.core.sandbox import is_sandbox
 
     if is_sandbox():
+        from app.services.crypto_sandbox import SANDBOX_READ_KEY
+
+        if exchange_id != SANDBOX_EXCHANGE or api_key == SANDBOX_READ_KEY:
+            return SandboxFixtureCryptoBroker(exchange_id if exchange_id in EXCHANGES else SANDBOX_EXCHANGE, api_key, api_secret)
         return SandboxCryptoBroker(api_key, api_secret)
     return CcxtCryptoBroker(exchange_id, api_key, api_secret)

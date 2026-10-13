@@ -37,6 +37,7 @@ from app.services.crypto_exchanges import (
     EXCHANGES,
     SANDBOX_EXCHANGE,
     asset_from_symbol,
+    is_crypto_account,
     is_crypto_symbol,
     market_symbol,
     quote_ccy,
@@ -73,8 +74,8 @@ def _env_default() -> dict[str, Any]:
             "verified": None, "fees": None}
 
 
-def get_config(store: ConfigStore) -> dict[str, Any]:
-    """The crypto connection INCLUDING secrets — backend use only, never serialise.
+def _slot_config(store: ConfigStore) -> dict[str, Any]:
+    """The original single crypto connection (``crypto_config``, account ``crypto``).
 
     Sandbox: the mock exchange's fake keys, always; stored and env keys ignored."""
     from app.core.sandbox import is_sandbox
@@ -84,18 +85,92 @@ def get_config(store: ConfigStore) -> dict[str, Any]:
         from app.services.crypto_sandbox import SANDBOX_CRYPTO_CREDENTIALS
 
         key = SANDBOX_CRYPTO_CREDENTIALS["api_key"]
-        return {"exchange": SANDBOX_EXCHANGE, "enabled": bool(stored.get("enabled", True)),
+        return {"id": CRYPTO_ACCOUNT, "account_kind": CRYPTO_ACCOUNT, "mode": "trade",
+                "exchange": SANDBOX_EXCHANGE, "enabled": bool(stored.get("enabled", True)),
                 "api_key": key, "api_secret": SANDBOX_CRYPTO_CREDENTIALS["api_secret"],
                 "verified": {"can_view": True, "can_trade": True, "can_withdraw": False, "method": "sandbox key",
                              "key_fp": _fp(key), "at": stored.get("seeded_at") or ""},
                 "fees": None, "sandbox": True}
     cfg = {**_env_default(), **{k: v for k, v in stored.items() if v not in (None, "")}}
     cfg["sandbox"] = False
+    cfg["id"] = cfg["account_kind"] = CRYPTO_ACCOUNT
+    if cfg.get("mode") not in {"read", "trade"}:
+        # Rows saved before read-only keys existed were verified trade-only keys.
+        cfg["mode"] = "read" if (cfg.get("verified") or {}).get("can_trade") is False else "trade"
     if in_agent_process():
         # Agent-side processes learn only THAT a verified key exists.
         cfg["key_ok"] = bool(cfg.get("api_secret")) and _verified_ok(cfg)
         cfg["api_key"] = cfg["api_secret"] = ""
     return cfg
+
+
+def _registry_configs(store: ConfigStore) -> list[dict[str, Any]]:
+    """Crypto connections added through Settings → Connections (one per exchange,
+    account ``crypto:<exchange>``); keys are decrypted only in the backend."""
+    from app.services import connections_service
+
+    return [c for c in (connections_service.crypto_config(store, item) for item in connections_service.registry_items(store))
+            if c is not None]
+
+
+def crypto_configs(store: ConfigStore) -> list[dict[str, Any]]:
+    """Every crypto connection (with secrets — backend use only, never serialise)."""
+    out = []
+    slot = _slot_config(store)
+    if slot.get("exchange") in EXCHANGES:
+        out.append(slot)
+    out.extend(_registry_configs(store))
+    return out
+
+
+def tradable(cfg: dict[str, Any]) -> bool:
+    """A connection OpenPF may place orders on: added as a trade connection and the
+    exchange didn't report that the key can't trade."""
+    return cfg.get("mode") == "trade" and (cfg.get("verified") or {}).get("can_trade") is not False
+
+
+def _connected_cfg(cfg: dict[str, Any]) -> bool:
+    has_key = bool(cfg.get("api_key") and cfg.get("api_secret")) or bool(cfg.get("key_ok"))
+    return bool(cfg.get("exchange") in EXCHANGES and has_key and cfg.get("enabled", True) and _verified_ok(cfg))
+
+
+def trade_account(store: ConfigStore) -> str | None:
+    """The crypto account proposals with ``account_kind='crypto'`` go to: the first
+    connected trade connection (the original one first)."""
+    for cfg in crypto_configs(store):
+        if _connected_cfg(cfg) and tradable(cfg):
+            return cfg["account_kind"]
+    return None
+
+
+def resolve_account(store: ConfigStore, account_kind: str | None) -> str:
+    """``crypto`` → the account it trades in today (else the first connected one)."""
+    kind = (account_kind or CRYPTO_ACCOUNT).strip().lower()
+    if kind != CRYPTO_ACCOUNT:
+        return kind
+    slot = _slot_config(store)
+    if _connected_cfg(slot):
+        return CRYPTO_ACCOUNT if tradable(slot) else (trade_account(store) or CRYPTO_ACCOUNT)
+    return trade_account(store) or next((c["account_kind"] for c in crypto_configs(store) if _connected_cfg(c)), CRYPTO_ACCOUNT)
+
+
+def get_config(store: ConfigStore, account_kind: str | None = None) -> dict[str, Any]:
+    """One crypto connection INCLUDING secrets — backend use only, never serialise.
+
+    ``account_kind`` None → the primary connection: the first connected trade
+    connection, else the first connected one, else the original slot."""
+    if account_kind and account_kind.strip().lower() != CRYPTO_ACCOUNT:
+        kind = account_kind.strip().lower()
+        return next((c for c in _registry_configs(store) if c["account_kind"] == kind), {})
+    slot = _slot_config(store)
+    if account_kind:
+        return slot
+    configs = crypto_configs(store)
+    for pick in (lambda c: _connected_cfg(c) and tradable(c), _connected_cfg):
+        found = next((c for c in configs if pick(c)), None)
+        if found is not None:
+            return found
+    return slot
 
 
 def _verified_ok(cfg: dict[str, Any]) -> bool:
@@ -106,27 +181,32 @@ def _verified_ok(cfg: dict[str, Any]) -> bool:
     return bool(v) and v.get("can_withdraw") is False and v.get("key_fp") == _fp(cfg.get("api_key", ""))
 
 
-def is_connected(store: ConfigStore) -> bool:
-    cfg = get_config(store)
-    has_key = bool(cfg.get("api_key") and cfg.get("api_secret")) or bool(cfg.get("key_ok"))
-    return bool(cfg.get("exchange") in EXCHANGES and has_key and cfg.get("enabled", True) and _verified_ok(cfg))
+def is_connected(store: ConfigStore, account_kind: str | None = None) -> bool:
+    return _connected_cfg(get_config(store, account_kind))
 
 
-def client_for(store: ConfigStore) -> CryptoBroker | None:
-    """The connected exchange's client, or None. Never builds one for an
+def client_for(store: ConfigStore, account_kind: str | None = None) -> CryptoBroker | None:
+    """A connected exchange's client, or None. Never builds one for an
     unverified key (one that could withdraw, or that was never checked)."""
-    if in_agent_process() or not is_connected(store):
+    if in_agent_process():
         return None
-    cfg = get_config(store)
+    cfg = get_config(store, account_kind)
+    return _client_for_cfg(cfg)
+
+
+def _client_for_cfg(cfg: dict[str, Any]) -> CryptoBroker | None:
+    if in_agent_process() or not _connected_cfg(cfg):
+        return None
     return build_crypto_client(cfg["exchange"], cfg["api_key"], cfg["api_secret"])
 
 
-def evaluate_permissions(perms: dict[str, Any]) -> list[str]:
-    """Reasons to REFUSE a key (empty → acceptable)."""
+def evaluate_permissions(perms: dict[str, Any], mode: str = "trade") -> list[str]:
+    """Reasons to REFUSE a key (empty → acceptable). Withdrawal is refused in
+    every mode; a trade connection also needs a key that can place orders."""
     problems: list[str] = []
     if perms.get("can_withdraw") is True:
         problems.append("This key can withdraw or transfer funds. Create a new key with withdrawals switched OFF — "
-                        "OpenPF only accepts trade-only keys.")
+                        "OpenPF never accepts a key that can move money off the exchange.")
     elif perms.get("can_withdraw") is None:
         problems.append("Couldn't confirm that this key can't withdraw, so it was refused. Check the key settings "
                         "against the checklist and try again.")
@@ -134,24 +214,30 @@ def evaluate_permissions(perms: dict[str, Any]) -> list[str]:
         problems.append("This key can't read balances — tick the Query/View funds permission.")
     if perms.get("leverage"):
         problems.append("This key has margin or futures enabled — switch those off; OpenPF only places spot orders.")
+    if mode == "trade" and perms.get("can_trade") is False:
+        problems.append("This key can't place orders. Add the trade permission from the checklist, or connect it "
+                        "as read-only instead.")
     return problems
 
 
-def connect(store: ConfigStore, exchange: str, api_key: str, api_secret: str) -> dict[str, Any]:
-    """Verify a key with the exchange and store it only if it is trade-only."""
+def verify_key(exchange: str, api_key: str, api_secret: str, mode: str = "trade") -> tuple[str, str, dict[str, Any], dict[str, Any] | None]:
+    """Check a key with the exchange. Returns ``(key, secret, perms, fees)`` or
+    raises :class:`CryptoConnectError` with a message for the user."""
     from app.core.sandbox import is_sandbox
 
     exchange = (exchange or "").strip().lower()
     if exchange not in EXCHANGES:
         raise CryptoConnectError("Pick Kraken, Coinbase or Binance.")
+    if mode not in {"read", "trade"}:
+        raise CryptoConnectError("mode must be read or trade")
     key, secret = (api_key or "").strip(), (api_secret or "").replace("\\n", "\n").strip()
     if not key or not secret:
         raise CryptoConnectError("Paste both the API key and the secret.")
     if is_sandbox():
-        from app.services.crypto_sandbox import SANDBOX_KEY, SANDBOX_WITHDRAW_KEY
+        from app.services.crypto_sandbox import SANDBOX_KEY, SANDBOX_READ_KEY, SANDBOX_WITHDRAW_KEY
 
-        if key not in {SANDBOX_KEY, SANDBOX_WITHDRAW_KEY}:
-            raise CryptoConnectError("Sandbox mode only accepts the sandbox keys (sandbox-crypto / sandbox).")
+        if key not in {SANDBOX_KEY, SANDBOX_WITHDRAW_KEY, SANDBOX_READ_KEY}:
+            raise CryptoConnectError("Sandbox mode only accepts the sandbox keys (sandbox-crypto-read / sandbox).")
     client = build_crypto_client(exchange, key, secret)
     try:
         perms = client.key_permissions()
@@ -159,7 +245,7 @@ def connect(store: ConfigStore, exchange: str, api_key: str, api_secret: str) ->
         raise CryptoConnectError(f"{EXCHANGES[exchange]['label']} rejected that key: {exc}") from exc
     except CryptoError as exc:
         raise CryptoConnectError(f"Couldn't reach {EXCHANGES[exchange]['label']} to check the key: {exc}") from exc
-    problems = evaluate_permissions(perms)
+    problems = evaluate_permissions(perms, mode)
     if problems:
         logger.warning("crypto key refused on %s: %s", exchange, perms.get("detail"))
         raise CryptoConnectError(" ".join(problems))
@@ -167,26 +253,37 @@ def connect(store: ConfigStore, exchange: str, api_key: str, api_secret: str) ->
         fees = client.trading_fees("BTC")
     except CryptoError:
         fees = None
+    return key, secret, perms, fees
+
+
+def verified_record(key: str, perms: dict[str, Any]) -> dict[str, Any]:
+    return {"can_view": perms.get("can_view"), "can_trade": perms.get("can_trade"), "can_withdraw": False,
+            "method": perms.get("method"), "detail": str(perms.get("detail") or "")[:500],
+            "key_fp": _fp(key), "at": datetime.utcnow().isoformat()}
+
+
+def connect(store: ConfigStore, exchange: str, api_key: str, api_secret: str, mode: str = "trade") -> dict[str, Any]:
+    """Verify a key with the exchange and store it in the original crypto slot
+    (account ``crypto``) only if it can't withdraw."""
+    from app.core.sandbox import is_sandbox
+
+    key, secret, perms, fees = verify_key(exchange, api_key, api_secret, mode)
     if is_sandbox():
         store.set(CONFIG_KEY, {**(store.get(CONFIG_KEY, {}) or {}), "enabled": True})
-        return public(store)
-    store.set(CONFIG_KEY, {
-        "exchange": exchange, "enabled": True, "api_key": key, "api_secret": secret, "fees": fees,
-        "verified": {"can_view": perms.get("can_view"), "can_trade": perms.get("can_trade"), "can_withdraw": False,
-                     "method": perms.get("method"), "detail": str(perms.get("detail") or "")[:500],
-                     "key_fp": _fp(key), "at": datetime.utcnow().isoformat()},
-    })
-    return public(store)
+        return public(store, CRYPTO_ACCOUNT)
+    store.set(CONFIG_KEY, {"exchange": exchange.strip().lower(), "enabled": True, "api_key": key, "api_secret": secret,
+                           "fees": fees, "mode": mode, "verified": verified_record(key, perms)})
+    return public(store, CRYPTO_ACCOUNT)
 
 
 def disconnect(store: ConfigStore) -> dict[str, Any]:
     store.set(CONFIG_KEY, {"exchange": "", "enabled": False, "api_key": "", "api_secret": "", "verified": None, "fees": None})
-    return public(store)
+    return public(store, CRYPTO_ACCOUNT)
 
 
 def set_enabled(store: ConfigStore, enabled: bool) -> dict[str, Any]:
     store.set(CONFIG_KEY, {**(store.get(CONFIG_KEY, {}) or {}), "enabled": bool(enabled)})
-    return public(store)
+    return public(store, CRYPTO_ACCOUNT)
 
 
 def max_crypto_pct(risk: dict[str, Any]) -> float:
@@ -197,9 +294,12 @@ def max_crypto_pct(risk: dict[str, Any]) -> float:
     return max(0.0, min(v, 1.0)) if math.isfinite(v) else DEFAULT_MAX_CRYPTO_PCT
 
 
-def public(store: ConfigStore) -> dict[str, Any]:
+def public(store: ConfigStore, account_kind: str | None = None) -> dict[str, Any]:
     """What the UI may see: never a key or secret, only a hint."""
-    cfg = get_config(store)
+    return public_cfg(store, get_config(store, account_kind))
+
+
+def public_cfg(store: ConfigStore, cfg: dict[str, Any]) -> dict[str, Any]:
     ex = EXCHANGES.get(cfg.get("exchange") or "")
     key = str(cfg.get("api_key") or "")
     verified = cfg.get("verified") or {}
@@ -211,7 +311,10 @@ def public(store: ConfigStore) -> dict[str, Any]:
         "quote": ex["quote"] if ex else "",
         "enabled": bool(cfg.get("enabled", True)),
         "configured": bool(key and cfg.get("api_secret")) or bool(cfg.get("key_ok")),
-        "connected": is_connected(store),
+        "connected": _connected_cfg(cfg),
+        "account_kind": cfg.get("account_kind") or CRYPTO_ACCOUNT,
+        "mode": cfg.get("mode") or "trade",
+        "tradable": tradable(cfg),
         "key_hint": (f"…{key[-4:]}" if len(key) > 8 else "set") if key else "",
         "verified": {k: verified.get(k) for k in ("can_view", "can_trade", "can_withdraw", "method", "at")} if verified else None,
         "needs_verification": bool(key and not _verified_ok(cfg)),
@@ -230,23 +333,38 @@ def account_label(store: ConfigStore | None = None) -> str:
 
 # ── Snapshots (portfolio refresh hook) ────────────────────────────────────
 
-_last_cashflow_sync = 0.0
+_last_cashflow_sync: dict[str, float] = {}
 _CASHFLOW_INTERVAL = 6 * 3600
 
 
 def snapshot_rows(db: Session, store: ConfigStore, fetched_at: datetime) -> tuple[list[AccountSnapshot], list[PositionSnapshot], str | None]:
-    """Crypto account + position rows for one portfolio refresh (best-effort:
-    an exchange outage never breaks the T212 refresh)."""
-    client = client_for(store)
-    if client is None:
-        return [], [], None
+    """Account + position rows for every connected crypto exchange, for one
+    portfolio refresh (best-effort: an exchange outage never breaks the T212
+    refresh; the caller carries the last good rows forward)."""
+    accounts: list[AccountSnapshot] = []
+    positions: list[PositionSnapshot] = []
+    sources: list[str] = []
+    for cfg in crypto_configs(store):
+        client = _client_for_cfg(cfg)
+        if client is None:
+            continue
+        a, p, src = _exchange_rows(db, client, cfg["account_kind"], fetched_at)
+        accounts.extend(a)
+        positions.extend(p)
+        if src:
+            sources.append(src)
+    return accounts, positions, ",".join(sources) or None
+
+
+def _exchange_rows(db: Session, client: CryptoBroker, account_kind: str,
+                   fetched_at: datetime) -> tuple[list[AccountSnapshot], list[PositionSnapshot], str | None]:
     try:
         balances = client.fetch_balances()
         holdings = client.holdings()
         basis = client.cost_basis()
     except CryptoError as exc:
-        logger.warning("crypto snapshot failed: %s", exc)
-        return [], [], f"error:crypto:{exc.__class__.__name__}"
+        logger.warning("crypto snapshot failed (%s): %s", account_kind, exc)
+        return [], [], f"error:{account_kind}:{exc.__class__.__name__}"
     ccy = quote_ccy(client.quote)
     cash = float(balances.get(client.quote, 0.0))
     positions: list[PositionSnapshot] = []
@@ -258,49 +376,52 @@ def snapshot_rows(db: Session, store: ConfigStore, fetched_at: datetime) -> tupl
         invested += value
         ppl += value - cost
         positions.append(PositionSnapshot(
-            fetched_at=fetched_at, account_kind=CRYPTO_ACCOUNT, ticker=h["asset"],
+            fetched_at=fetched_at, account_kind=account_kind, ticker=h["asset"],
             instrument_code=market_symbol(h["asset"], client.quote), quantity=h["quantity"], average_price=avg,
             current_price=h["price"], total_cost=cost, value=value, ppl=value - cost, currency=ccy,
         ))
-    account = AccountSnapshot(fetched_at=fetched_at, account_kind=CRYPTO_ACCOUNT, currency=ccy, free_cash=cash,
+    account = AccountSnapshot(fetched_at=fetched_at, account_kind=account_kind, currency=ccy, free_cash=cash,
                               invested=invested, pie_cash=0.0, total=invested + cash, ppl=ppl)
-    global _last_cashflow_sync
     try:
-        first = db.execute(select(AccountSnapshot.fetched_at).where(AccountSnapshot.account_kind == CRYPTO_ACCOUNT)
+        first = db.execute(select(AccountSnapshot.fetched_at).where(AccountSnapshot.account_kind == account_kind)
                            .order_by(AccountSnapshot.fetched_at).limit(1)).scalar_one_or_none()
         if first is None:
             # First time the exchange joins the book: whatever is already there
             # arrives as an opening contribution, so the return curve doesn't
             # read connecting an account as a gain.
-            record_opening_balance(db, account.total, ccy, fetched_at)
-        if time.time() - _last_cashflow_sync > _CASHFLOW_INTERVAL:
-            _last_cashflow_sync = time.time()
-            sync_cashflows(db, client, since=first or fetched_at)
+            record_opening_balance(db, account.total, ccy, fetched_at, account_kind=account_kind)
+        if time.time() - _last_cashflow_sync.get(account_kind, 0.0) > _CASHFLOW_INTERVAL:
+            _last_cashflow_sync[account_kind] = time.time()
+            sync_cashflows(db, client, since=first or fetched_at, account_kind=account_kind)
     except Exception:  # noqa: BLE001 — contributions are best-effort
         logger.info("crypto cashflow sync failed", exc_info=True)
-    return [account], positions, f"crypto-{'sandbox' if client.sandbox else client.exchange_id}"
+    tag = "sandbox" if client.sandbox else client.exchange_id
+    return [account], positions, f"crypto-{tag}" if account_kind == CRYPTO_ACCOUNT else f"{account_kind}-{tag}"
 
 
-def record_opening_balance(db: Session, total: float, currency: str, when: datetime) -> None:
-    ref = "crypto-opening-balance"
-    if db.execute(select(CashflowEvent.id).where(CashflowEvent.account_kind == CRYPTO_ACCOUNT,
+def record_opening_balance(db: Session, total: float, currency: str, when: datetime, *,
+                           account_kind: str = CRYPTO_ACCOUNT) -> None:
+    ref = "crypto-opening-balance" if account_kind == CRYPTO_ACCOUNT else f"{account_kind}-opening-balance"[:64]
+    if db.execute(select(CashflowEvent.id).where(CashflowEvent.account_kind == account_kind,
                                                  CashflowEvent.reference == ref)).first() is not None:
         return
     if total > 0:
-        db.add(CashflowEvent(account_kind=CRYPTO_ACCOUNT, reference=ref, type="DEPOSIT", amount=float(total),
+        db.add(CashflowEvent(account_kind=account_kind, reference=ref, type="DEPOSIT", amount=float(total),
                              currency=currency, occurred_at=when))
         db.commit()
 
 
-def sync_cashflows(db: Session, client: CryptoBroker, *, since: datetime | None = None) -> int:
+def sync_cashflows(db: Session, client: CryptoBroker, *, since: datetime | None = None,
+                   account_kind: str = CRYPTO_ACCOUNT) -> int:
     """Fiat deposits/withdrawals on the exchange → CashflowEvent rows, so the
     return curve nets out money moved onto the exchange (it isn't a gain).
     Only flows after ``since`` (when the exchange joined the book) count —
     earlier money is already inside the opening balance."""
-    existing = set(db.execute(select(CashflowEvent.reference).where(CashflowEvent.account_kind == CRYPTO_ACCOUNT)).scalars())
+    existing = set(db.execute(select(CashflowEvent.reference).where(CashflowEvent.account_kind == account_kind)).scalars())
+    prefix = "crypto" if account_kind == CRYPTO_ACCOUNT else account_kind
     added = 0
     for d in client.fiat_deposits():
-        ref = f"crypto-{d.get('id')}"[:64]
+        ref = f"{prefix}-{d.get('id')}"[:64]
         if ref in existing or not d.get("timestamp"):
             continue
         try:
@@ -310,7 +431,7 @@ def sync_cashflows(db: Session, client: CryptoBroker, *, since: datetime | None 
         if since is not None and when <= since:
             continue
         amount = abs(float(d.get("amount") or 0.0)) * (-1 if d.get("type") == "WITHDRAW" else 1)
-        db.add(CashflowEvent(account_kind=CRYPTO_ACCOUNT, reference=ref, type=d.get("type") or "DEPOSIT", amount=amount,
+        db.add(CashflowEvent(account_kind=account_kind, reference=ref, type=d.get("type") or "DEPOSIT", amount=amount,
                              currency=quote_ccy(str(d.get("currency") or client.quote)), occurred_at=when))
         existing.add(ref)
         added += 1
@@ -345,34 +466,39 @@ def book_figures(db: Session) -> dict[str, float] | None:
     if ts is None:
         return None
     accounts = db.execute(select(AccountSnapshot).where(AccountSnapshot.fetched_at == ts)).scalars().all()
-    crypto_acct = db.execute(select(AccountSnapshot).where(AccountSnapshot.account_kind == CRYPTO_ACCOUNT)
-                             .order_by(desc(AccountSnapshot.fetched_at)).limit(1)).scalars().first()
     book = sum(max(float(a.total or 0.0), 0.0) * get_fx_rate(a.currency or "GBP", "GBP")
-               for a in accounts if a.account_kind != CRYPTO_ACCOUNT)
+               for a in accounts if not is_crypto_account(a.account_kind))
     crypto = 0.0
     crypto_ts = ts
-    if crypto_acct is not None:
+    kinds = {k for k in db.execute(select(AccountSnapshot.account_kind).distinct()).scalars() if is_crypto_account(k)}
+    for kind in sorted(kinds):
+        crypto_acct = db.execute(select(AccountSnapshot).where(AccountSnapshot.account_kind == kind)
+                                 .order_by(desc(AccountSnapshot.fetched_at)).limit(1)).scalars().first()
+        if crypto_acct is None:
+            continue
         rate = get_fx_rate(crypto_acct.currency or "GBP", "GBP")
-        crypto = max(float(crypto_acct.invested or 0.0), 0.0) * rate
+        crypto += max(float(crypto_acct.invested or 0.0), 0.0) * rate
         book += max(float(crypto_acct.total or 0.0), 0.0) * rate
-        crypto_ts = crypto_acct.fetched_at
+        crypto_ts = min(crypto_ts, crypto_acct.fetched_at)
     # Executed since the crypto snapshot: a second tranche approved before the
     # next refresh must still count the first one.
     since = db.execute(select(TradeIntent).where(TradeIntent.status == "executed",
                                                  TradeIntent.executed_at >= crypto_ts)).scalars().all()
     delta = 0.0
     for i in since:
-        if (i.meta or {}).get("account_kind") == CRYPTO_ACCOUNT:
+        if is_crypto_account((i.meta or {}).get("account_kind")):
             delta += float(i.estimated_notional or 0.0) * (1 if i.side == "buy" else -1)
     return {"book_gbp": book, "crypto_gbp": max(crypto + delta, 0.0)}
 
 
-def crypto_rail_violations(db: Session, *, side: str, estimated_notional: float, risk: dict[str, Any]) -> list[str]:
+def crypto_rail_violations(db: Session, *, side: str, estimated_notional: float, risk: dict[str, Any],
+                           account_kind: str | None = None) -> list[str]:
     """Crypto-only rails, on top of the shared ones. Checked at proposal time and
     again by ``execute_intent`` (via ``rail_violations``)."""
     out: list[str] = []
     store = ConfigStore(db)
-    if not is_connected(store):
+    cfg = get_config(store, resolve_account(store, account_kind) if account_kind else None)
+    if not _connected_cfg(cfg) or not tradable(cfg):
         out.append("crypto-guard: no verified trade-only crypto exchange key is connected")
     if side != "buy":
         return out
@@ -450,7 +576,7 @@ def quote_estimate(client: CryptoBroker | None, exchange_id: str, asset: str, si
 def propose_crypto_trade(
     db: Session, *, side: str, rationale: str, symbol: str | None, instrument_code: str | None,
     quantity: float | None, notional_gbp: float | None, order_type: str, play_id: str | None, source: str,
-    caps: dict[str, Any], risk: dict[str, Any],
+    caps: dict[str, Any], risk: dict[str, Any], account_kind: str | None = None,
 ) -> dict[str, Any]:
     from app.services.execution_service import rail_violations
     from app.services.proposal_service import _SOFT_VIOLATIONS, serialize_intent
@@ -466,10 +592,11 @@ def propose_crypto_trade(
         return _fail(f"{asset or symbol!r} isn't a supported crypto asset — use one of {', '.join(CRYPTO_ASSETS)}")
     if order_type != "market":
         return _fail("crypto proposals are market orders (sized in GBP); drop limit/stop prices")
-    if not is_connected(store):
-        return _fail("no crypto exchange is connected — the user connects one (trade-only key) in Settings → Crypto")
-    cfg = get_config(store)
-    client = client_for(store)
+    account = resolve_account(store, account_kind)
+    if not is_connected(store, account):
+        return _fail("no crypto exchange is connected — the user connects one (trade-only key) in Settings → Connections")
+    cfg = get_config(store, account)
+    client = client_for(store, account)
     try:
         est = quote_estimate(client, cfg["exchange"], asset, side, fees=cfg.get("fees"))
     except CryptoError as exc:
@@ -486,7 +613,7 @@ def propose_crypto_trade(
                      if k in {"fee_gbp", "slippage_gbp", "all_in_cost_gbp", "all_in_cost_pct"}}}
     market = est["market"]
     violations = rail_violations(db, symbol=asset, side=side, quantity=qty, estimated_notional=estimated_notional,
-                                 risk=risk, account_kind=CRYPTO_ACCOUNT, instrument_code=market)
+                                 risk=risk, account_kind=account, instrument_code=market)
     hard = [v for v in violations if v not in _SOFT_VIOLATIONS]
     warnings = [v for v in violations if v in _SOFT_VIOLATIONS]
     sizing = {"symbol": asset, "instrument_code": market, "quantity": qty, "reference_price": est["price"],
@@ -496,7 +623,7 @@ def propose_crypto_trade(
         return {"ok": False, "violations": hard, "sizing": sizing, "caps": caps}
 
     meta: dict[str, Any] = {
-        "source": (source or "agent")[:64], "account_kind": CRYPTO_ACCOUNT, "reference_price": est["price"],
+        "source": (source or "agent")[:64], "account_kind": account, "reference_price": est["price"],
         "currency": quote_ccy(est["quote"]), "price_gbp": round(price_gbp, 6),
         "instrument_name": CRYPTO_ASSETS[asset], "crypto": est,
     }

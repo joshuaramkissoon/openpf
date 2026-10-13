@@ -69,6 +69,10 @@ class TradeIntentItem(BaseModel):
     failure_reason: str | None = None
     # Crypto proposals: exchange, market, fee + slippage estimates for the card.
     crypto: dict[str, Any] | None = None
+    # Read-only connection (IBKR, SnapTrade, …): never executable — place it in ``place_in``.
+    read_only: bool = False
+    place_in: str | None = None
+    account_label: str | None = None
 
 
 class IntentDecisionRequest(BaseModel):

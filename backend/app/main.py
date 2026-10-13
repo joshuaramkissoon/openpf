@@ -16,6 +16,7 @@ from app.api import agent, attention, broker, charts, config, costs, health, ins
 from app.core.auth import ApiTokenMiddleware, OriginGuardMiddleware
 
 from app.api import autonomy as autonomy_api
+from app.api import connections as connections_api
 from app.api import crypto as crypto_api
 from app.api import home as home_api
 from app.api import recipes as recipes_api
@@ -306,6 +307,7 @@ app.include_router(recipes_api.router, prefix=settings.api_prefix)
 app.include_router(smart_money_api.router, prefix=settings.api_prefix)
 app.include_router(autonomy_api.router, prefix=settings.api_prefix)
 app.include_router(crypto_api.router, prefix=settings.api_prefix)
+app.include_router(connections_api.router, prefix=settings.api_prefix)
 app.include_router(home_api.router, prefix=settings.api_prefix)
 
 if _sandbox_enabled():

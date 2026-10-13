@@ -206,7 +206,29 @@ def propose_trade(
     # Crypto routes to the connected exchange (crypto_service); same rails + cap.
     from app.services import crypto_service
 
-    if account_kind == "crypto" or (not account_kind and crypto_service.is_crypto_symbol(symbol or instrument_code)):
+    # Connections: an account OpenPF can only read (IBKR, SnapTrade, a query-only
+    # crypto key, …) gets a suggestion to place in that broker, never an order.
+    from app.services import external_proposals
+    from app.services.connections_service import account_info, is_external_account
+
+    crypto_kind = account_kind == "crypto" or crypto_service.is_crypto_account(account_kind) or (
+        not account_kind and crypto_service.is_crypto_symbol(symbol or instrument_code))
+    if crypto_kind:
+        account_kind = crypto_service.resolve_account(ConfigStore(db), account_kind or "crypto")
+    if is_external_account(account_kind) or (crypto_kind and (account_info(ConfigStore(db), account_kind) or {}).get("read_only")):
+        try:
+            qty_x, notional_x = _coerce_positive(quantity, "quantity"), _coerce_positive(notional_gbp, "notional_gbp")
+            limit_x = _coerce_positive(limit_price, "limit_price")
+        except ProposalError as exc:
+            return _fail(str(exc))
+        if dry_run:
+            return _fail("this account is read-only — there's no order to review; place it in the broker")
+        return external_proposals.propose_readonly_trade(
+            db, account_kind=account_kind, side=side, rationale=rationale, symbol=symbol, instrument_code=instrument_code,
+            quantity=qty_x, notional_gbp=notional_x, order_type=order_type, limit_price=limit_x, play_id=play_id,
+            source=source, caps=caps,
+        )
+    if crypto_kind:
         if not rationale:
             return _fail("rationale is required — say why, and what would invalidate the idea")
         try:
@@ -218,11 +240,13 @@ def propose_trade(
         return crypto_service.propose_crypto_trade(
             db, side=side, rationale=rationale, symbol=symbol, instrument_code=instrument_code, quantity=qty_c,
             notional_gbp=notional_c, order_type=order_type, play_id=play_id, source=source, caps=caps, risk=risk,
+            account_kind=account_kind,
         )
     if account_kind in _ACCOUNTS and (hint := crypto_service.wrong_account_hint(symbol, instrument_code)):
         return _fail(hint)
     if account_kind not in _ACCOUNTS:
-        return _fail("account_kind must be 'invest', 'stocks_isa' or 'crypto' (no default — say which account)")
+        return _fail("account_kind must be 'invest', 'stocks_isa', 'crypto' or a connected account's key "
+                     "(see the portfolio's accounts) — no default, say which account")
     if not rationale:
         return _fail("rationale is required — say why, and what would invalidate the idea")
     if not (symbol or instrument_code):
@@ -388,6 +412,9 @@ def serialize_intent(intent: TradeIntent) -> dict[str, Any]:
         "play_id": meta.get("play_id"),
         "owner": "core" if meta.get("owner") == "core" else ("play" if meta.get("play_id") else None),
         "crypto": meta.get("crypto"),
+        "read_only": bool(meta.get("read_only")),
+        "place_in": meta.get("place_in"),
+        "account_label": meta.get("account_label"),
         "source": meta.get("source"),
         "category": meta.get("category"),
         "approved_by": getattr(intent, "approved_by", None),

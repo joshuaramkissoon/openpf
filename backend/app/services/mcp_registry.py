@@ -262,17 +262,20 @@ def tool_ids(*names: str) -> list[str]:
 
 # Env vars that must never reach the Claude CLI or any MCP subprocess other than
 # via an explicit per-server injection (read keys → trading212 only): broker
-# keys/secrets (incl. execution keys), crypto exchange keys (never injected
-# anywhere) and the app's own API/bot tokens, so Bash/WebFetch can't reuse
-# them. Non-secret settings (T212_BASE_ENV, CRYPTO_EXCHANGE) pass through.
-_SENSITIVE_NAMES = {"OPENPF_API_TOKEN", "TELEGRAM_BOT_TOKEN"}
-_SENSITIVE_PREFIXES = ("T212_", "ARCHIE_T212_", "CRYPTO_", "KRAKEN_", "COINBASE_", "BINANCE_", "CCXT_")
+# keys/secrets (incl. execution keys), crypto exchange keys and connection
+# provider keys/tokens (never injected anywhere), the connection secrets key,
+# and the app's own API/bot tokens, so Bash/WebFetch can't reuse them. Non-secret settings (T212_BASE_ENV, CRYPTO_EXCHANGE) pass through.
+_SENSITIVE_NAMES = {"OPENPF_API_TOKEN", "TELEGRAM_BOT_TOKEN", "OPENPF_SECRETS_KEY"}
+_SENSITIVE_PREFIXES = ("T212_", "ARCHIE_T212_", "CRYPTO_", "KRAKEN_", "COINBASE_", "BINANCE_", "CCXT_",
+                       # Settings → Connections providers (keys live encrypted in the DB, but
+                       # never let one exported in the backend's shell reach a child process).
+                       "IBKR_", "ALPACA_", "APCA_", "SNAPTRADE_", "SCHWAB_", "TASTYTRADE_", "ROBINHOOD_")
 
 
 def _is_sensitive(key: str) -> bool:
     if key in _SENSITIVE_NAMES:
         return True
-    return key.startswith(_SENSITIVE_PREFIXES) and ("KEY" in key or "SECRET" in key)
+    return key.startswith(_SENSITIVE_PREFIXES) and any(w in key for w in ("KEY", "SECRET", "TOKEN"))
 
 
 def _scrubbed_inherited_env() -> dict[str, str]:
