@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "title": "Theme map",
+  "description": "Is my book organised into plays? What each play owns, how it's doing today, and what's unsorted",
+  "icon": "layout-grid",
+  "data": {"pf": {"source": "portfolio"}, "plays": {"source": "plays"}},
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "Held through a play",
+      "from": "pf.positions",
+      "value": {"agg": "sum", "field": "value", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "!=", "value": "Unsorted"}}], "per": {"agg": "sum", "field": "value"}},
+      "format": "pct",
+      "caption": "Share of your holdings owned by a play: a theme bet with a thesis, a basket and kill criteria. The rest is unsorted.",
+      "width": "two-thirds"
+    },
+    {
+      "type": "kpis",
+      "from": "pf.positions",
+      "width": "third",
+      "items": [
+        {"label": "Plays", "value": {"from": "plays.plays", "agg": "count", "transform": [{"filter": {"field": "status", "op": "in", "value": ["active", "paused", "draft"]}}]}, "format": "int", "hint": "active, paused or draft"},
+        {"label": "Unsorted", "value": {"agg": "count", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "=", "value": "Unsorted"}}]}, "format": "int", "hint": "holdings with no play"}
+      ]
+    },
+    {
+      "type": "treemap",
+      "title": "Book by theme",
+      "subtitle": "Holdings grouped by the play that owns them (their sector when no play does); colour is today's move. Click a theme to drill in.",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["theme"]}],
+      "label": "ticker",
+      "size": "value",
+      "color": "day_change_pct",
+      "group": "theme"
+    },
+    {
+      "type": "bars",
+      "title": "Exposure per play",
+      "subtitle": "Current value of the holdings each play owns",
+      "from": "plays.plays",
+      "transform": [{"sort": {"by": "exposure"}}],
+      "label": "title",
+      "value": "exposure",
+      "format": "money",
+      "details": [
+        {"field": "status", "label": "Status", "format": "text"},
+        {"field": "owned_count", "label": "Owned", "format": "int"},
+        {"field": "bench_count", "label": "On the bench", "format": "int"}
+      ],
+      "empty": "No plays yet. A play is a theme bet with a thesis, a basket and kill criteria; create one from Plays."
+    }
+  ]
+}

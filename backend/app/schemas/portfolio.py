@@ -12,6 +12,8 @@ class AccountSummary(BaseModel):
     pie_cash: float | None = None
     total: float | None = None
     ppl: float | None = None
+    label: str | None = None
+    read_only: bool = False
 
 
 class PositionItem(BaseModel):
@@ -49,6 +51,8 @@ class PortfolioMetrics(BaseModel):
     top_position_weight: float
     estimated_beta: float
     estimated_volatility: float
+    # Share of the book held on the crypto exchange (0 when none connected).
+    crypto_weight: float = 0.0
 
 
 class PortfolioSnapshotResponse(BaseModel):

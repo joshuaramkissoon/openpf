@@ -1,6 +1,6 @@
 ---
 name: trading212-api
-description: 'This skill should be used when the user asks to "connect to Trading 212", "authenticate Trading 212 API", "place a trade", "buy stock", "sell shares", "place market order",, "place pending order", "place limit order", "cancel order", "check my balance", "view account summary", "get positions", "view portfolio", "check P&L", "find ticker symbol", "search instruments", "check trading hours", "view dividends", "get order history", "export transactions", "generate CSV report", or needs guidance on Trading 212 API authentication, order placement, position monitoring, account information, instrument lookup, or historical data retrieval.'
+description: 'Reference for the Trading 212 public API (fields, order types, statuses, rate limits, instrument identifiers). Use it to interpret data from the read-only trading212 tools or to explain how Trading 212 orders work. In OpenPF it is reference only: never call the API directly and never place or cancel orders — propose trades with propose_trade for the user to approve.'
 license: MIT License
 metadata:
   author: Trading 212
@@ -8,6 +8,13 @@ metadata:
 ---
 
 # Trading 212 API
+
+> **OpenPF:** reference only. Archie never calls this API directly (direct
+> `trading212.com` requests are blocked) and cannot place, modify or cancel
+> orders. Read account data with the read-only `trading212` MCP tools and
+> suggest trades with `propose_trade` — the user approves and the app executes
+> them under its risk rails. The order/auth sections below describe the API's
+> behaviour; they are not instructions to act.
 
 > **Note:** The Trading 212 API is currently in **beta** and under active development. Some endpoints or behaviors may change.
 
@@ -108,8 +115,6 @@ Otherwise, the agent builds the header from `T212_API_KEY` and `T212_API_SECRET`
 # Format: T212_AUTH_HEADER = "Basic " + base64(API_KEY_ID:API_SECRET)
 export T212_AUTH_HEADER="Basic $(echo -n "<YOUR_API_KEY_ID>:<YOUR_API_SECRET>" | base64)"
 
-# Example with sample credentials:
-export T212_AUTH_HEADER="Basic $(echo -n "<YOUR_API_KEY_ID>:<YOUR_API_SECRET>" | base64)"
 ```
 
 ### Making Requests

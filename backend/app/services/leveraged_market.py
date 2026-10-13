@@ -195,6 +195,14 @@ def resolve_yfinance_ticker(ticker: str, currency_code: str | None = None) -> st
         if mapped:
             return mapped
         suffix = _EXCHANGE_LETTER_SUFFIX.get(tail) or _EXCHANGE_LETTER_SUFFIX.get(tail[-1])
+        # The letter alone is ambiguous for a few venues; the quote currency settles it.
+        ccy = str(currency_code or "").upper()
+        if ccy == "SEK":
+            suffix = ".ST"
+        elif ccy == "DKK":
+            suffix = ".CO"
+        elif ccy == "NOK":
+            suffix = ".OL"
         if suffix:
             return f"{sym}{suffix}"
         return sym

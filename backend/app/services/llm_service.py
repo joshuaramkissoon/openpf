@@ -19,7 +19,7 @@ def maybe_answer_with_openai(question: str, context: str) -> str | None:
             {
                 "role": "system",
                 "content": (
-                    "You are MyPF, a concise portfolio operator assistant. "
+                    "You are OpenPF, a concise portfolio operator assistant. "
                     "Use the provided portfolio context. Do not fabricate prices. "
                     "Be precise, practical, and include risk caveats if asked about execution."
                 ),

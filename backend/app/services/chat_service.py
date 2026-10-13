@@ -199,7 +199,15 @@ def build_prompt_for_session(
     redact_values: bool = False,
 ) -> str:
     history = list_messages(db, session.id, limit=80)
-    snapshot = get_portfolio_snapshot(db, account_kind=account_kind, display_currency=display_currency, strip_prices=True)
+    try:
+        snapshot = get_portfolio_snapshot(db, account_kind=account_kind, display_currency=display_currency, strip_prices=True)
+    except Exception as exc:  # noqa: BLE001 — broker down/unconfigured: still answer, but say so
+        db.rollback()
+        snapshot = {
+            "unavailable": True,
+            "note": f"Portfolio data could not be loaded ({exc.__class__.__name__}). Tell the user their "
+                    "holdings are unavailable right now; don't guess them.",
+        }
     if redact_values:
         snapshot = _redact_snapshot(snapshot)
     return _build_prompt(snapshot, history, content, account_kind, display_currency)
@@ -215,6 +223,9 @@ async def send_message(
     on_delta: Callable[[str], Awaitable[None]] | None = None,
     on_status: Callable[[str, str, dict | None], Awaitable[None]] | None = None,
 ) -> tuple[ChatSession, ChatMessage, ChatMessage]:
+    from app.services.chat_errors import MAX_CHAT_CHARS, clean_chat_input
+
+    content = clean_chat_input(content)[:MAX_CHAT_CHARS] or "(empty message)"
     session = ensure_session(db, session_id)
     user_row = append_user_message(db, session, content)
     prompt = build_prompt_for_session(db, session, content, account_kind, display_currency, redact_values=redact_values)
@@ -231,8 +242,10 @@ async def send_message(
             assistant_text = reply.text
             if not assistant_text:
                 assistant_text = "No response generated."
-        except Exception as exc:
-            assistant_text = f"Claude runtime unavailable: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            from app.services.chat_errors import friendly_chat_error
+
+            assistant_text = friendly_chat_error(exc)
     else:
         assistant_text = "Claude provider is disabled. Set AGENT_PROVIDER=claude to enable chat."
 

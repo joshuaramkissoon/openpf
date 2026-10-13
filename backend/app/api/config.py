@@ -75,8 +75,10 @@ def get_credentials(db: Session = Depends(get_db)) -> CredentialsPublicView:
 
 @router.put("/credentials", response_model=MessageResponse)
 def update_credentials(payload: CredentialsConfig, db: Session = Depends(get_db)) -> MessageResponse:
+    # Per-account merge: a blank field keeps the stored key instead of wiping it.
     store = ConfigStore(db)
-    store.set_credentials(payload.model_dump())
+    for kind in ("invest", "stocks_isa"):
+        store.set_account_credentials(kind, getattr(payload, kind).model_dump())  # type: ignore[arg-type]
     return MessageResponse(message="credentials updated")
 
 

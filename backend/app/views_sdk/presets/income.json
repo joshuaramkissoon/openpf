@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "title": "Income",
+  "description": "How much do my investments pay me? Dividends by month, who pays them, and what's coming up",
+  "icon": "coins",
+  "data": {"pf": {"source": "portfolio"}, "div": {"source": "dividends"}},
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "Dividends in the last 12 months",
+      "from": "div.items",
+      "value": {"agg": "sum", "field": "amount", "transform": [{"month": {"field": "paid_on", "sum": "amount", "last": 12}}]},
+      "format": "money",
+      "caption": "All accounts, after any withholding tax.",
+      "width": "two-thirds"
+    },
+    {
+      "type": "kpis",
+      "width": "third",
+      "from": "pf.positions",
+      "items": [
+        {"label": "Next 12 months (est.)", "value": {"agg": "sum", "field": "income", "transform": [{"enrich": ["dividend_yield"]}, {"compute": {"as": "income", "op": "product", "a": "value", "b": "dividend_yield"}}]}, "format": "money", "hint": "today's yield × what you hold"},
+        {"label": "Paid into your ISA", "value": {"from": "div.items", "agg": "sum", "field": "amount", "transform": [{"filter": {"field": "account", "op": "=", "value": "stocks_isa"}}], "per": {"from": "div", "field": "total"}}, "format": "pct", "hint": "of dividends received, tax-free"}
+      ]
+    },
+    {
+      "type": "bars",
+      "title": "By month",
+      "subtitle": "Dividends received over the last 12 months",
+      "from": "div.items",
+      "transform": [{"month": {"field": "paid_on", "sum": "amount", "last": 12}}],
+      "label": "label",
+      "value": "amount",
+      "orientation": "vertical",
+      "format": "money",
+      "empty": "No dividends yet. Payments appear here as soon as your broker records them."
+    },
+    {
+      "type": "bars",
+      "title": "Who pays you",
+      "subtitle": "All-time dividends by holding",
+      "from": "div.by_ticker",
+      "transform": [{"top": {"n": 8, "other": true}}],
+      "label": "ticker",
+      "value": "amount",
+      "format": "money",
+      "width": "half",
+      "empty": "No dividends received yet."
+    },
+    {
+      "type": "table",
+      "title": "Coming up",
+      "subtitle": "Holdings going ex-dividend soon; own them before the date to be paid",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["ex_dividend_date", "dividend_yield"]}, {"filter": {"field": "ex_dividend_date", "op": ">=", "value": "$today"}}, {"compute": {"as": "income", "op": "product", "a": "value", "b": "dividend_yield"}}, {"sort": {"by": "ex_dividend_date", "dir": "asc"}}],
+      "columns": [
+        {"field": "ticker", "label": "Holding", "format": "text"},
+        {"field": "ex_dividend_date", "label": "Ex-dividend", "format": "date"},
+        {"field": "dividend_yield", "label": "Yield", "format": "pct"},
+        {"field": "income", "label": "Per year (est.)", "format": "money"}
+      ],
+      "empty": "No upcoming ex-dividend dates among your holdings.",
+      "width": "half"
+    }
+  ]
+}

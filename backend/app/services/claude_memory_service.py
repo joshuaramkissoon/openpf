@@ -10,13 +10,21 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.services.claude_sdk_config import configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd
+from app.services.claude_sdk_config import resolve_sdk_cwd
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-_MEMORY_START = "<!-- MYPF_MEMORY_START -->"
-_MEMORY_END = "<!-- MYPF_MEMORY_END -->"
+_MEMORY_START = "<!-- OPENPF_MEMORY_START -->"
+_MEMORY_END = "<!-- OPENPF_MEMORY_END -->"
+# Pre-rename markers; existing memory docs are rewritten with the new ones.
+_LEGACY_MARKERS = (("<!-- MYPF_MEMORY_START -->", _MEMORY_START), ("<!-- MYPF_MEMORY_END -->", _MEMORY_END))
+
+
+def _upgrade_markers(doc: str) -> str:
+    for old, new in _LEGACY_MARKERS:
+        doc = doc.replace(old, new)
+    return doc
 _MAX_FACTS_PER_UPDATE = 3
 _memory_lock = asyncio.Lock()
 
@@ -122,7 +130,7 @@ def _memory_file() -> Path:
 
 def _default_memory_doc() -> str:
     return (
-        "# MyPF Claude Runtime Memory\n\n"
+        "# OpenPF Claude Runtime Memory\n\n"
         "## Guidance\n"
         "- Persist only durable user preferences, constraints, goals, and workflow decisions.\n"
         "- Never store secrets, credentials, exact balances, or transient market noise.\n\n"
@@ -134,6 +142,7 @@ def _default_memory_doc() -> str:
 
 
 def _read_memory_lines(doc: str) -> list[str]:
+    doc = _upgrade_markers(doc)
     start = doc.find(_MEMORY_START)
     end = doc.find(_MEMORY_END)
     if start == -1 or end == -1 or end <= start:
@@ -160,7 +169,7 @@ def _normalize_fact_key(line: str) -> str:
 
 def _write_memory_lines(path: Path, lines: list[str]) -> None:
     if path.exists():
-        doc = path.read_text(encoding="utf-8")
+        doc = _upgrade_markers(path.read_text(encoding="utf-8"))
     else:
         doc = _default_memory_doc()
 
@@ -192,10 +201,6 @@ def _write_memory_lines(path: Path, lines: list[str]) -> None:
 
 
 async def _distill(user_message: str, assistant_message: str, current_memory: list[str]) -> list[str]:
-    from claude_agent_sdk import ClaudeAgentOptions, query
-
-    configure_sdk_auth()
-
     prompt_payload = {
         "purpose": "Extract durable memory for a long-running portfolio copilot.",
         "current_memory": current_memory[-40:],
@@ -216,26 +221,19 @@ async def _distill(user_message: str, assistant_message: str, current_memory: li
         "output_mode": "json_only",
     }
 
-    options = ClaudeAgentOptions(
-        system_prompt=(
-            "You are a strict memory distiller. "
-            "Output only valid JSON matching the provided schema."
-        ),
-        model=settings.claude_memory_model,
-        cwd=str(resolve_sdk_cwd()),
-        setting_sources=parse_setting_sources(settings.claude_setting_sources, require_project=True),
-        max_turns=2,
-        allowed_tools=[],
+    # One-shot structured call (Together → Claude Haiku API → Agent SDK as last resort).
+    from app.services import fast_llm
+
+    res = await fast_llm.complete_json(
+        "memory_extract",
+        system="You are a strict memory distiller. Output only valid JSON matching the provided schema.",
+        user=json.dumps(prompt_payload),
+        schema={"type": "object", "properties": {"store": {"type": "boolean"}, "facts": {"type": "array", "items": {"type": "string"}}},
+                "required": ["store", "facts"]},
+        max_tokens=800,
+        usage_id="memory",
     )
-
-    chunks: list[str] = []
-    async for message in query(prompt=json.dumps(prompt_payload), options=options):
-        text = _extract_text(message)
-        if text:
-            chunks.append(text)
-
-    raw = "\n".join(chunks)
-    parsed = _extract_json_block(raw)
+    parsed = res.data
     if not parsed or not bool(parsed.get("store")):
         return []
 

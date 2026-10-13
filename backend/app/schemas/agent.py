@@ -1,12 +1,11 @@
-from datetime import datetime
-from typing import Literal
+from datetime import date, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class AgentRunRequest(BaseModel):
     include_watchlist: bool = True
-    execute_auto: bool = False
 
 
 class AgentRunResponse(BaseModel):
@@ -43,15 +42,46 @@ class TradeIntentItem(BaseModel):
     rationale: str
     broker_mode: str
     account_kind: str | None = None
+    # Where the proposal came from ('chat', 'play', 'agent_run', …) and, for play
+    # tranches, which play — so the UI can label and link it.
+    source: str | None = None
+    play_id: str | None = None
+    play_title: str | None = None
+    # Play tranches: which tranche staged this order, so the UI can group a tranche's legs.
+    tranche_index: int | None = None
+    tranche_label: str | None = None
+    instrument_name: str | None = None
+    # "For which play?" — 'play' | 'core' | None (not part of any play). Inferred
+    # from the holding's owner when the proposal didn't say.
+    owner_kind: str | None = None
+    owner_play_id: str | None = None
+    owner_label: str | None = None
+    owner_inferred: bool = False
     approved_at: datetime | None = None
+    # "human", or "permission:<id>" when a standing permission approved it.
+    approved_by: str | None = None
+    permission_label: str | None = None
+    # deploy_cash | rebalance | play_tranche | news_reaction | trim_derisk | other
+    category: str | None = None
     executed_at: datetime | None = None
     broker_order_id: str | None = None
     execution_price: float | None = None
     failure_reason: str | None = None
+    # Crypto proposals: exchange, market, fee + slippage estimates for the card.
+    crypto: dict[str, Any] | None = None
+    # Read-only connection (IBKR, SnapTrade, …): never executable — place it in ``place_in``.
+    read_only: bool = False
+    place_in: str | None = None
+    account_label: str | None = None
+    # Staged for a later day's limit window: can't be placed before this (UTC) day.
+    not_before: date | None = None
+    # status "held": the part of an ask a notional limit stopped ({blocked, reason,
+    # requested_gbp, for_day}); kept with "staged": true once it's re-proposed.
+    held: dict[str, Any] | None = None
 
 
 class IntentDecisionRequest(BaseModel):
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class IntentExecuteRequest(BaseModel):
@@ -59,6 +89,10 @@ class IntentExecuteRequest(BaseModel):
     # Explicit destination account ('invest' | 'stocks_isa'). When omitted, the
     # account the intent was proposed for is used (then 'invest' as a last resort).
     account_kind: str | None = None
+    # Human-UI convenience: approve a 'proposed' intent and execute it in one
+    # call (audited as a human approval). Without it the intent must already be
+    # 'approved'.
+    approve: bool = False
 
 
 class IntentActionResponse(BaseModel):

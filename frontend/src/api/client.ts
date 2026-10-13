@@ -1,4 +1,6 @@
 import axios from 'axios'
+
+import { withAuth, withWsToken } from './auth'
 import type {
   AgentRun,
   AgentRunDetail,
@@ -24,10 +26,12 @@ import type {
   WatchlistItem,
 } from '../types'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
-  timeout: 30000,
-})
+const api = withAuth(
+  axios.create({
+    baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+    timeout: 30000,
+  }),
+)
 
 export async function getConfig() {
   const { data } = await api.get<AppConfig>('/config')
@@ -133,8 +137,8 @@ export async function getSnapshot(
   return data
 }
 
-export async function runAgent(include_watchlist = true, execute_auto = false) {
-  const { data } = await api.post<AgentRunDetail>('/agent/run', { include_watchlist, execute_auto })
+export async function runAgent(include_watchlist = true) {
+  const { data } = await api.post<AgentRunDetail>('/agent/run', { include_watchlist })
   return data
 }
 
@@ -153,8 +157,20 @@ export async function getIntents() {
   return data
 }
 
+/** Specific intents by id, any age (chat transcripts reference proposals by id). */
+export async function getIntentsByIds(ids: string[]) {
+  const { data } = await api.get<TradeIntent[]>('/agent/intents', { params: { ids: ids.join(',') } })
+  return data
+}
+
 export async function approveIntent(id: string, note?: string) {
   const { data } = await api.post(`/agent/intents/${id}/approve`, { note })
+  return data
+}
+
+/** Re-propose a held-back ask for tomorrow's limit window (changes no limit). */
+export async function stageIntentTomorrow(id: string) {
+  const { data } = await api.post(`/agent/intents/${id}/stage-tomorrow`)
   return data
 }
 
@@ -166,11 +182,13 @@ export async function rejectIntent(id: string, note?: string) {
 export async function executeIntent(
   id: string,
   forceLive = false,
-  accountKind?: 'invest' | 'stocks_isa',
+  accountKind?: 'invest' | 'stocks_isa' | 'crypto',
 ) {
+  // The click is the human approval: approve-then-execute in one audited call.
   const { data } = await api.post(`/agent/intents/${id}/execute`, {
     force_live: forceLive,
     account_kind: accountKind,
+    approve: true,
   })
   return data
 }
@@ -319,8 +337,12 @@ export function streamChatMessage(
   const MAX_ATTEMPTS = 4
   const BASE_DELAY_MS = 500
 
+  // abort() settles `done` too, so callers awaiting it always reach their
+  // cleanup (a never-settling promise left the UI's finally blocks hanging).
+  let resolveDone: (() => void) | null = null
   const done = new Promise<void>((resolve, reject) => {
-    const url = `${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`
+    resolveDone = resolve
+    const url = withWsToken(`${websocketBaseUrl()}/agent/chat/sessions/${encodeURIComponent(sessionId)}/stream`)
 
     const fail = (message: string) => {
       if (settled) return
@@ -461,6 +483,7 @@ export function streamChatMessage(
     } catch {
       // no-op
     }
+    resolveDone?.()
   }
 
   const sendAnswer = (questionId: string, answers: ChatQuestionAnswers) => {
@@ -639,6 +662,24 @@ export async function getPortfolioHistory(accountKind = 'all', currency: 'GBP' |
   return data
 }
 
+/** Today's move — the same per-holding numbers the Views data source shows, summed. */
+export interface TodayMove {
+  day_change: number | null
+  day_change_pct: number | null
+  /** Date of the latest market session priced in (before the open: the previous one). */
+  session: string | null
+  is_today: boolean | null
+  holdings_counted: number
+  holdings_missing: number
+}
+
+export async function getTodayMove(accountKind = 'all', currency: 'GBP' | 'USD' = 'GBP') {
+  const { data } = await api.get<TodayMove>('/portfolio/today', {
+    params: { account_kind: accountKind, display_currency: currency },
+  })
+  return data
+}
+
 export interface Alert {
   id: string
   created_at: string | null
@@ -783,3 +824,6 @@ export async function runResearch(payload: ResearchRunRequest) {
   const { data } = await api.post<ResearchRunResult>('/research/run', payload, { timeout: 280000 })
   return data
 }
+
+// Shared instance for feature API modules (keeps auth/interceptors in one place).
+export { api as apiClient }

@@ -28,7 +28,34 @@ interface DetailEnvelope {
  * structured envelope (detail is an object) and legacy string-detail endpoints.
  */
 export function parseApiError(error: unknown): ParsedApiError {
-  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  const err = error as { response?: { status?: number; data?: { detail?: unknown } }; request?: unknown; code?: string }
+  const detail = err?.response?.data?.detail
+  // FastAPI validation errors: detail is [{loc, msg}, …] — show the field + reason.
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d: { loc?: unknown[]; msg?: string }) => {
+        const field = Array.isArray(d?.loc) ? d.loc.filter((p) => p !== 'body').join('.') : ''
+        return d?.msg ? (field ? `${field}: ${d.msg}` : d.msg) : ''
+      })
+      .filter(Boolean)
+    return { code: 'validation', message: parts.join('; ') || 'Invalid input' }
+  }
+  // A bodiless 5xx comes from the dev proxy when the backend is down (the
+  // backend's own 500s always carry a JSON detail).
+  const status = err?.response?.status ?? 0
+  if (err?.response && status >= 500 && detail === undefined) {
+    return { code: 'unknown', message: "Can't reach the OpenPF backend — is it running?" }
+  }
+  // No response at all: the backend is down/unreachable (or the request timed out).
+  if (!err?.response &&(err?.request || err?.code === 'ERR_NETWORK' || err?.code === 'ECONNABORTED')) {
+    return {
+      code: 'unknown',
+      message:
+        err?.code === 'ECONNABORTED'
+          ? 'The OpenPF backend took too long to respond.'
+          : "Can't reach the OpenPF backend — is it running?",
+    }
+  }
   if (detail && typeof detail === 'object') {
     const env = detail as DetailEnvelope
     return {

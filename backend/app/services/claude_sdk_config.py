@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.services.mcp_registry import tool_ids
 
 settings = get_settings()
 
@@ -43,12 +44,30 @@ def resolve_t212_env() -> dict[str, str]:
     Note: deliberately does NOT prefer the legacy ``ARCHIE_T212_*`` keys — those
     being stale (while the regular keys were updated) is exactly what caused
     Archie's 401s. Credentials live in subprocess memory only.
+
+    READ keys only. Execution (write) keys are never handed to any agent
+    subprocess — live orders go through ``execution_service.execute_intent``.
     """
+    from app.core.sandbox import is_sandbox, sandbox_base_url
+
+    if is_sandbox():
+        # Only the mock broker: its URL and its fake read keys. Real keys (env
+        # or DB) never reach a sandbox subprocess.
+        from app.services.sandbox_broker import SANDBOX_CREDENTIALS
+
+        return {
+            "T212_BASE_ENV": "sandbox",
+            "T212_SANDBOX_URL": sandbox_base_url(),
+            "OPENPF_SANDBOX": "1",
+            "T212_API_KEY_INVEST": SANDBOX_CREDENTIALS["invest"]["t212_api_key"],
+            "T212_API_SECRET_INVEST": SANDBOX_CREDENTIALS["invest"]["t212_api_secret"],
+            "T212_API_KEY_STOCKS_ISA": SANDBOX_CREDENTIALS["stocks_isa"]["t212_api_key"],
+            "T212_API_SECRET_STOCKS_ISA": SANDBOX_CREDENTIALS["stocks_isa"]["t212_api_secret"],
+        }
+
     env: dict[str, str] = {"T212_BASE_ENV": settings.t212_base_env}
     invest = ("", "")
     isa = ("", "")
-    invest_exec = ("", "")
-    isa_exec = ("", "")
     try:
         from app.core.database import SessionLocal
         from app.services.config_store import ConfigStore
@@ -60,12 +79,6 @@ def resolve_t212_env() -> dict[str, str]:
             sc = store.get_account_credentials("stocks_isa")
             invest = (str(ic.get("t212_api_key", "")).strip(), str(ic.get("t212_api_secret", "")).strip())
             isa = (str(sc.get("t212_api_key", "")).strip(), str(sc.get("t212_api_secret", "")).strip())
-            # Dedicated IP-restricted execution (write) keys — injected separately so
-            # Archie's reads keep working even when the exec key's IP allowlist is stale.
-            xic = store.get_account_exec_credentials("invest")
-            xsc = store.get_account_exec_credentials("stocks_isa")
-            invest_exec = (str(xic.get("t212_api_key", "")).strip(), str(xic.get("t212_api_secret", "")).strip())
-            isa_exec = (str(xsc.get("t212_api_key", "")).strip(), str(xsc.get("t212_api_secret", "")).strip())
     except Exception:  # noqa: BLE001 — fall back to .env below
         pass
 
@@ -79,25 +92,11 @@ def resolve_t212_env() -> dict[str, str]:
             (settings.t212_stocks_isa_api_key or settings.t212_api_key_stocks_isa or "").strip(),
             (settings.t212_stocks_isa_api_secret or settings.t212_api_secret_stocks_isa or "").strip(),
         )
-    if not all(invest_exec):
-        invest_exec = (
-            (settings.t212_exec_invest_api_key or "").strip(),
-            (settings.t212_exec_invest_api_secret or "").strip(),
-        )
-    if not all(isa_exec):
-        isa_exec = (
-            (settings.t212_exec_stocks_isa_api_key or "").strip(),
-            (settings.t212_exec_stocks_isa_api_secret or "").strip(),
-        )
 
     if all(invest):
         env["T212_API_KEY_INVEST"], env["T212_API_SECRET_INVEST"] = invest
     if all(isa):
         env["T212_API_KEY_STOCKS_ISA"], env["T212_API_SECRET_STOCKS_ISA"] = isa
-    if all(invest_exec):
-        env["T212_EXEC_API_KEY_INVEST"], env["T212_EXEC_API_SECRET_INVEST"] = invest_exec
-    if all(isa_exec):
-        env["T212_EXEC_API_KEY_STOCKS_ISA"], env["T212_EXEC_API_SECRET_STOCKS_ISA"] = isa_exec
     return env
 
 
@@ -129,26 +128,67 @@ def parse_setting_sources(raw: str | None, *, require_project: bool = True) -> l
 
 def _resolve_cwd_candidate() -> Path:
     root = project_root()
-    raw = str(settings.claude_project_cwd or ".").strip() or "."
+    explicit = str(settings.openpf_runtime_dir or "").strip()
+    raw = explicit or str(settings.claude_project_cwd or ".").strip() or "."
     candidate = Path(raw).expanduser()
     if not candidate.is_absolute():
         candidate = (root / candidate).resolve()
     else:
         candidate = candidate.resolve()
 
-    # Keep SDK cwd scoped to this repo tree.
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        candidate = root
+    # CLAUDE_PROJECT_CWD stays scoped to this repo tree; an explicit
+    # OPENPF_RUNTIME_DIR (per-instance data folder) may live anywhere.
+    if not explicit:
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            candidate = root
 
     return candidate
 
 
+def runtime_dir() -> Path:
+    """This instance's Archie runtime folder (his cwd; holds artifacts/ and
+    memory/). Every artifact/memory path in the backend derives from here so a
+    sandbox instance and a live one never see each other's files."""
+    return resolve_sdk_cwd()
+
+
+def artifacts_dir() -> Path:
+    return runtime_dir() / "artifacts"
+
+
+def memory_dir() -> Path:
+    return runtime_dir() / "memory"
+
+
+def _seed_runtime_from_template(cwd: Path) -> None:
+    """A non-default runtime folder gets Archie's tracked identity (CLAUDE.md)
+    and skills from the template ``.claude/runtime/.claude`` — never its
+    artifacts/ or memory/ (those are per-instance and may hold real data).
+    CLAUDE.md is refreshed when the template is newer."""
+    from app.core.sandbox import live_runtime_dir
+
+    template = live_runtime_dir() / ".claude"
+    dst = cwd / ".claude"
+    dst.mkdir(parents=True, exist_ok=True)
+    src_md, dst_md = template / "CLAUDE.md", dst / "CLAUDE.md"
+    if src_md.is_file() and (not dst_md.exists() or src_md.stat().st_mtime > dst_md.stat().st_mtime):
+        shutil.copy2(src_md, dst_md)
+    src_skills = template / "skills"
+    if src_skills.is_dir():
+        shutil.copytree(src_skills, dst / "skills", dirs_exist_ok=True)
+
+
 def resolve_sdk_cwd() -> Path:
+    from app.core.sandbox import live_runtime_dir
+
     root = project_root()
     cwd = _resolve_cwd_candidate()
     cwd.mkdir(parents=True, exist_ok=True)
+    if cwd != root and cwd.resolve() != live_runtime_dir().resolve():
+        _seed_runtime_from_template(cwd)
+        return cwd
 
     src_hidden = root / ".claude"
     dst_hidden = cwd / ".claude"
@@ -193,97 +233,6 @@ def list_skill_files(cwd: Path | None = None) -> list[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# MCP tool allow-lists
-#
-# Centralised here (per docs/plans/2026-02-19-archie-subagents-design.md) so
-# the chat/agent/scheduler runtimes and build_subagents() share one source of
-# truth and avoid circular imports.
-# ──────────────────────────────────────────────────────────────────────────
-
-_T212_MCP_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__get_exchanges",
-    "mcp__trading212__get_order_history",
-    "mcp__trading212__get_dividend_history",
-    "mcp__trading212__get_transaction_history",
-    "mcp__trading212__request_csv_export",
-    "mcp__trading212__get_csv_export_status",
-]
-
-_MARKET_MCP_TOOLS = [
-    "mcp__marketdata__get_price_snapshot",
-    "mcp__marketdata__get_price_history_rows",
-    "mcp__marketdata__get_technical_snapshot",
-    "mcp__marketdata__get_indicator_series",
-    "mcp__marketdata__get_risk_metrics",
-    "mcp__marketdata__get_correlation_matrix",
-    "mcp__marketdata__compare_assets",
-]
-
-_SCHEDULER_MCP_TOOLS = [
-    "mcp__scheduler__list_scheduled_tasks",
-    "mcp__scheduler__create_scheduled_task",
-    "mcp__scheduler__pause_scheduled_task",
-    "mcp__scheduler__resume_scheduled_task",
-    "mcp__scheduler__delete_scheduled_task",
-    "mcp__scheduler__run_scheduled_task_now",
-    "mcp__scheduler__get_scheduled_task_logs",
-    "mcp__scheduler__run_due_scheduled_tasks",
-    "mcp__scheduler__seed_default_scheduled_tasks",
-]
-
-_FORECAST_MCP_TOOLS = [
-    "mcp__forecast__forecast_prices",
-    "mcp__forecast__forecast_status",
-]
-
-_FUNDAMENTALS_MCP_TOOLS = [
-    "mcp__fundamentals__get_fundamentals",
-    "mcp__fundamentals__get_valuation",
-    "mcp__fundamentals__get_financial_statements",
-    "mcp__fundamentals__get_earnings_calendar",
-]
-
-_INTEL_MCP_TOOLS = [
-    "mcp__intel__get_company_news",
-    "mcp__intel__get_market_news",
-    "mcp__intel__get_macro_snapshot",
-    "mcp__intel__get_earnings",
-]
-
-_WATCHLIST_MCP_TOOLS = [
-    "mcp__watchlist__list_watchlist",
-    "mcp__watchlist__add_to_watchlist",
-    "mcp__watchlist__update_watchlist_item",
-    "mcp__watchlist__remove_from_watchlist",
-    "mcp__watchlist__flag_watchlist_item",
-]
-
-# Narrow T212 subset the execution subagent is allowed to use — no CSV
-# export, no dividend/transaction history.
-_EXECUTION_T212_TOOLS = [
-    "mcp__trading212__get_account_summary",
-    "mcp__trading212__get_positions",
-    "mcp__trading212__get_pending_orders",
-    "mcp__trading212__search_instruments",
-    "mcp__trading212__place_market_order",
-    "mcp__trading212__place_limit_order",
-    "mcp__trading212__place_stop_order",
-    "mcp__trading212__place_stop_limit_order",
-    "mcp__trading212__cancel_order",
-    "mcp__trading212__get_order_history",
-]
-
-
-# ──────────────────────────────────────────────────────────────────────────
 # Subagents
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -303,7 +252,7 @@ _RESEARCHER_PROMPT = (
     "gaps/weekends, round-number prices, zero volume, or values that contradict a reliable source), "
     "FLAG it explicitly rather than reporting it as fact. Distinguish what you verified from what you "
     "could not. Return structured, clearly sourced findings. You may write artifacts, but ONLY under "
-    "`.claude/runtime/artifacts/`; never write anywhere else."
+    "`artifacts/` in your working directory; never write anywhere else."
 )
 
 _QUANT_PROMPT = (
@@ -311,7 +260,11 @@ _QUANT_PROMPT = (
     "analysis, write and run Python scripts for data analysis, compute risk "
     "metrics and indicators, and do statistical/portfolio modelling. Work from "
     "the instruments, date ranges, and analysis goals you are given.\n\n"
-    "Tools you have: the marketdata tools (get_price_snapshot, get_price_history_rows, "
+    "Start with the quant tools — tested maths on the user's real book in GBP with their risk rails: "
+    "size_position, analyse_risk, what_if, rebalance_plan, deploy_cash, placement. Only write your own "
+    "code for analysis those don't cover, and then build on `app.quant` (covariance shrinkage, risk "
+    "contributions, HRP, drawdowns, Kelly) rather than re-deriving formulas.\n\n"
+    "Other tools: the marketdata tools (get_price_snapshot, get_price_history_rows, "
     "get_technical_snapshot, get_indicator_series, get_risk_metrics, get_correlation_matrix, "
     "compare_assets) for live data and risk/correlation; the fundamentals tools (get_fundamentals, "
     "get_valuation, get_financial_statements, get_earnings_calendar); and the Kronos forecast tool "
@@ -326,30 +279,13 @@ _QUANT_PROMPT = (
     "on it. Return concise, quantified results."
 )
 
-_EXECUTION_PROMPT = (
-    "You are Archie's trade execution specialist. You place and cancel orders "
-    "via the Trading 212 tools, using only the account balance, positions, and "
-    "exact order instructions passed to you. Do not improvise sizing or "
-    "instruments. "
-    "ACCOUNT: every order tool takes an explicit `account` ('invest' or "
-    "'stocks_isa'). Never assume or default the account — use exactly the account "
-    "specified in your instructions, and if it was not specified, do NOT guess: "
-    "return an error asking which account to use. Echo the account you acted on in "
-    "your commentary. (Order writes use the IP-restricted execution key; a tool "
-    "error mentioning IP restriction means the key's allowlist is stale — surface "
-    "that verbatim in `errors`, do not retry.) "
-    "Always finish with a single JSON block matching the execution "
-    "schema: {\"trades\": [...], \"errors\": [...], \"commentary\": \"...\"}. "
-    "Return structured JSON only — never unstructured prose as the final answer."
-)
-
-
 def build_subagents() -> dict[str, Any]:
     """Construct Archie's subagent roster.
 
     Returns a ``dict[str, AgentDefinition]`` suitable for
-    ``ClaudeAgentOptions(agents=...)``. See
-    docs/plans/2026-02-19-archie-subagents-design.md for the roster spec.
+    ``ClaudeAgentOptions(agents=...)``. There is deliberately no execution
+    subagent: no agent can place or cancel orders — the main agent drafts trades
+    with ``propose_trade`` and a human approves them.
     """
     from claude_agent_sdk import AgentDefinition
 
@@ -361,37 +297,25 @@ def build_subagents() -> dict[str, Any]:
             "structured research findings and writes artifacts when useful."
         ),
         prompt=_RESEARCHER_PROMPT,
-        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *_MARKET_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS, *_INTEL_MCP_TOOLS],
+        tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep", "Write", *tool_ids("marketdata", "fundamentals", "intel")],
         model="sonnet",
     )
 
     quant = AgentDefinition(
         description=(
-            "Quantitative analysis specialist. Delegate here: technical "
-            "analysis, writing and running Python scripts for data analysis, "
-            "risk calculations, statistical modelling, portfolio metrics, "
-            "indicator computation. Provide: instruments, date ranges, and what "
-            "analysis is needed."
+            "Quantitative analysis specialist for bespoke work the quant tools "
+            "don't cover: backtests, custom statistics, scripted data analysis, "
+            "multi-step studies. Don't delegate routine sizing/risk/rebalance/"
+            "what-if questions — call the quant tools yourself. Provide: "
+            "instruments, date ranges, and what analysis is needed."
         ),
         prompt=_QUANT_PROMPT,
-        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *_MARKET_MCP_TOOLS, *_FORECAST_MCP_TOOLS, *_FUNDAMENTALS_MCP_TOOLS],
-        model="claude-opus-4-8",
+        tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash",
+               *tool_ids("quant", "marketdata", "forecast", "fundamentals")],
+        model=_deep_model(),
     )
 
-    execution = AgentDefinition(
-        description=(
-            "Trade execution specialist. Delegate ALL order placement and "
-            "cancellation here. Always pass: current account balance, relevant "
-            "positions, and exact order instructions (symbol, type, qty, limit "
-            "price if applicable). Returns a typed list of trade results — do "
-            "not attempt T212 tool calls yourself."
-        ),
-        prompt=_EXECUTION_PROMPT,
-        tools=list(_EXECUTION_T212_TOOLS),
-        model="haiku",
-    )
-
-    return {"researcher": researcher, "quant": quant, "execution": execution}
+    return {"researcher": researcher, "quant": quant}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -430,15 +354,182 @@ def _deny(reason: str) -> dict[str, Any]:
     }
 
 
+# The trading surface. The agent can only *propose* trades (propose_trade); these
+# guards stop it routing around that gate via Bash/WebFetch: calling the app's own
+# API (where a human approves/executes), hitting the broker directly, or poking
+# the execution code / exec credentials / DB from a shell.
+_API_PORT = str(os.environ.get("OPENPF_API_PORT") or os.environ.get("API_PORT") or "8000")
+_NETWORK_DENY = [
+    (
+        re.compile(
+            r"(?:\blocalhost\b|\b127(?:\.\d{1,3}){3}\b|\b0\.0\.0\.0\b|\[::1\]|\bhost\.docker\.internal\b|\b2130706433\b)",
+            re.IGNORECASE,
+        ),
+        "requests to the app's own host (localhost/loopback) are blocked",
+    ),
+    (re.compile(rf"\bbackend:{_API_PORT}\b|:{_API_PORT}/api\b", re.IGNORECASE), "requests to the app's own API are blocked"),
+    (
+        re.compile(r"/api/(?:agent/intents|orders|leveraged|config|crypto|connections)\b", re.IGNORECASE),
+        "trading/config API endpoints are human-only",
+    ),
+    (
+        re.compile(r"/api/instruments/[^/\s'\"]+/(?:trade|propose)\b", re.IGNORECASE),
+        "trading from the stock sheet is human-only — propose trades with propose_trade",
+    ),
+    (
+        re.compile(r"/api/plays/[^/\s'\"]+/rebalance\b", re.IGNORECASE),
+        "rebalancing a play is human-only — propose trades with propose_trade",
+    ),
+    (re.compile(r"trading212\.com", re.IGNORECASE), "direct Trading 212 API access is blocked — use the read-only trading212 tools"),
+    (re.compile(r"\b(?:api(?:-futures)?\.kraken\.com|api\.coinbase\.com|api\.exchange\.coinbase\.com|api\d?\.binance\.com)\b",
+                re.IGNORECASE), "direct crypto exchange API access is blocked — use the read-only crypto tools"),
+    # Broker / aggregator connections (Settings → Connections): only the backend
+    # talks to them, with keys the agent never holds.
+    (re.compile(r"\b(?:[a-z0-9-]+\.)?(?:interactivebrokers\.(?:com|co\.uk)|ibkr\.com|alpaca\.markets|snaptrade\.com"
+                r"|schwabapi\.com|tastyworks\.com|tastytrade\.com|robinhood\.com)\b", re.IGNORECASE),
+     "direct broker API access is blocked — holdings from every connection are already in the portfolio tools"),
+]
+_BASH_TRADING_DENY = [
+    (
+        re.compile(
+            r"\b(?:execute_intent|approve_intent|manual_trade|place_(?:market|limit|stop|stop_limit)_order|cancel_order"
+            r"|build_t212_client|get_account_exec_credentials|exec_api_(?:key|secret)|T212_EXEC|update_policy"
+            r"|build_crypto_client|CcxtCryptoBroker|client_for|ccxt|CRYPTO_API_(?:KEY|SECRET)|crypto_config"
+            r"|set_leveraged|auto_execute|execute_signal|ConfigStore|app_config|sqlite3?"
+            r"|secret_box|open_secret|OPENPF_SECRETS_KEY|build_provider_client|connections_service|play_rebalance)\b",
+            re.IGNORECASE,
+        ),
+        "trade execution, broker credentials and the app database are off-limits — propose trades with propose_trade",
+    ),
+    (re.compile(r"\.(?:db|sqlite3?)\b", re.IGNORECASE), "the app database is off-limits"),
+]
+# Write/Edit may only touch agent-owned state under .claude/ in this repo, never
+# the app's code or config (which would let the agent rewrite its own gate).
+_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
+def _network_violation(text: str) -> str | None:
+    for pattern, reason in _NETWORK_DENY:
+        if pattern.search(text):
+            return reason
+    return None
+
+
+_OTHER_INSTANCE_REASON = "another OpenPF instance's data (sandbox and live are kept apart)"
+
+
+def _other_instance_roots() -> tuple[list[Path], str]:
+    """(folders this instance must never touch, substring marker for Bash)."""
+    from app.core.sandbox import demo_dir, live_runtime_dir
+
+    runtime = runtime_dir().resolve()
+    live = live_runtime_dir().resolve()
+    if runtime == live:
+        return [demo_dir().resolve()], ".demo"
+    # A sandbox/custom instance: the live runtime (memory, artifacts) is off-limits.
+    return [live], ".claude/runtime"
+
+
+def _touches_other_instance(paths: list[str], cwd: str | None) -> bool:
+    roots, _ = _other_instance_roots()
+    base = Path(cwd or runtime_dir())
+    for raw in paths:
+        if not raw:
+            continue
+        p = Path(raw).expanduser()
+        p = (p if p.is_absolute() else base / p).resolve()
+        if any(p == r or r in p.parents for r in roots):
+            return True
+    return False
+
+
+# Recipes (Archie's own harness) change only through the versioned recipes tools,
+# so every edit has a diff the user can see and revert — never via raw file
+# writes into the skills plugin.
+_RECIPES_DENY_REASON = "recipes are edited only through the recipes tools (versioned and reviewable)"
+_BASH_RECIPES_DENY = re.compile(r"data/recipes|recipes/plugin|\.claude-plugin|recipes_service|RecipeVersion", re.IGNORECASE)
+
+
+def _recipes_dir() -> Path | None:
+    try:
+        from app.services.recipes_service import data_dir
+
+        return data_dir()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _in_recipes_dir(raw_path: str, cwd: str | None) -> bool:
+    root = _recipes_dir()
+    if not raw_path or root is None:
+        return False
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd or resolve_sdk_cwd()) / path
+    try:
+        path.resolve().relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def recipe_plugins() -> list[dict[str, str]]:
+    """``ClaudeAgentOptions(plugins=...)`` for the user's recipes (as skills)."""
+    try:
+        from app.services.recipes_service import plugins_option
+
+        return plugins_option()
+    except Exception:  # noqa: BLE001 — a recipes problem must never stop a runtime
+        return []
+
+
 async def _bash_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
     command = str((input_data.get("tool_input") or {}).get("command", ""))
+    _, marker = _other_instance_roots()
+    if marker in command:
+        return _deny(_OTHER_INSTANCE_REASON)
     for pattern, reason in _BASH_DENY:
         if pattern.search(command):
             return _deny(reason)
+    root = _recipes_dir()
+    if _BASH_RECIPES_DENY.search(command) or (root is not None and str(root) in command):
+        return _deny(_RECIPES_DENY_REASON)
     for pattern, reason in _SECRET_PATTERNS:
         if pattern.search(command):
             return _deny(reason)
+    for pattern, reason in _BASH_TRADING_DENY:
+        if pattern.search(command):
+            return _deny(reason)
+    reason = _network_violation(command)
+    if reason:
+        return _deny(reason)
     return {}
+
+
+async def _web_fetch_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    url = str((input_data.get("tool_input") or {}).get("url", ""))
+    reason = _network_violation(url)
+    if reason:
+        return _deny(reason)
+    return {}
+
+
+def _outside_agent_area(raw_path: str, cwd: str | None) -> bool:
+    if not raw_path:
+        return False
+    root = project_root()
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd or resolve_sdk_cwd()) / path
+    path = path.resolve()
+    runtime = runtime_dir().resolve()
+    if path == runtime or runtime in path.parents:
+        return False  # this instance's own runtime folder (artifacts, memory)
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False  # outside the repo: left to the SDK's own permission checks
+    return not rel.parts or rel.parts[0] != ".claude"
 
 
 async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
@@ -450,6 +541,19 @@ async def _file_guard(input_data: dict[str, Any], tool_use_id: str | None, conte
     for pattern, reason in _SECRET_PATTERNS:
         if pattern.search(target):
             return _deny(reason)
+    if re.search(r"\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?\b", target, re.IGNORECASE):
+        return _deny("the app database is off-limits")
+    _, marker = _other_instance_roots()
+    if marker in target or _touches_other_instance(
+        [str(tool_input.get(k, "")) for k in ("file_path", "path", "notebook_path")], input_data.get("cwd")
+    ):
+        return _deny(_OTHER_INSTANCE_REASON)
+    if str(input_data.get("tool_name", "")) in _WRITE_TOOLS:
+        write_target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        if _in_recipes_dir(write_target, input_data.get("cwd")):
+            return _deny(_RECIPES_DENY_REASON)
+        if _outside_agent_area(write_target, input_data.get("cwd")):
+            return _deny("writes are limited to agent state under .claude/ — app code and config are read-only")
     return {}
 
 
@@ -457,16 +561,33 @@ def build_security_hooks() -> dict[str, Any]:
     """Build PreToolUse security hooks for ClaudeAgentOptions(hooks=...).
 
     Returns ``dict[HookEvent, list[HookMatcher]]``. Blocks dangerous Bash
-    commands and reads/writes that touch secrets.
+    commands, reads/writes that touch secrets or the app DB, writes outside
+    agent state, and any Bash/WebFetch route around the trade-proposal gate
+    (self-API calls, trading212.com, execution code/credentials).
     """
     from claude_agent_sdk import HookMatcher
 
     return {
         "PreToolUse": [
             HookMatcher(matcher="Bash", hooks=[_bash_guard]),
-            HookMatcher(matcher="Read|Edit|Write|Glob|Grep", hooks=[_file_guard]),
+            HookMatcher(matcher="WebFetch", hooks=[_web_fetch_guard]),
+            HookMatcher(matcher="Read|Edit|MultiEdit|Write|NotebookEdit|Glob|Grep", hooks=[_file_guard]),
         ],
     }
+
+
+def _model_routing():
+    from app.services import model_routing
+
+    return model_routing
+
+
+def _deep_model() -> str:
+    """The quant subagent is the explicitly deep path (Opus by default)."""
+    try:
+        return _model_routing().sdk_model("deep")
+    except Exception:  # noqa: BLE001
+        return settings.claude_deep_model
 
 
 def runtime_info() -> dict[str, Any]:
@@ -483,6 +604,7 @@ def runtime_info() -> dict[str, Any]:
         "claude_chat_model": settings.claude_chat_model,
         "claude_agent_model": settings.claude_agent_model,
         "claude_memory_model": settings.claude_memory_model,
+        "models": {k: _model_routing().route(k)["model"] for k in ("chat", "scheduled_agent", "deep", "plays_draft")},
         "memory_file": str(runtime_memory_file),
         "memory_source_file": str(source_memory_file),
         "memory_strategy": settings.claude_memory_strategy,

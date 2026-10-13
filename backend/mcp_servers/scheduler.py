@@ -33,7 +33,7 @@ try:
 except OSError:
     import tempfile
 
-    _LOG_DIR = Path(tempfile.gettempdir()) / "mypf-mcp-logs"
+    _LOG_DIR = Path(tempfile.gettempdir()) / "openpf-mcp-logs"
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("scheduler-mcp")
@@ -97,6 +97,12 @@ def create_scheduled_task(
         task_kind: One of claude|leveraged_cycle|leveraged_scan|leveraged_monitor.
         description: Optional metadata description.
     """
+    if os.environ.get("OPENPF_MCP_CONTEXT", "chat").strip().lower() != "chat":
+        # An unattended run (a scheduled task or recipe reading news, etc.) must
+        # not plant new prompts that run later; that is how an injection would
+        # persist. Only an attended chat can add tasks — recipes have their own
+        # approval flow for unattended suggestions.
+        return json.dumps({"ok": False, "error": "Scheduled tasks can only be created from a chat with the user. Suggest it to them instead."})
     logger.info("create_scheduled_task name=%s schedule=%s", name, schedule)
     init_db()
     db = SessionLocal()
@@ -235,6 +241,15 @@ def seed_default_scheduled_tasks() -> str:
         return _fmt({"ok": True, "created": len(rows), "items": rows})
     finally:
         db.close()
+
+
+# Per-context trimming from the registry (mcp_registry.McpServerSpec.hidden):
+# hidden tools aren't registered, so the model never sees them.
+for _hidden in filter(None, os.environ.get("OPENPF_MCP_HIDE_TOOLS", "").split(",")):
+    try:
+        mcp.remove_tool(_hidden.strip())
+    except Exception:  # noqa: BLE001 — unknown name: nothing to hide
+        pass
 
 
 if __name__ == "__main__":

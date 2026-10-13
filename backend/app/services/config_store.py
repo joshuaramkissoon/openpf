@@ -20,11 +20,11 @@ RISK_DEFAULT = {
     "max_daily_notional": settings.max_daily_notional,
     "max_position_weight": settings.max_position_weight,
     "duplicate_order_window_seconds": settings.duplicate_order_window_seconds,
+    "max_crypto_pct_of_book": settings.max_crypto_pct_of_book,
 }
 
 BROKER_DEFAULT = {
     "broker_mode": settings.broker_mode,
-    "autopilot_enabled": settings.autopilot_enabled,
     "t212_base_env": settings.t212_base_env,
     # Runs the in-process scheduler (scheduled jobs incl. the alpha loop).
     # Defaults to the env flag so behaviour is unchanged until toggled in-app.
@@ -63,7 +63,8 @@ TELEGRAM_DEFAULT = {
 }
 
 LEVERAGED_DEFAULT = {
-    "enabled": True,
+    # Labs feature: off for new installs (existing DB rows keep their value).
+    "enabled": False,
     "account_kind": "stocks_isa",
     "auto_execute_enabled": False,
     "per_position_notional": 200.0,
@@ -113,7 +114,8 @@ class ConfigStore:
         return record.value
 
     def get_risk(self) -> dict[str, Any]:
-        return self.get("risk_config", RISK_DEFAULT)
+        # Merge so keys added later (e.g. the crypto cap) exist on older rows.
+        return {**RISK_DEFAULT, **(self.get("risk_config", RISK_DEFAULT) or {})}
 
     def set_risk(self, value: dict[str, Any]) -> dict[str, Any]:
         merged = {**self.get_risk(), **value}
@@ -122,7 +124,15 @@ class ConfigStore:
     def get_broker(self) -> dict[str, Any]:
         # Merge with defaults so newly-added keys (e.g. scheduler_enabled) are
         # always present even for broker_config rows saved before they existed.
-        return {**BROKER_DEFAULT, **(self.get("broker_config", BROKER_DEFAULT) or {})}
+        merged = {**BROKER_DEFAULT, **(self.get("broker_config", BROKER_DEFAULT) or {})}
+        # The old all-or-nothing autopilot is gone (standing permissions replace
+        # it). Older rows still carry the key: drop it so it reads as simply off.
+        merged.pop("autopilot_enabled", None)
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox():
+            merged["t212_base_env"] = "sandbox"  # never demo/live from a sandbox instance
+        return merged
 
     def set_broker(self, value: dict[str, Any]) -> dict[str, Any]:
         merged = {**self.get_broker(), **value}
@@ -201,6 +211,23 @@ class ConfigStore:
         return merged
 
     def get_credentials(self) -> dict[str, Any]:
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox():
+            # Sandbox: only the mock broker's fake keys exist. DB-stored (or env)
+            # keys are ignored outright, so a demo pointed at a real DB still
+            # can't authenticate anywhere real.
+            from app.services.sandbox_broker import SANDBOX_CREDENTIALS
+
+            stored = self.get("credentials", CREDENTIALS_DEFAULT) or {}
+            return {
+                kind: {
+                    **SANDBOX_CREDENTIALS[kind],
+                    "enabled": bool((stored.get(kind) or {}).get("enabled", True)),
+                    "exec_enabled": True,
+                }
+                for kind in ACCOUNT_KINDS
+            }
         current = self.get("credentials", CREDENTIALS_DEFAULT)
         normalized = self._normalize_credentials_map(current)
         # If account-specific credentials are provided through environment variables,
@@ -243,6 +270,17 @@ class ConfigStore:
         return self.set("credentials", normalized)
 
     def set_account_credentials(self, account_kind: AccountKind, value: dict[str, Any]) -> dict[str, Any]:
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox():
+            # Only the enabled toggle is meaningful; keys are fixed to the mock broker.
+            stored = dict(self.get("credentials", CREDENTIALS_DEFAULT) or {})
+            entry = dict(stored.get(account_kind) or {})
+            if "enabled" in value:
+                entry["enabled"] = bool(value["enabled"])
+            stored[account_kind] = entry  # incoming keys are dropped, never stored
+            self.set("credentials", stored)
+            return self.get_credentials()
         all_creds = self.get_credentials()
         entry = all_creds.get(account_kind, {})
         incoming_key = value.get("t212_api_key")
@@ -363,7 +401,7 @@ class ConfigStore:
     def get_leveraged(self) -> dict[str, Any]:
         current = self.get("leveraged_config", LEVERAGED_DEFAULT)
         merged = {**LEVERAGED_DEFAULT, **(current or {})}
-        merged["enabled"] = bool(merged.get("enabled", True))
+        merged["enabled"] = bool(merged.get("enabled", False))
         merged["auto_execute_enabled"] = bool(merged.get("auto_execute_enabled", False))
         # Leveraged execution rail: ISA only.
         merged["account_kind"] = "stocks_isa"

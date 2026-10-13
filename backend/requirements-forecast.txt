@@ -2,7 +2,7 @@
 #
 # These are intentionally split out of requirements.txt because torch is
 # heavy and the core API / chat runtime must run without it. Install only
-# on a machine that will run the forecast MCP server (e.g. Josh's Mac mini
+# on a machine that will run the forecast MCP server (e.g. an always-on Mac mini
 # M4, where torch uses the Apple Silicon `mps` backend):
 #
 #     pip install -r requirements.txt -r requirements-forecast.txt

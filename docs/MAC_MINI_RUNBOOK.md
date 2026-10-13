@@ -1,4 +1,4 @@
-# Mac Mini Runbook (MyPF V2)
+# Mac Mini Runbook (OpenPF)
 
 ## 1) Required Secrets
 
@@ -31,22 +31,22 @@ X_API_BEARER_TOKEN=...
 ## 2) Recommended Secret Handling
 
 Store env file outside project, e.g.:
-- `~/.config/mypf/backend.env`
+- `~/.config/openpf/backend.env`
 
 Permissions:
 
 ```bash
-chmod 600 ~/.config/mypf/backend.env
+chmod 600 ~/.config/openpf/backend.env
 ```
 
 Run backend:
 
 ```bash
 set -a
-source ~/.config/mypf/backend.env
+source ~/.config/openpf/backend.env
 set +a
-cd /Users/you/dev/mypf/backend
-/Users/you/dev/mypf/.venv/bin/uvicorn app.main:app --reload --port 8000
+cd /path/to/openpf/backend
+/path/to/openpf/.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
 ## 3) First Boot Checklist
@@ -87,7 +87,7 @@ If ISP IP changes, update Trading 212 allowlist.
 ## 6) Operational Safety Defaults
 
 - Start with `BROKER_MODE=paper` even in live env.
-- Keep `AUTOPILOT_ENABLED=false` until intent quality is validated.
+- Archie only acts on his own under standing permissions you grant in Settings → Safety; start with none.
 - Set conservative risk rails in Control Tower.
 
 ## 7) Failure Triage

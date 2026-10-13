@@ -1,7 +1,7 @@
-"""Autopilot portfolio optimiser / rebalancer.
+"""Core-book portfolio optimiser / rebalancer.
 
 Manages the *long-term core book* (Invest + ISA equity holdings) — distinct from
-the short-term leveraged engine. The design goal is **autopilot**: Archie owns
+the short-term leveraged engine. The design goal is low effort: Archie owns
 the objective (read from a structured policy with sane defaults), proactively
 proposes a concrete rebalance, and the operator just approves. No knobs to set
 per-run; tuning is a one-line policy change Archie can make when the user says
@@ -275,7 +275,8 @@ def propose_rebalance(db: Session, account_kind: str = "all") -> dict[str, Any]:
 
     The trades land in the normal Execution queue as ``status="proposed"`` — the
     same one-tap approve/reject flow as every other proposal. Nothing executes
-    here; the operator (or Archie, with auto-execute) approves. Returns the plan
+    here; the operator approves, or a standing rebalance permission
+    they granted does (permissions_service — still via execute_intent). Returns the plan
     plus the created intent ids.
     """
     from app.models.entities import TradeIntent

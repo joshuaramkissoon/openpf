@@ -13,7 +13,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import LeveragedSignal, LeveragedTrade, ScheduledTaskLog, TradeIntent
-from app.services.claude_sdk_config import project_root
+from app.services.claude_sdk_config import memory_dir, project_root
 from app.services.config_store import ConfigStore
 from app.services.instrument_cache_service import instrument_cache_paths, refresh_instrument_cache
 from app.services.leveraged_market import LeveragedMarketError, get_price, get_technicals
@@ -37,8 +37,7 @@ def _utcnow() -> datetime:
 
 
 def _trade_log_dir() -> Path:
-    root = project_root()
-    out = root / ".claude" / "runtime" / "memory" / "trades"
+    out = memory_dir() / "trades"
     out.mkdir(parents=True, exist_ok=True)
     return out
 
@@ -313,6 +312,50 @@ def get_policy(db: Session) -> dict[str, Any]:
     if policy != store.get_leveraged():
         store.set_leveraged(policy)
     return policy
+
+
+# Agent-suggested policy updates may only TIGHTEN the rails. Lower-is-tighter
+# caps where 0 means "disabled/unlimited" (so 0 is never a tightening).
+_AGENT_TIGHTEN_ONLY_CAPS = (
+    "per_position_notional",
+    "max_total_exposure",
+    "max_open_positions",
+    "stop_loss_pct",
+    "daily_loss_limit_gbp",
+    "max_daily_trades",
+    "max_hold_days",
+)
+# Strategy knobs that don't loosen risk.
+_AGENT_FREE_KEYS = ("scan_symbols", "instrument_priority", "take_profit_pct", "daily_profit_target_gbp", "close_time_uk")
+
+
+def filter_agent_policy_patch(current: dict[str, Any], patch: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Split an agent-originated policy patch into (allowed, rejected-with-reason).
+
+    The agent can never enable auto-execution, (re)enable the engine, allow
+    overnight holds, or loosen any cap — those are human-only decisions."""
+    allowed: dict[str, Any] = {}
+    rejected: dict[str, str] = {}
+    for key, value in (patch or {}).items():
+        if key in _AGENT_FREE_KEYS:
+            allowed[key] = value
+        elif key in _AGENT_TIGHTEN_ONLY_CAPS:
+            try:
+                new_v, cur_v = float(value), float(current.get(key) or 0)
+            except (TypeError, ValueError):
+                rejected[key] = "not a number"
+                continue
+            if new_v > 0 and (cur_v <= 0 or new_v <= cur_v):
+                allowed[key] = value
+            else:
+                rejected[key] = "agents may only tighten rails"
+        elif key == "enabled" and value is False:
+            allowed[key] = False  # pausing the engine is always safe
+        elif key == "allow_overnight" and value is False:
+            allowed[key] = False
+        else:
+            rejected[key] = "human-only setting"
+    return allowed, rejected
 
 
 def update_policy(db: Session, patch: dict[str, Any], actor: str = "user") -> dict[str, Any]:
@@ -838,7 +881,7 @@ def execute_signal(db: Session, signal_id: str, source: str = "manual") -> Lever
         if not exec_creds.get("exec_enabled", True):
             raise LeveragedError("live execution is disabled for stocks_isa (enable it in Settings)")
         if not exec_creds.get("t212_api_key") or not exec_creds.get("t212_api_secret"):
-            raise LeveragedError("no execution key configured for stocks_isa (add it in Settings → Credentials)")
+            raise LeveragedError("no execution key configured for stocks_isa (add a trade key in Settings → Accounts → Trading 212)")
         client = build_t212_client(store, account_kind="stocks_isa", purpose="execute")
         try:
             resp = client.place_market_order(signal.instrument_code, qty)
@@ -1632,7 +1675,7 @@ def adopt_position(
 
 
 def _leveraged_memory_dir() -> Path:
-    out = project_root() / ".claude" / "runtime" / "memory" / "leveraged"
+    out = memory_dir() / "leveraged"
     out.mkdir(parents=True, exist_ok=True)
     return out
 

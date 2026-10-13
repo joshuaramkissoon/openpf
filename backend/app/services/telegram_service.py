@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import anyio
+import logging
 from datetime import datetime
+
+import anyio
 from typing import Iterable
 
 from sqlalchemy import desc, select
@@ -14,6 +16,8 @@ from app.services.config_store import ConfigStore
 from app.services.llm_service import maybe_answer_with_openai
 from app.services.telegram_client import TelegramError, get_updates, send_message
 
+logger = logging.getLogger(__name__)
+
 
 def _message_for_status(db: Session) -> str:
     from app.services.portfolio_service import get_portfolio_snapshot
@@ -23,7 +27,7 @@ def _message_for_status(db: Session) -> str:
     metrics = snapshot["metrics"]
 
     return (
-        "*MyPF Status*\n"
+        "*OpenPF Status*\n"
         f"- Equity: `{account['currency']} {account['total']:,.2f}`\n"
         f"- Cash: `{account['currency']} {account['free_cash']:,.2f}` ({metrics['cash_ratio']:.1%})\n"
         f"- P/L: `{account['currency']} {account['ppl']:,.2f}`\n"
@@ -45,7 +49,8 @@ def _open_intents(db: Session, limit: int = 8) -> list[TradeIntent]:
 
 def _resolve_intent_by_token(db: Session, token: str) -> TradeIntent | None:
     key = token.strip().lower()
-    if not key:
+    # Short prefixes are too easy to fat-finger onto the wrong trade.
+    if len(key) < 4:
         return None
 
     intents = list(
@@ -57,15 +62,14 @@ def _resolve_intent_by_token(db: Session, token: str) -> TradeIntent | None:
         .scalars()
         .all()
     )
-    for intent in intents:
-        if intent.id.lower().startswith(key):
-            return intent
-    return None
+    matches = [i for i in intents if i.id.lower().startswith(key)]
+    # Ambiguous prefix: refuse rather than act on whichever sorts first.
+    return matches[0] if len(matches) == 1 else None
 
 
 def _help_text() -> str:
     return (
-        "*MyPF Telegram Commands*\n"
+        "*OpenPF Telegram Commands*\n"
         "- `/status` portfolio snapshot\n"
         "- `/accounts` account breakdown\n"
         "- `/run` refresh + run agent\n"
@@ -163,9 +167,16 @@ def _answer_question(db: Session, question: str) -> str:
 
 
 def _is_authorized(user_id: int | None, cfg: dict) -> bool:
-    allowed = [int(x) for x in cfg.get("allowed_user_ids", [])]
+    allowed: list[int] = []
+    for raw in cfg.get("allowed_user_ids") or []:
+        try:
+            allowed.append(int(str(raw).strip()))
+        except (TypeError, ValueError):
+            continue
+    # Deny-all until an allowlist is configured: the bot can approve and
+    # execute trades, so an empty list must never mean "anyone".
     if not allowed:
-        return True
+        return False
     if user_id is None:
         return False
     return int(user_id) in allowed
@@ -206,7 +217,7 @@ def handle_telegram_text(db: Session, text: str) -> str:
 
     if cmd == "/run":
         refresh_portfolio(db)
-        result = run_agent(db, include_watchlist=True, execute_auto=False)
+        result = run_agent(db, include_watchlist=True)
         return (
             "Agent run completed.\n"
             f"- Regime: {result['market_regime']}\n"
@@ -353,10 +364,10 @@ def handle_telegram_text(db: Session, text: str) -> str:
             return f"Usage: `{cmd} <intent_id_prefix>`"
         target = _resolve_intent_by_token(db, parts[1])
         if not target:
-            return "Intent not found. Use /intents to list IDs."
+            return "Intent not found, or that ID prefix matches more than one. Use /intents and send at least 4 characters of the ID."
         try:
             if cmd == "/approve":
-                approve_intent(db, target.id, note="telegram approval")
+                approve_intent(db, target.id, note="telegram approval", actor="human")
                 return f"Approved `{target.id[:8]}` {target.side.upper()} {target.symbol}."
             if cmd == "/reject":
                 reject_intent(db, target.id, note="telegram rejection")
@@ -478,7 +489,9 @@ def process_telegram_updates(db: Session) -> int:
         update_id = int(update.get("update_id", 0))
         new_offset = max(new_offset, update_id + 1)
 
-        message = update.get("message") or update.get("edited_message")
+        # Edited messages are ignored: editing an old "/execute <id>" must not
+        # re-run the command.
+        message = update.get("message")
         if not message:
             continue
 
@@ -491,19 +504,31 @@ def process_telegram_updates(db: Session) -> int:
         from_user = message.get("from", {})
         user_id = from_user.get("id")
 
-        if not cfg.get("chat_id") and chat_id:
-            cfg = cfg_store.set_telegram({"chat_id": chat_id})
-
         if not _is_authorized(user_id if isinstance(user_id, int) else None, cfg):
             if chat_id:
                 try:
-                    send_message(token, chat_id, "Unauthorized user for this bot.")
+                    send_message(
+                        token,
+                        chat_id,
+                        f"Unauthorized user for this bot. Add your user id ({user_id}) to "
+                        "Telegram → allowed user ids in Settings to enable it.",
+                    )
                 except TelegramError:
                     pass
             processed += 1
             continue
 
-        reply = handle_telegram_text(db, text)
+        # Bind the notification chat only for an allowlisted user, so a stranger
+        # messaging the bot first can't capture the owner's alerts.
+        if not cfg.get("chat_id") and chat_id:
+            cfg = cfg_store.set_telegram({"chat_id": chat_id})
+
+        try:
+            reply = handle_telegram_text(db, text)
+        except Exception:  # noqa: BLE001 — one bad message mustn't wedge the poll loop
+            logger.exception("Telegram command failed")
+            db.rollback()
+            reply = "Something went wrong handling that message. Check the OpenPF logs."
         if chat_id:
             try:
                 send_message(token, chat_id, reply)

@@ -4,6 +4,7 @@ import re
 from contextlib import contextmanager
 from datetime import datetime
 from threading import Lock
+import logging
 from typing import Any, Literal
 
 from sqlalchemy import desc, select
@@ -18,12 +19,17 @@ from app.services.analytics import (
     signal_for_symbol,
 )
 from app.services.config_store import ACCOUNT_KINDS, ConfigStore
+from app.services.connections_service import instruments_cache, is_external_account
+from app.services.connections_service import position_meta as connection_position_meta
+from app.services.crypto_exchanges import is_crypto_account
 from app.services.fx import get_fx_rate
 from app.services.leveraged_market import resolve_yfinance_ticker
 from app.services.t212_client import T212AuthError, T212Error, T212RateLimitError, build_t212_client, normalize_instrument_code
 
-AccountViewKind = Literal["all", "invest", "stocks_isa"]
+# "all", "invest", "stocks_isa", "crypto", or any connection account (e.g. "ibkr:u1234567").
+AccountViewKind = str
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 _refresh_lock = Lock()
 _last_refresh_ts: datetime | None = None
@@ -469,6 +475,20 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
                 )
                 source_parts.append("mock-fallback")
 
+        # Every other connection (crypto exchanges, brokers, aggregators): same
+        # snapshot timestamp, so totals and the equity curve include them. A
+        # connection that can't be reached carries its last rows forward.
+        try:
+            from app.services.connections_service import snapshot_rows as _connection_rows
+
+            c_accounts, c_positions, c_sources = _connection_rows(db, config, fetched_at)
+            account_rows.extend(c_accounts)
+            position_rows.extend(c_positions)
+            source_parts.extend(c_sources)
+        except Exception:  # noqa: BLE001 — connections never break the T212 refresh
+            logger.warning("connection snapshot failed", exc_info=True)
+            source_parts.append("error:connections:Unexpected")
+
         db.add_all(account_rows)
         db.add_all(position_rows)
         db.commit()
@@ -491,6 +511,12 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
 
             maybe_sync_all(db)
         except Exception:  # noqa: BLE001
+            pass
+        try:
+            from app.services.logo_service import prewarm_holdings_async
+
+            prewarm_holdings_async()
+        except Exception:  # noqa: BLE001 — logos never affect a sync
             pass
 
     return result
@@ -545,7 +571,7 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
     ORIGINAL-case ``ticker`` so the venue can be recovered for yfinance
     resolution. Never raises — returns {} when metadata is unavailable.
 
-    Each value: ``{"name": ..., "ticker": <original-case>, "currency": <code>}``.
+    Each value: ``{"name": ..., "ticker": <original-case>, "currency": <code>, "type": STOCK|ETF|…}``.
     """
     global _instrument_meta_cache
     now = datetime.now().timestamp()
@@ -576,6 +602,8 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
                     "short_name": str(short).strip() if short else "",
                     "ticker": ticker,
                     "currency": str(inst.get("currencyCode", "") or ""),
+                    "type": str(inst.get("type", "") or ""),
+                    "isin": str(inst.get("isin", "") or ""),
                 }
     except Exception:  # noqa: BLE001 — metadata is best-effort, never block the snapshot
         mapping = {}
@@ -583,6 +611,21 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
     if mapping:
         _instrument_meta_cache = (now, mapping)
     return mapping
+
+
+_T212_CODE_RE = re.compile(r"^(.+?)_(?:[A-Z]{2}_)?EQ$")
+_VENUE_TAIL_RE = re.compile(r"^([0-9A-Z.]+?)([a-z]+)\d*$")
+
+
+def t212_symbol(code: str | None) -> str:
+    """The market symbol inside a T212 code, from its ORIGINAL case:
+    ``AAPL_US_EQ`` → ``AAPL``, ``BAl_EQ`` → ``BA`` (``l`` is the London venue
+    letter), ``3ASMl1_EQ`` → ``3ASM``. Upper-casing first would read ``BAL``."""
+    raw = (code or "").strip()
+    m = _T212_CODE_RE.match(raw)
+    core = m.group(1) if m else raw.split("_", 1)[0]
+    v = _VENUE_TAIL_RE.match(core)
+    return (v.group(1) if v else core).upper()
 
 
 def display_ticker(legacy_symbol: str | None, short_name: str | None) -> str:
@@ -650,7 +693,7 @@ def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[s
     prefix: list[dict[str, Any]] = []
     partial: list[dict[str, Any]] = []
     for code, info in meta.items():
-        symbol = code.split("_", 1)[0].upper()
+        symbol = t212_symbol(info.get("ticker") or code)
         name = str(info.get("name", ""))
         short = str(info.get("short_name", "")).upper()
         row = {
@@ -740,6 +783,8 @@ def get_portfolio_snapshot(
         for p in sorted(positions, key=lambda row: row.value, reverse=True)[:signal_budget]
         if p.instrument_code
     }
+    # Crypto always gets its volatility: it dominates the book's risk per £.
+    signal_targets |= {p.instrument_code for p in positions if is_crypto_account(p.account_kind) and p.instrument_code}
     signal_cache: dict[str, Any] = {}
     meta_map = _instrument_meta_map(db)
 
@@ -766,6 +811,7 @@ def get_portfolio_snapshot(
     account_currency_map = {a.account_kind: a.currency for a in accounts_all}
 
     enriched: list[dict[str, Any]] = []
+    external_meta: dict[str, Any] | None = None
     for p in positions:
         raw_total_cost = float(getattr(p, "total_cost", 0.0) or 0.0)
         if raw_total_cost <= 0 and abs(float(p.value or 0.0) - float(p.ppl or 0.0)) > 0:
@@ -785,7 +831,17 @@ def get_portfolio_snapshot(
         converted_current_price = _to_target(p.current_price, p.currency)
         weight = (converted_value / total_value) if total_value else 0.0
 
-        resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
+        if is_crypto_account(p.account_kind):
+            from app.services.crypto_service import position_meta
+
+            resolved = position_meta(p.ticker, p.instrument_code, p.currency)
+        elif is_external_account(p.account_kind):
+            if external_meta is None:
+                external_meta = instruments_cache(ConfigStore(db))
+            resolved = connection_position_meta(None, p.account_kind, p.ticker, p.instrument_code, p.currency,
+                                                _cache=external_meta)
+        else:
+            resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
 
         # Technicals must run on the resolved yfinance ticker (e.g. NUCG.L),
         # not the raw upper-cased T212 code — otherwise London/Xetra/Euronext
@@ -830,6 +886,7 @@ def get_portfolio_snapshot(
         "top_position_weight": max((row["weight"] for row in enriched), default=0.0),
         "estimated_beta": estimate_portfolio_beta(enriched, max_assets=8),
         "estimated_volatility": estimated_portfolio_volatility(enriched),
+        "crypto_weight": sum(row["weight"] for row in enriched if is_crypto_account(row["account_kind"])),
     }
 
     # When building LLM context (strip_prices=True), drop price-derived fields:
@@ -841,10 +898,21 @@ def get_portfolio_snapshot(
             for key in ("current_price", "value", "ppl", "weight"):
                 row.pop(key, None)
 
+    try:
+        from app.services.connections_service import account_directory
+
+        directory = account_directory(ConfigStore(db))
+    except Exception:  # noqa: BLE001 — labels are cosmetic
+        directory = {}
+
     def _account_item(a: Any) -> dict[str, Any]:
+        info = directory.get(a.account_kind) or {}
         item = {
             "fetched_at": a.fetched_at,
             "account_kind": a.account_kind,
+            "label": info.get("label"),
+            # Read-only connections (IBKR, SnapTrade, query-only crypto keys): analyse, never execute.
+            "read_only": bool(info.get("read_only")),
             "currency": target_currency,
             "free_cash": _to_target(a.free_cash, a.currency),
         }

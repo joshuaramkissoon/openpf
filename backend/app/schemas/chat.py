@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ChatSessionCreate(BaseModel):
@@ -26,6 +26,16 @@ class ChatMessageItem(BaseModel):
 
 class ChatSendRequest(BaseModel):
     content: str = Field(min_length=1, max_length=12000)
+
+    @field_validator("content")
+    @classmethod
+    def _clean(cls, value: str) -> str:
+        from app.services.chat_errors import clean_chat_input
+
+        cleaned = clean_chat_input(value)
+        if not cleaned:
+            raise ValueError("message is empty")
+        return cleaned
     account_kind: Literal["all", "invest", "stocks_isa"] = "all"
     display_currency: Literal["GBP", "USD"] = "GBP"
     redact_values: bool = False

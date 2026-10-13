@@ -10,9 +10,10 @@ a missing snapshot/price never 500s the view, it just narrows what's returned.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -28,7 +29,11 @@ from app.schemas.instruments import (
     InstrumentThesis,
     InstrumentWatchlist,
 )
-from app.services import leveraged_market, portfolio_service, watchlist_service
+from app.services import instrument_insight as instrument_insight_service
+from app.services import leveraged_market, manual_trade, portfolio_service, proposal_service, watchlist_service
+from app.services.execution_service import ExecutionError
+from app.services.t212_client import T212Error
+from app.services.t212_errors import classify_t212_error
 
 router = APIRouter(prefix="/instruments", tags=["instruments"])
 
@@ -75,6 +80,29 @@ def search_instruments(
 ) -> InstrumentSearchResponse:
     rows = portfolio_service.search_instruments(q, db, limit=limit)
     return InstrumentSearchResponse(results=[InstrumentSearchRow(**r) for r in rows])
+
+
+@router.get("/names")
+def instrument_names(
+    symbols: str = Query("", description="comma-separated market symbols, e.g. BA.L,RHM.DE"),
+    account: str | None = Query(None, description="flag listings this account can't hold"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Company name, clean ticker, exchange, sector, price and whether Trading 212
+    lists each symbol. Names are cached; slow lookups finish in the background."""
+    from app.services import instrument_names as names
+
+    wanted = [s for s in symbols.split(",") if s.strip()][:40]
+    return {"items": names.describe(db, wanted, account_kind=account)}
+
+
+@router.get("/names/search")
+def instrument_names_search(q: str = Query("", max_length=60), limit: int = Query(8, ge=1, le=20),
+                            db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Typeahead for plays: Trading 212 listings as market symbols with company names."""
+    from app.services import instrument_names as names
+
+    return {"items": names.search(db, q, limit=limit) if q.strip() else []}
 
 
 @router.get("/{ticker}/detail", response_model=InstrumentDetail)
@@ -261,3 +289,101 @@ def instrument_detail(
         target_distance_pct=target_distance_pct,
         display_currency=display_currency,
     )
+
+
+# ── Insight: the stock sheet's single aggregated payload ─────────────────────
+
+
+@router.get("/{ticker}/insight")
+def instrument_insight(
+    ticker: str,
+    wait: float = Query(instrument_insight_service.DEFAULT_WAIT_S, ge=0.0, le=8.0, description="seconds to wait for slow sections"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Everything the instrument sheet shows, section by section. Every section
+    is optional (null/empty when its source is missing); sections still loading
+    are named in ``pending`` — re-request to pick them up from the cache."""
+    try:
+        return instrument_insight_service.build_insight(ticker, db, wait_s=wait)
+    except instrument_insight_service.UnknownInstrument:
+        raise HTTPException(status_code=404, detail=f"Unknown instrument {ticker!r}")
+
+
+class ProposeFromSheet(BaseModel):
+    side: str
+    account_kind: str
+    notional_gbp: float | None = Field(default=None, gt=0)
+    quantity: float | None = Field(default=None, gt=0)
+    rationale: str = ""
+
+
+@router.post("/{ticker}/propose")
+def propose_from_sheet(ticker: str, body: ProposeFromSheet, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Create a *proposed* trade intent from the sheet's sizer. Never executes:
+    it goes through the same validation and rails as Archie's proposals and
+    waits for a human to approve it in Decisions."""
+    ident = instrument_insight_service.resolve(ticker, db)
+    rationale = body.rationale.strip() or f"Sized by hand from the {ident['display_ticker']} sheet."
+    return proposal_service.propose_trade(
+        db,
+        side=body.side,
+        account_kind=body.account_kind,
+        rationale=rationale,
+        symbol=None if ident.get("instrument_code") else ident["display_ticker"],
+        instrument_code=ident.get("instrument_code"),
+        quantity=body.quantity,
+        notional_gbp=body.notional_gbp,
+        source="instrument_sheet",
+    )
+
+
+# ── Manual trades: the user trades from the sheet; no proposal ──────────────
+
+
+class ManualTradeAmount(BaseModel):
+    side: str
+    account_kind: str
+    notional_gbp: float = Field(gt=0)
+
+
+class UserAction(BaseModel):
+    """Proof the request came from a person pressing Trade in the review step.
+    Agents have no route here at all (no MCP tool; the app's own API is blocked
+    by their hooks); this makes the intent explicit in every request too."""
+
+    kind: Literal["manual_trade"]
+    reviewed: Literal[True]
+
+
+class ManualTradeRequest(ManualTradeAmount):
+    user_action: UserAction
+    live_confirmed: bool = False
+    note: str = Field(default="", max_length=500)
+
+
+@router.post("/{ticker}/trade/preview")
+def manual_trade_preview(ticker: str, body: ManualTradeAmount, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The review step: size, fees and every rail for a hand-placed order. Records nothing."""
+    ident = instrument_insight_service.resolve(ticker, db)
+    try:
+        return manual_trade.preview(db, ident, side=body.side, account_kind=body.account_kind, notional_gbp=body.notional_gbp)
+    except manual_trade.ManualTradeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{ticker}/trade")
+def manual_trade_place(ticker: str, body: ManualTradeRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Place the user's own order: recorded with source "user", approved as the
+    user, then executed through ``execute_intent`` (every rail re-checked)."""
+    ident = instrument_insight_service.resolve(ticker, db)
+    try:
+        return manual_trade.place(
+            db, ident, side=body.side, account_kind=body.account_kind, notional_gbp=body.notional_gbp,
+            live_confirmed=body.live_confirmed, note=body.note,
+        )
+    except manual_trade.ManualTradeError as exc:
+        status = 409 if exc.code == "needs_live_confirmation" else 400
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc), "violations": exc.violations}) from exc
+    except (ExecutionError, T212Error) as exc:
+        classified = classify_t212_error(exc, account_kind=body.account_kind)
+        raise HTTPException(status_code=classified.status_code, detail=classified.as_detail()) from exc

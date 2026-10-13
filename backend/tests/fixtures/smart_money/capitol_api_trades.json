@@ -1,0 +1,24 @@
+{
+  "trades": [
+    {
+      "id": "20011070-1",
+      "owner": "SP",
+      "asset": {"name": "NVIDIA Corporation - Common Stock", "ticker": "NVDA", "type": "ST", "typeDescription": "Stocks"},
+      "transaction": {"type": "P", "description": "Purchase", "category": "purchase", "tradeDate": "2026-08-20",
+                      "notificationDate": "2026-09-25", "filingDate": "2026-09-28", "amount": "$15,001 - $50,000",
+                      "amountMin": 15001, "amountMax": 50000, "capitalGains": false, "price": null},
+      "filing": {"docId": "20011070", "year": 2026, "pdfUrl": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20011070.pdf"},
+      "person": {"bioguideId": "X000001", "name": "Example Member", "firstName": "Example", "lastName": "Member",
+                 "state": "CA", "district": "12", "party": "D"}
+    },
+    {
+      "id": "20011070-2",
+      "owner": "SP",
+      "asset": {"name": "Treasury Bill", "ticker": null, "type": "GS", "typeDescription": "Government Securities"},
+      "transaction": {"type": "S (partial)", "description": "Sale (Partial)", "tradeDate": "2026-08-21",
+                      "filingDate": "2026-09-28", "amount": "$1,001 - $15,000"},
+      "filing": {"docId": "20011070", "year": 2026, "pdfUrl": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20011070.pdf"},
+      "person": {"name": "Example Member", "state": "CA", "district": "12", "party": "D"}
+    }
+  ]
+}

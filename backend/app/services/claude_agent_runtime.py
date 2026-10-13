@@ -4,7 +4,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,24 +11,12 @@ from typing import Any
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
-    parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS,
+    parse_setting_sources, project_root, resolve_sdk_cwd,
 )
+from app.services import mcp_registry, model_routing
 from app.services.research_service import fetch_news, fetch_x_posts, web_search
 
 settings = get_settings()
-
-_MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
-
-
-def _build_sdk_env() -> dict[str, str]:
-    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the
-    MCP subprocesses. Credentials live in subprocess memory only."""
-    env = resolve_t212_env()
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
-    return env
-
 
 def _ensure_workspace() -> Path:
     raw = Path(settings.agent_workspace).expanduser()
@@ -61,7 +48,7 @@ def run_sandboxed_python(code: str, input_payload: dict[str, Any] | None = None,
         proc = subprocess.run(
             ["python3", str(script_path)],
             cwd=temp_path,
-            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent.parent)},
+            env={**os.environ, **mcp_registry.sdk_env()},
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -246,69 +233,12 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
         if settings.agent_allow_bash:
             allowed_tools.append("Bash")
 
-        mcp_servers: dict[str, Any] = {}
-        t212_script = _MCP_SERVER_DIR / "t212.py"
-        market_script = _MCP_SERVER_DIR / "marketdata.py"
-        scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
-        fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
-        intel_script = _MCP_SERVER_DIR / "intel.py"
-
-        # Resolve a possibly-relative SQLite DATABASE_URL to an absolute
-        # path so MCP subprocesses (which may run with a different CWD)
-        # open the *same* database file as the main app.
-        _backend_root = str(_MCP_SERVER_DIR.parent)
-        _db_url = settings.database_url
-        if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
-            _rel = _db_url.replace("sqlite:///", "", 1)
-            _abs = str((Path(_backend_root) / _rel).resolve())
-            _db_url = f"sqlite:///{_abs}"
-        _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
-
-        if t212_script.is_file():
-            mcp_servers["trading212"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(t212_script)],
-                "env": _build_sdk_env(),
-            }
-            allowed_tools.extend(_T212_MCP_TOOLS)
-        if market_script.is_file():
-            mcp_servers["marketdata"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(market_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_MARKET_MCP_TOOLS)
-
-        if scheduler_script.is_file():
-            mcp_servers["scheduler"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(scheduler_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
-        if fundamentals_script.is_file():
-            mcp_servers["fundamentals"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(fundamentals_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
-        if intel_script.is_file():
-            mcp_servers["intel"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(intel_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_INTEL_MCP_TOOLS)
+        mcp_servers, mcp_tools = mcp_registry.build_mcp_servers(mcp_registry.AGENT)
+        allowed_tools.extend(mcp_tools)
 
         options = ClaudeAgentOptions(
             system_prompt=(
-                "You are MyPF's portfolio analyst agent — Archie's autonomous research cycle. "
+                "You are OpenPF's portfolio analyst agent — Archie's autonomous research cycle. "
                 "Your job is risk-aware, evidence-based, high-signal recommendations, never generic advice.\n\n"
                 "ESTABLISH THE MARKET REGIME FIRST — before any single-name work. Pull live data with the "
                 "marketdata tools and state the regime explicitly: SPY and QQQ vs their SMA50/SMA200 "
@@ -331,14 +261,15 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                 "(3) a regime caveat tying it back to the regime you established. "
                 "Flag concentration, liquidity, and downside risk. "
                 "This is ANALYSIS ONLY — never execute and never imply a trade has been executed; "
-                "intents are proposals for Josh to approve."
+                f"intents are proposals for {settings.user_name} to approve."
             ),
-            model=settings.claude_agent_model,
+            model=model_routing.sdk_model("agent_run"),
             cwd=str(sdk_cwd),
             add_dirs=[str(workspace)],
             max_turns=settings.agent_max_turns,
             allowed_tools=allowed_tools,
             setting_sources=setting_sources,
+            env=mcp_registry.sdk_env(),
             mcp_servers=mcp_servers if mcp_servers else {},
             hooks=build_security_hooks(),
             agents=build_subagents(),
@@ -377,7 +308,7 @@ def run_claude_analyst_cycle(snapshot: dict[str, Any], watchlist: list[str], ris
                     _cost_db,
                     source="agent_run",
                     source_id=_source_id,
-                    model=settings.claude_agent_model,
+                    model=model_routing.sdk_model("agent_run"),
                     total_cost_usd=cost_info.get("total_cost_usd"),
                     duration_ms=cost_info.get("duration_ms"),
                     num_turns=cost_info.get("num_turns"),
@@ -439,7 +370,7 @@ def run_research_request(
     Archie orchestrates the researcher + quant subagents over the market-data,
     forecast, and read-only T212 tools to evaluate ``objective``/``hypothesis``,
     returning a structured verdict + a markdown report and writing a persistent
-    artifact under .claude/runtime/artifacts/research/.
+    artifact under artifacts/research/ in the runtime folder.
     """
     objective = (objective or "").strip()
     subject = (subject or "").strip()
@@ -503,32 +434,17 @@ def run_research_request(
         if settings.agent_allow_bash:
             allowed_tools.append("Bash")
 
-        _backend_root = str(_MCP_SERVER_DIR.parent)
-        _db_url = settings.database_url
-        if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
-            _rel = _db_url.replace("sqlite:///", "", 1)
-            _abs = str((Path(_backend_root) / _rel).resolve())
-            _db_url = f"sqlite:///{_abs}"
-        _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
-
-        mcp_servers: dict[str, Any] = {}
-        for name, script, env, tools in (
-            ("trading212", _MCP_SERVER_DIR / "t212.py", _build_sdk_env(), _T212_MCP_TOOLS),
-            ("marketdata", _MCP_SERVER_DIR / "marketdata.py", _mcp_env, _MARKET_MCP_TOOLS),
-            ("forecast", _MCP_SERVER_DIR / "forecast.py", _mcp_env, _FORECAST_MCP_TOOLS),
-            ("fundamentals", _MCP_SERVER_DIR / "fundamentals.py", _mcp_env, _FUNDAMENTALS_MCP_TOOLS),
-        ):
-            if script.is_file():
-                mcp_servers[name] = {"type": "stdio", "command": sys.executable, "args": [str(script)], "env": env}
-                allowed_tools.extend(tools)
+        mcp_servers, mcp_tools = mcp_registry.build_mcp_servers(mcp_registry.RESEARCH)
+        allowed_tools.extend(mcp_tools)
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
-            model=settings.claude_agent_model,
+            model=model_routing.sdk_model("agent_run"),
             cwd=str(sdk_cwd),
             max_turns=30,
             allowed_tools=allowed_tools,
             setting_sources=setting_sources,
+            env=mcp_registry.sdk_env(),
             mcp_servers=mcp_servers if mcp_servers else {},
             hooks=build_security_hooks(),
             agents=build_subagents(),
@@ -568,7 +484,7 @@ def run_research_request(
                     _cost_db,
                     source="research",
                     source_id=cost_info.get("session_id") or "research",
-                    model=settings.claude_agent_model,
+                    model=model_routing.sdk_model("agent_run"),
                     total_cost_usd=cost_info.get("total_cost_usd"),
                     duration_ms=cost_info.get("duration_ms"),
                     num_turns=cost_info.get("num_turns"),

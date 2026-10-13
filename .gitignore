@@ -51,3 +51,40 @@ backend/kronos_forecast_*.png
 
 # Also ignore a node_modules symlink (the trailing-slash pattern above only matches directories)
 node_modules
+
+# Sandbox broker state (local mock T212)
+backend/sandbox_state.json
+sandbox_state.json
+
+# Internal planning notes (kept locally, not published)
+docs/plans/
+docs/superpowers/
+docs/reviews/
+
+# Demo sandbox data
+.demo/
+
+# Views (agent-built pages; user data)
+backend/data/views/
+
+# Recipes made by you or Archie (personal data; built-ins ship in backend/app/recipes_builtin)
+backend/data/recipes/
+
+# Company logo cache (fetched once by the server; see docs/logos.md)
+backend/data/logos/
+
+# Connection secrets key (encrypts broker/exchange keys at rest) — back it up with the DB, never commit it
+openpf-secrets.key
+*.secrets.key
+
+# Belt and braces for secrets and local data
+.env.*
+!.env.example
+!**/.env.example
+*.db-*
+*.sqlite
+*.pem
+*.key
+.claude/worktrees/
+.claude/runtime/memory/
+.claude/runtime/artifacts/

@@ -16,24 +16,45 @@ export type PrivacyMode = "off" | "scramble" | "blur"
 // useful privacy mode, so it's the first stop from Off.
 export const PRIVACY_MODES: PrivacyMode[] = ["off", "blur", "scramble"]
 
-const STORAGE_KEY = "mypf.presentation.mode"
-const LEGACY_KEY = "mypf.presentation.mask"
+const STORAGE_KEY = "openpf.presentation.mode"
+// Pre-rename keys, read once and migrated: the old mode key, and the even older
+// boolean toggle ('1' meant scramble).
+const OLD_MODE_KEY = "mypf.presentation.mode"
+const OLD_MASK_KEY = "mypf.presentation.mask"
 
-/** Read the persisted mode, migrating the old boolean key (`'1'` -> scramble). */
-export function loadPrivacyMode(): PrivacyMode {
-  if (typeof window === "undefined") return "off"
-  const stored = window.localStorage.getItem(STORAGE_KEY)
-  if (stored === "off" || stored === "scramble" || stored === "blur") return stored
-  // Migrate the legacy boolean toggle: a truthy mask meant the scramble mode.
-  if (window.localStorage.getItem(LEGACY_KEY) === "1") return "scramble"
-  return "off"
+function isMode(value: string | null): value is PrivacyMode {
+  return value === "off" || value === "scramble" || value === "blur"
 }
 
-/** Persist the mode and keep the legacy boolean key roughly in sync. */
+/** Read the persisted mode, migrating the pre-rename keys on first read. */
+export function loadPrivacyMode(): PrivacyMode {
+  if (typeof window === "undefined") return "off"
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY)
+    if (isMode(stored)) return stored
+    const old = window.localStorage.getItem(OLD_MODE_KEY)
+    const migrated: PrivacyMode = isMode(old)
+      ? old
+      : window.localStorage.getItem(OLD_MASK_KEY) === "1"
+        ? "scramble"
+        : "off"
+    window.localStorage.setItem(STORAGE_KEY, migrated)
+    window.localStorage.removeItem(OLD_MODE_KEY)
+    window.localStorage.removeItem(OLD_MASK_KEY)
+    return migrated
+  } catch {
+    return "off"
+  }
+}
+
+/** Persist the mode. */
 export function savePrivacyMode(mode: PrivacyMode): void {
   if (typeof window === "undefined") return
-  window.localStorage.setItem(STORAGE_KEY, mode)
-  window.localStorage.setItem(LEGACY_KEY, mode === "off" ? "0" : "1")
+  try {
+    window.localStorage.setItem(STORAGE_KEY, mode)
+  } catch {
+    /* storage unavailable — mode lasts for this page only */
+  }
 }
 
 /** Off -> Scramble -> Blur -> Off. */

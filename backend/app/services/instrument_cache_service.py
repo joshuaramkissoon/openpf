@@ -8,14 +8,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.claude_sdk_config import project_root
+from app.services.claude_sdk_config import memory_dir, project_root
 from app.services.config_store import ConfigStore
 from app.services.t212_client import T212Error, build_t212_client
 
 
 def _instrument_dir() -> Path:
-    root = project_root()
-    out = root / ".claude" / "runtime" / "memory" / "instruments"
+    out = memory_dir() / "instruments"
     out.mkdir(parents=True, exist_ok=True)
     return out
 

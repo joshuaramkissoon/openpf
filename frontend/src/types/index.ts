@@ -41,6 +41,8 @@ export interface PortfolioMetrics {
   top_position_weight: number
   estimated_beta: number
   estimated_volatility: number
+  /** Share of the book on the crypto exchange (0 when none is connected). */
+  crypto_weight?: number
 }
 
 export interface PortfolioSnapshot {
@@ -55,11 +57,12 @@ export interface RiskConfig {
   max_daily_notional: number
   max_position_weight: number
   duplicate_order_window_seconds: number
+  /** Max share of the whole book in crypto (0.05 = 5%). */
+  max_crypto_pct_of_book?: number
 }
 
 export interface BrokerConfig {
   broker_mode: 'paper' | 'live'
-  autopilot_enabled: boolean
   t212_base_env: 'demo' | 'live'
   scheduler_enabled?: boolean
 }
@@ -306,11 +309,73 @@ export interface TradeIntent {
   rationale: string
   broker_mode: string
   account_kind?: string | null
+  source?: string | null
+  play_id?: string | null
+  play_title?: string | null
+  /** Play tranches: which tranche staged this order (groups a tranche's legs). */
+  tranche_index?: number | null
+  tranche_label?: string | null
+  instrument_name?: string | null
+  /** "For which play?" — 'play' | 'core' | null (not part of any play). */
+  owner_kind?: 'play' | 'core' | null
+  owner_play_id?: string | null
+  owner_label?: string | null
+  owner_inferred?: boolean
   approved_at?: string | null
+  /** "human", or "permission:<id>" when a standing permission approved it. */
+  approved_by?: string | null
+  permission_label?: string | null
+  category?: string | null
   executed_at?: string | null
   broker_order_id?: string | null
   execution_price?: number | null
   failure_reason?: string | null
+  /** Crypto proposals: exchange + cost estimates shown on the card. */
+  crypto?: CryptoEstimate | null
+  /** A suggestion for a read-only connection (IBKR, SnapTrade, …): place it in `place_in`, never Approve. */
+  read_only?: boolean
+  place_in?: string | null
+  account_label?: string | null
+  /** Staged for a later day's limit window (UTC date): can't be placed before it. */
+  not_before?: string | null
+  /** status "held": the part of an ask a notional limit stopped. Kept (staged: true) once re-proposed. */
+  held?: HeldInfo | null
+}
+
+/** One notional limit that stopped (part of) an ask. */
+export interface LimitBlock {
+  rail: 'max_single_order_notional' | 'max_daily_notional'
+  label: string
+  limit_gbp: number
+  requested_gbp: number
+  used_gbp: number | null
+  remaining_gbp: number
+  for_day?: string
+  message: string
+}
+
+export interface HeldInfo {
+  blocked: LimitBlock[]
+  reason: string
+  requested_gbp: number
+  for_day?: string
+  staged?: boolean
+}
+
+export interface CryptoEstimate {
+  exchange: string
+  label: string
+  quote: string
+  market: string
+  price: number
+  price_gbp: number
+  fee_rate: number
+  fee_source: string
+  slippage_pct: number
+  fee_gbp?: number
+  slippage_gbp?: number
+  all_in_cost_gbp?: number
+  all_in_cost_pct?: number
 }
 
 export interface ExecutionEvent {
@@ -384,6 +449,8 @@ export interface WatchlistItem {
   price: number | null
   change_pct: number | null
   currency: string | null
+  /** ~3 months of daily closes, oldest first (empty when unavailable). */
+  spark?: number[]
   // Board "stays alive" signals.
   open_flags: number
   latest_flag: string | null
@@ -469,6 +536,61 @@ export interface ArtifactItem {
   task_name?: string
   tags?: string[]
   size_bytes: number
+  /** The report's ```summary block (or a derived fallback for older reports). */
+  summary?: ReportSummary | null
+}
+
+/** What Home shows for a report. `signal` is null for derived (pre-summary) reports. */
+export interface ReportSummary {
+  headline: string
+  points: string[]
+  /** Markdown: a `[label](proposal:id)` / `[label](#/plays/id)` link, or plain text. */
+  action: string | null
+  signal: 'none' | 'low' | 'high' | null
+  derived?: boolean
+  /** Up to 4 headline numbers, drawn as stat tiles on the result card. */
+  stats?: ReportStat[]
+  /** One small viz spec (components/viz) for a picture that helps. */
+  viz?: unknown
+  /** Per-name cards (earnings prep, plays, watchlist). */
+  holdings?: ReportHolding[]
+  /** Short names of data that wasn't available ("timing", "surprise history"). */
+  gaps?: string[]
+}
+
+export type ReportStatKind = 'money' | 'pct' | 'signedPct' | 'date' | 'count' | 'text'
+
+export interface ReportStat {
+  label: string
+  /** Number for money/pct/signedPct/count (pct as a fraction), YYYY-MM-DD for date, text otherwise. */
+  value: number | string
+  kind: ReportStatKind
+  tone?: 'positive' | 'negative' | 'neutral'
+  /** A short second line (markdown-lite: tickers chip, £ figures blur in privacy mode). */
+  sub?: string
+  tickers?: string[]
+  spark?: number[]
+  bar?: { value: number; max: number }
+  timeline?: { date: string; label: string }[]
+}
+
+export interface ReportHolding {
+  ticker: string
+  name?: string
+  date?: string
+  timing?: string
+  verdict?: 'hold' | 'trim' | 'opportunity'
+  value?: number
+  weight?: number
+  gain_pct?: number
+  forward_pe?: number
+  usual_move?: number
+  watch?: string[]
+  note?: string
+  /** Parsed from a markdown section (older reports): the raw "when" text. */
+  when?: string
+  /** Parsed from a markdown section: bullets that didn't map to a field. */
+  extra?: string[]
 }
 
 export interface ArtifactDetail {
@@ -492,6 +614,7 @@ export interface CostBySource {
   chat: number
   scheduled: number
   agent_run: number
+  other?: number
 }
 
 export interface CostSummary {

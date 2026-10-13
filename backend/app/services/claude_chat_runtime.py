@@ -4,10 +4,8 @@ import asyncio
 import json
 import os
 import re
-import sys
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from pathlib import Path
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
@@ -16,11 +14,10 @@ from claude_agent_sdk import CanUseTool, PermissionResultAllow, PermissionResult
 from app.core.config import get_settings
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd,
-    resolve_t212_env,
     runtime_info as sdk_runtime_info,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS, _FORECAST_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS, _WATCHLIST_MCP_TOOLS,
 )
+from app.services import mcp_registry, model_routing
+from app.services.claude_sdk_config import recipe_plugins as recipes_plugins_option
 
 settings = get_settings()
 
@@ -39,11 +36,6 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__trading212__get_account_summary": "Checking account summary",
     "mcp__trading212__get_positions": "Fetching positions",
     "mcp__trading212__get_pending_orders": "Checking pending orders",
-    "mcp__trading212__place_market_order": "Placing market order",
-    "mcp__trading212__place_limit_order": "Placing limit order",
-    "mcp__trading212__place_stop_order": "Placing stop order",
-    "mcp__trading212__place_stop_limit_order": "Placing stop-limit order",
-    "mcp__trading212__cancel_order": "Cancelling order",
     "mcp__trading212__search_instruments": "Searching instruments",
     "mcp__trading212__get_exchanges": "Checking exchanges",
     "mcp__trading212__get_order_history": "Fetching order history",
@@ -83,22 +75,69 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__watchlist__update_watchlist_item": "Updating a watchlist item",
     "mcp__watchlist__remove_from_watchlist": "Removing from the watchlist",
     "mcp__watchlist__flag_watchlist_item": "Flagging a watchlist item",
+    # Proposals MCP tools
+    "mcp__proposals__propose_trade": "Proposing a trade",
+    "mcp__proposals__propose_trades": "Proposing the trades",
+    "mcp__proposals__list_proposals": "Checking trade proposals",
+    # Quant MCP tools
+    "mcp__quant__size_position": "Sizing the position",
+    "mcp__quant__analyse_risk": "Analysing portfolio risk",
+    "mcp__quant__what_if": "Testing the trades on your book",
+    "mcp__quant__rebalance_plan": "Planning a rebalance",
+    "mcp__quant__deploy_cash": "Planning where the cash goes",
+    "mcp__quant__placement": "Choosing ISA vs Invest",
+    "ToolSearch": "Looking up a tool",
+    "TodoWrite": "Planning the steps",
+    # Plays
+    "mcp__plays__list_plays": "Reading your plays",
+    "mcp__plays__get_play": "Reading a play",
+    "mcp__plays__draft_play": "Drafting a play",
+    "mcp__plays__update_play": "Updating a play",
+    "mcp__plays__stage_play_tranche": "Staging the next buys",
+    "mcp__plays__get_book_by_play": "Reading your book by play",
+    "mcp__plays__assign_owner": "Moving a holding",
+    "mcp__plays__suggest_plays": "Grouping your holdings",
+    # Views
+    "mcp__views__list_views": "Checking your views",
+    "mcp__views__create_view": "Building the view",
+    "mcp__views__update_view": "Updating the view",
+    # Recipes
+    "mcp__recipes__list_recipes": "Checking your recipes",
+    "mcp__recipes__get_recipe": "Reading a recipe",
+    "mcp__recipes__create_recipe": "Setting up the recipe",
+    "mcp__recipes__update_recipe": "Updating the recipe",
+    "mcp__recipes__set_recipe_enabled": "Switching a recipe on or off",
+    # News / macro
+    "mcp__intel__get_company_news": "Reading company news",
+    "mcp__intel__get_market_news": "Reading market news",
+    "mcp__intel__get_macro_snapshot": "Checking the macro picture",
+    "mcp__intel__get_earnings": "Checking earnings",
+    # Smart money, crypto, track record
+    "mcp__smart_money__get_smart_money": "Checking insider and fund activity",
+    "mcp__smart_money__get_disclosure_trends": "Looking for disclosure trends",
+    "mcp__proposals__get_track_record": "Checking Archie's track record",
+    "mcp__proposals__suggest_permission": "Suggesting a standing permission",
 }
 
-
-_MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
+# Verbs for tools without a hand-written label (new servers, user recipes):
+# "mcp__views__create_view" -> "Creating view", never the raw id.
+_VERBS = {"get": "Checking", "list": "Listing", "create": "Creating", "update": "Updating", "delete": "Removing",
+          "add": "Adding", "remove": "Removing", "set": "Setting", "run": "Running", "search": "Searching",
+          "draft": "Drafting", "suggest": "Suggesting", "analyse": "Analysing", "analyze": "Analysing"}
 
 
 def _friendly_tool_name(raw: str) -> str:
-    return _TOOL_LABELS.get(raw, raw)
-
-
-def _build_sdk_env() -> dict[str, str]:
-    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the
-    MCP subprocesses. Credentials live in subprocess memory only."""
-    env = resolve_t212_env()
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
-    return env
+    if raw in _TOOL_LABELS:
+        return _TOOL_LABELS[raw]
+    name = raw.split("__")[-1] if raw.startswith("mcp__") else raw
+    if ":" in name:  # skills such as "recipes:morning-brief"
+        name = name.split(":", 1)[1]
+    words = [w for w in name.replace("-", "_").split("_") if w]
+    if not words:
+        return "Working"
+    verb = _VERBS.get(words[0].lower())
+    text = " ".join([verb, *words[1:]]) if verb and len(words) > 1 else " ".join(words)
+    return text[:1].upper() + text[1:]
 
 
 def _extract_text_from_sdk_message(message: Any) -> str:
@@ -213,6 +252,98 @@ def _extract_tool_results(message: Any) -> list[tuple[str, bool]]:
     return out
 
 
+def _sandbox_note() -> str:
+    """A sandbox (demo) instance's cash is fake and tops itself up, so Archie must
+    never refuse or shrink a trade for lack of it."""
+    from app.core.sandbox import is_sandbox
+
+    if not is_sandbox():
+        return ""
+    return (
+        " This is a SANDBOX (demo) instance: every balance is fake and cash tops itself up when an "
+        "order needs more, so never refuse, shrink or caveat a proposal for lack of cash here."
+    )
+
+
+# Tools whose results create trade proposals (TradeIntents). Matched on the
+# bare tool name so the MCP prefix (mcp__proposals__ / mcp__plays__) doesn't matter.
+_PROPOSAL_TOOLS = ("propose_trade", "propose_trades", "stage_play_tranche")
+
+
+def _tool_result_texts(message: Any) -> dict[str, str]:
+    """tool_use_id -> the tool result's text content (MCP tools return JSON text)."""
+
+    def _text_of(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(getattr(item, "text", None), str):
+                    parts.append(item.text)
+            return "".join(parts)
+        return ""
+
+    out: dict[str, str] = {}
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        for block in content:
+            tool_use_id = getattr(block, "tool_use_id", None)
+            if isinstance(tool_use_id, str):
+                out[tool_use_id] = _text_of(getattr(block, "content", None))
+            elif isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                out[block["tool_use_id"]] = _text_of(block.get("content"))
+    return out
+
+
+def proposal_ids_from_tool_result(tool_name: str, text: str) -> list[str]:
+    """Intent ids created by a propose_trade / stage_play_tranche call, from its
+    JSON result. Anything unparseable or unsuccessful yields []."""
+    bare = (tool_name or "").rsplit("__", 1)[-1]
+    if bare not in _PROPOSAL_TOOLS or not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    # FastMCP wraps a tool's string return as structured output: {"result": "<json>"}.
+    if isinstance(payload, dict) and set(payload) == {"result"} and isinstance(payload["result"], str):
+        try:
+            payload = json.loads(payload["result"])
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not isinstance(payload, dict):
+        return []
+    return _ids_in(payload)
+
+
+def _ids_in(payload: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    # propose_trades: every order's result, in order, so the cards land together.
+    for res in payload.get("results") or []:
+        if isinstance(res, dict):
+            ids.extend(_ids_in(res))
+    intent = payload.get("intent")
+    if payload.get("ok") and isinstance(intent, dict) and isinstance(intent.get("id"), str):
+        ids.append(intent["id"])
+    for created in payload.get("created") or []:
+        if isinstance(created, dict) and isinstance(created.get("intent_id"), str):
+            ids.append(created["intent_id"])
+    # The part of an ask a limit stopped: shown as a "held back" card beside it.
+    held = payload.get("held_back")
+    if isinstance(held, dict) and isinstance(held.get("id"), str):
+        ids.append(held["id"])
+    return ids
+
+
+def proposal_marker(intent_id: str) -> str:
+    """The in-transcript reference to a proposal. Only the id is stored; the chat
+    UI renders it as a live card from the intents API."""
+    return f"\n\n[proposal](proposal:{intent_id})\n\n"
+
+
 def _extract_input_json_delta(message: Any) -> tuple[int | None, str]:
     """Extract (content_block_index, partial_json) from input_json_delta events."""
     event = getattr(message, "event", None)
@@ -294,7 +425,24 @@ class ClaudeChatRuntime:
         self._sessions: dict[str, _RuntimeSession] = {}
         self._sessions_lock = asyncio.Lock()
         self._info: dict[str, Any] = {}
-        self._options = self._build_options()
+        # Built lazily, and rebuilt for every new SDK session, so credentials or
+        # settings changed in the app reach Archie's MCP servers without a
+        # restart — and importing this module never touches the database.
+        self._options_cache: Any = None
+
+    @property
+    def _options(self) -> Any:
+        if self._options_cache is None:
+            self._options_cache = self._build_options()
+        return self._options_cache
+
+    @_options.setter
+    def _options(self, value: Any) -> None:
+        self._options_cache = value
+
+    def _fresh_options(self) -> Any:
+        self._options_cache = self._build_options()
+        return self._options_cache
 
     def _build_options(self) -> Any:
         from claude_agent_sdk import ClaudeAgentOptions
@@ -311,101 +459,11 @@ class ClaudeChatRuntime:
         if settings.agent_allow_bash:
             allowed_tools.append("Bash")
 
-        # MCP server config — T212 runs locally so HTTP calls use the
-        # user's IP, bypassing Cloudflare datacenter-IP blocks.
-        mcp_servers: dict[str, Any] = {}
-        t212_script = _MCP_SERVER_DIR / "t212.py"
-        market_script = _MCP_SERVER_DIR / "marketdata.py"
-        scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
-        forecast_script = _MCP_SERVER_DIR / "forecast.py"
-        fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
-        intel_script = _MCP_SERVER_DIR / "intel.py"
-        if t212_script.is_file():
-            mcp_servers["trading212"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(t212_script)],
-                "env": _build_sdk_env(),
-            }
-            allowed_tools.extend(_T212_MCP_TOOLS)
-
-        # The marketdata + scheduler MCP servers import from the `app`
-        # package, so the backend root must be on PYTHONPATH when they
-        # are launched as stdio subprocesses by the SDK.
-        _backend_root = str(_MCP_SERVER_DIR.parent)
-
-        # Resolve a possibly-relative SQLite DATABASE_URL to an absolute
-        # path so MCP subprocesses (which may run with a different CWD)
-        # open the *same* database file as the main app.
-        _db_url = settings.database_url
-        if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
-            _rel = _db_url.replace("sqlite:///", "", 1)
-            _abs = str((Path(_backend_root) / _rel).resolve())
-            _db_url = f"sqlite:///{_abs}"
-        _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
-
-        if market_script.is_file():
-            mcp_servers["marketdata"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(market_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_MARKET_MCP_TOOLS)
-
-        if scheduler_script.is_file():
-            mcp_servers["scheduler"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(scheduler_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
-
-        # Forecast MCP server (Kronos). Uses the same env so `app` and
-        # `vendor` are importable; torch loads lazily inside the subprocess
-        # only when a forecast is actually requested.
-        if forecast_script.is_file():
-            mcp_servers["forecast"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(forecast_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_FORECAST_MCP_TOOLS)
-
-        # Fundamentals MCP server (yfinance). Uses the same env so `app` is
-        # importable as a stdio subprocess.
-        if fundamentals_script.is_file():
-            mcp_servers["fundamentals"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(fundamentals_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
-
-        # Intel MCP (Finnhub news + FRED macro). Reads provider keys from the DB
-        # (ConfigStore data_providers) via DATABASE_URL in _mcp_env.
-        if intel_script.is_file():
-            mcp_servers["intel"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(intel_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_INTEL_MCP_TOOLS)
-
-        # Watchlist MCP — Archie CRUDs the tracked-ideas board + flags into Attention.
-        watchlist_script = _MCP_SERVER_DIR / "watchlist.py"
-        if watchlist_script.is_file():
-            mcp_servers["watchlist"] = {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [str(watchlist_script)],
-                "env": _mcp_env,
-            }
-            allowed_tools.extend(_WATCHLIST_MCP_TOOLS)
+        # MCP servers come from the shared registry (read-only broker tools +
+        # propose_trade; no order placement). T212 runs locally so HTTP calls
+        # use the user's IP, bypassing Cloudflare datacenter-IP blocks.
+        mcp_servers, mcp_tools = mcp_registry.build_mcp_servers(mcp_registry.CHAT)
+        allowed_tools.extend(mcp_tools)
 
         self._info = {
             **runtime,
@@ -420,14 +478,14 @@ class ClaudeChatRuntime:
                 "type": "preset",
                 "preset": "claude_code",
                 "append": (
-                    "You are Archie, Josh's portfolio copilot on the MyPF dashboard. "
+                    f"You are Archie, {settings.user_possessive} portfolio copilot on the OpenPF dashboard. "
                     "Explain clearly, highlight risk, and give actionable next steps. "
                     "Your identity and memory guidelines are in your project CLAUDE.md. "
                     "You have MCP market data tools for spot/historical/technical data, "
                     "fundamentals tools (get_fundamentals, get_valuation, get_financial_statements, "
                     "get_earnings_calendar) for company facts, valuation ratios, statements, and earnings, "
                     "scheduler tools for cron task management, watchlist tools "
-                    "(list/add/update/remove + flag) for Josh's tracked-ideas board, and a Kronos forecasting "
+                    f"(list/add/update/remove + flag) for {settings.user_possessive} tracked-ideas board, and a Kronos forecasting "
                     "tool (forecast_prices) that projects a holding's close price over a "
                     "future horizon with p10/p50/p90 uncertainty bands. Treat forecasts as "
                     "probabilistic analysis with clear uncertainty, never as certainties or "
@@ -448,10 +506,16 @@ class ClaudeChatRuntime:
                     "When you recommend a name worth tracking (not an immediate trade), add it to the watchlist "
                     "with add_to_watchlist and a concise note of WHY — that note is the condition the watch "
                     "service later checks, so the idea resurfaces instead of being forgotten. "
+                    "TRADES: you cannot place, modify or cancel broker orders — no tool for that exists. "
+                    "To suggest a trade, call propose_trade (proposals tools) with an explicit account, "
+                    "size and rationale: it checks the risk rails and queues the trade for the user to "
+                    "approve in the app. If it reports violations, resize within the caps. Never say a "
+                    "trade was placed; say it was proposed and awaits approval. "
                     "Do not claim a capability is unavailable before checking available tools."
+                    + _sandbox_note()
                 ),
             },
-            model=settings.claude_chat_model,
+            model=model_routing.sdk_model("chat"),
             cwd=str(sdk_cwd),
             max_turns=settings.agent_chat_max_turns,
             max_budget_usd=settings.agent_chat_max_budget_usd or None,
@@ -459,10 +523,12 @@ class ClaudeChatRuntime:
             setting_sources=setting_sources,
             include_partial_messages=True,
             permission_mode="acceptEdits" if settings.claude_chat_allow_writes else None,
-            env=_build_sdk_env(),
+            env=mcp_registry.sdk_env(),
             mcp_servers=mcp_servers if mcp_servers else {},
             hooks=build_security_hooks(),
             agents=build_subagents(),
+            # The user's recipes, loaded as native skills (recipes:<slug>).
+            plugins=recipes_plugins_option(),
         )
 
     def _build_can_use_tool(self, chat_session_id: str) -> CanUseTool:
@@ -519,7 +585,7 @@ class ClaudeChatRuntime:
                 return current
             # Per-session options so each client's permission callback can route
             # AskUserQuestion to that session's live UI channel.
-            options = replace(self._options, can_use_tool=self._build_can_use_tool(chat_session_id))
+            options = replace(self._fresh_options(), can_use_tool=self._build_can_use_tool(chat_session_id))
             created = _RuntimeSession(client=ClaudeSDKClient(options=options))
             self._sessions[chat_session_id] = created
             return created
@@ -531,7 +597,15 @@ class ClaudeChatRuntime:
         on_delta: Callable[[str], Awaitable[None]],
         on_status: Callable[[str, str, dict | None], Awaitable[None]] | None = None,
         on_question: QuestionAsker | None = None,
+        inline_proposals: bool = False,
     ) -> ReplyResult:
+        """Stream one assistant turn.
+
+        ``inline_proposals``: when a propose_trade / stage_play_tranche call
+        creates proposals, splice a ``[proposal](proposal:<id>)`` reference into
+        the reply at that point (streamed + persisted) so the web chat can show
+        a live approval card in place. Off for plain-text consumers (Telegram).
+        """
         state = await self._get_session(chat_session_id)
 
         async with state.lock:
@@ -735,10 +809,18 @@ class ClaudeChatRuntime:
                                 friendly = _friendly_tool_name(tool_name)
                                 await emit_status("tool_start", friendly, tool_input)
 
+                    result_texts = _tool_result_texts(message) if inline_proposals else {}
                     for tool_id, is_error in _extract_tool_results(message):
                         if tool_id in seen_tool_result_ids:
                             continue
                         seen_tool_result_ids.add(tool_id)
+                        if inline_proposals and not is_error:
+                            for intent_id in proposal_ids_from_tool_result(
+                                tool_name_by_id.get(tool_id, ""), result_texts.get(tool_id, "")
+                            ):
+                                marker = proposal_marker(intent_id)
+                                chunks.append(marker)
+                                await on_delta(marker)
                         # Handle pending tasks that never got subagent_start emitted
                         if tool_id in pending_task_inputs and tool_id not in active_subagents:
                             pending_task_inputs.pop(tool_id, None)
@@ -864,6 +946,8 @@ class ClaudeChatRuntime:
         return True
 
     def runtime_info(self) -> dict[str, Any]:
+        if not self._info:
+            _ = self._options  # populates _info
         return dict(self._info)
 
     async def check_mcp_health(self) -> dict[str, dict[str, str]]:

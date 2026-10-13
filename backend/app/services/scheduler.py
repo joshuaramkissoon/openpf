@@ -43,6 +43,38 @@ def _daily_snapshot_tick() -> None:
         db.close()
 
 
+def _plays_review_tick() -> None:
+    """Daily deterministic check of active Plays (kill rules + drift → alerts)."""
+    from app.services.plays_service import review_active_plays
+
+    db = SessionLocal()
+    try:
+        result = review_active_plays(db)
+        logger.info("plays review: %s", result)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("plays review tick failed: %s", exc)
+    finally:
+        db.close()
+
+
+def _track_record_tick() -> None:
+    """Daily: mark proposal outcomes (1d/1w/1m/3m/close vs benchmark), then let
+    the record suggest standing permissions where it's earned them. Suggestions
+    grant nothing — the user decides."""
+    from app.services.permissions_service import generate_suggestions
+    from app.services.track_record_service import mark_outcomes
+
+    db = SessionLocal()
+    try:
+        counts = mark_outcomes(db)
+        suggested = generate_suggestions(db)
+        logger.info("track record marked: %s; suggestions: %d", counts, len(suggested))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("track record tick failed: %s", exc)
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     global scheduler
     if scheduler is not None:
@@ -54,6 +86,14 @@ def start_scheduler() -> None:
     # that wasn't up at exactly 21:00 still records once when it next runs.
     scheduler.add_job(
         _daily_snapshot_tick, "cron", hour=21, minute=0, id="daily-portfolio-snapshot",
+        max_instances=1, coalesce=True, misfire_grace_time=6 * 3600,
+    )
+    scheduler.add_job(
+        _plays_review_tick, "cron", hour=21, minute=15, id="daily-plays-review",
+        max_instances=1, coalesce=True, misfire_grace_time=6 * 3600,
+    )
+    scheduler.add_job(
+        _track_record_tick, "cron", hour=21, minute=30, id="daily-track-record",
         max_instances=1, coalesce=True, misfire_grace_time=6 * 3600,
     )
     scheduler.start()

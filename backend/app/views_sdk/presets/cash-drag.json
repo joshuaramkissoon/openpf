@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "title": "Cash drag",
+  "description": "Is idle cash costing me? What's uninvested, where it sits, and what it gives up",
+  "icon": "wallet",
+  "data": {"pf": {"source": "portfolio"}, "hist": {"source": "history", "params": {"range": "1y"}}},
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "Idle cash",
+      "from": "pf.account",
+      "value": {"field": "free_cash"},
+      "format": "money",
+      "delta": {"from": "pf.metrics", "field": "cash_ratio"},
+      "deltaFormat": "pct",
+      "deltaLabel": "of your book is sitting uninvested",
+      "caption": "Some cash is healthy: a buffer, or dry powder for the next idea. Past that, it's money not working.",
+      "width": "two-thirds"
+    },
+    {
+      "type": "kpis",
+      "from": "pf.account",
+      "width": "third",
+      "items": [
+        {"label": "What it gives up", "value": {"field": "drag", "transform": [{"compute": {"as": "drag", "op": "scale", "field": "free_cash", "by": 0.07}}]}, "format": "money", "hint": "a year, at a 7% long-run market return"},
+        {"label": "Cash a year ago", "value": {"from": "hist.points", "field": "free_cash"}, "format": "money", "hint": "the same pile, 12 months back"}
+      ]
+    },
+    {
+      "type": "bars",
+      "title": "Where it sits",
+      "subtitle": "Uninvested cash in each account, and how much of that account it is",
+      "from": "pf.accounts",
+      "transform": [{"compute": {"as": "cash_share", "op": "ratio", "a": "free_cash", "b": "total"}}, {"sort": {"by": "free_cash"}}],
+      "label": "account",
+      "value": "free_cash",
+      "format": "money",
+      "valueLabel": "Cash",
+      "secondary": "cash_share",
+      "secondaryFormat": "pct",
+      "secondaryLabel": "% of account",
+      "width": "two-thirds"
+    },
+    {
+      "type": "note",
+      "width": "third",
+      "text": "7% is an illustrative long-run equity return, not a forecast. If your cash earns interest, the real cost is lower; if markets fall, idle cash is what lets you buy."
+    }
+  ]
+}

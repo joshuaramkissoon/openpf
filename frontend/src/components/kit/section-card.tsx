@@ -26,7 +26,7 @@ export function SectionCard({
   children: ReactNode
 }) {
   return (
-    <Card className={cn("flex flex-col gap-0 overflow-hidden rounded-xl border py-0 shadow-none", className)}>
+    <Card className={cn("flex flex-col gap-0 overflow-hidden rounded-xl border py-0 shadow-none ring-0", className)}>
       {(title || action) && (
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/60 px-5 py-3.5">
           <div className="min-w-0 flex-1">

@@ -1,22 +1,23 @@
-import { useCallback, useEffect, useState } from "react"
-import dayjs from "dayjs"
-import { Loader2, MessageSquareText, Star } from "lucide-react"
-
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
-import { Money, MoneyDelta, Pct, PctDelta, RiskBadge } from "@/components/kit"
-import { StockChart } from "@/components/StockChart"
-import { accountTag } from "@/utils/format"
-import { cn } from "@/lib/utils"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { ArrowLeftRight, ChevronDown, Loader2, Star, Telescope } from "lucide-react"
 import { toast } from "sonner"
+
+import { Button } from "@/components/ui/button"
+import { ArchieIcon, AssetIcon } from "@/components/kit"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
+import { Skeleton } from "@/components/ui/skeleton"
+import { cn } from "@/lib/utils"
+import { privacyBlurClass, usePrivacyMode } from "@/lib/privacy"
 import { toastApiError } from "@/lib/api-error"
-import { getInstrumentDetail, type InstrumentDetail } from "@/api/instruments"
+import { getInstrumentInsight, type InstrumentInsight, type InsightPlay } from "@/api/instruments"
 import { createWatchlistItem, deleteWatchlistItem } from "@/api/client"
-import { getOrderHistory, type OrderItem } from "@/api/orders"
+import { InsightChartView } from "./insight-chart"
+import { CapMeter, EventsSection, FundamentalsSection, NewsSection, RiskSection, ThesisSection } from "./insight-sections"
+import { TradeSizer, type TradePrefill } from "./trade-sizer"
+import { SmartMoneySection } from "@/features/smart-money"
+import { fmtMoney, fmtPct, fmtPrice, num } from "./insight-format"
 
 /** A best-effort instant identity to paint the header before the fetch lands. */
 export type InstrumentHint = {
@@ -24,96 +25,102 @@ export type InstrumentHint = {
   currency?: string | null
   price?: number | null
   change_pct?: number | null
+  /** Open straight onto the Trade panel, prefilled (e.g. "Place it myself" on a held-back ask). */
+  trade?: TradePrefill | null
 }
 
-function Stat({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
-      <span className="whitespace-nowrap font-mono text-sm font-semibold tabular-nums">{children}</span>
-    </div>
-  )
-}
+const POLL_MS = 2500
+const MAX_POLLS = 4
 
-const RISK_NOTE: Record<string, string> = {
-  ok: "No elevated technical risk flags.",
-  oversold: "RSI in oversold territory — momentum is weak, but a mean-reversion bounce is possible.",
-  overbought: "RSI in overbought territory — extended; watch for a pullback.",
-  warning: "Elevated risk — review momentum and concentration.",
-  critical: "High risk — large drawdown or heavy concentration. Review position sizing.",
-}
-
-const SEV_DOT: Record<string, string> = {
-  critical: "bg-negative",
-  warning: "bg-warning",
-  info: "bg-muted-foreground",
-}
-
-function fmtSignal(v: number | null | undefined, kind: "pct" | "num" | "rsi"): string {
-  if (v == null || !Number.isFinite(v)) return "—"
-  if (kind === "pct") return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`
-  if (kind === "rsi") return v.toFixed(0)
-  return v.toFixed(2)
-}
-
+/**
+ * The stock sheet. One hero (what it is, what it's doing, why), then one line on
+ * what it means for *you*, then the chart, then the questions an investor asks
+ * in order: should I worry, what's coming, why do I own it, news, fundamentals.
+ * Every section is optional — a missing source hides its section.
+ */
 export function InstrumentDetailSheet({
   ticker,
-  currency,
   open,
   onOpenChange,
   hint,
   onAskArchie,
+  onAskArchieSend,
+  onDeepAnalysis,
   onWatchlistChanged,
 }: {
   ticker: string | null
-  currency: "GBP" | "USD"
+  currency?: "GBP" | "USD"
   open: boolean
   onOpenChange: (open: boolean) => void
   hint?: InstrumentHint | null
   onAskArchie?: (ticker: string, name?: string | null) => void
+  /** Start a chat with this prompt and send it. */
+  onAskArchieSend?: (prompt: string) => void
+  onDeepAnalysis?: (ticker: string, name?: string | null) => void
   onWatchlistChanged?: () => void
 }) {
-  const [detail, setDetail] = useState<InstrumentDetail | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [forecast, setForecast] = useState(false)
+  const [data, setData] = useState<InstrumentInsight | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [watchBusy, setWatchBusy] = useState(false)
-  const [orders, setOrders] = useState<OrderItem[] | null>(null)
-  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [sizerOpen, setSizerOpen] = useState(false)
+  const reqRef = useRef(0)
 
-  const loadDetail = useCallback(async () => {
-    if (!ticker) return
-    setLoading(true)
-    try {
-      const data = await getInstrumentDetail(ticker, currency)
-      setDetail(data)
-    } catch {
-      setDetail(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [ticker, currency])
+  const load = useCallback(
+    async (t: string, attempt = 0) => {
+      const req = ++reqRef.current
+      try {
+        const res = await getInstrumentInsight(t)
+        if (req !== reqRef.current) return
+        setData(res)
+        setError(null)
+        // Slow sections keep computing server-side; pick them up shortly.
+        if (res.pending.length && attempt < MAX_POLLS) {
+          window.setTimeout(() => {
+            if (req === reqRef.current) void load(t, attempt + 1)
+          }, POLL_MS)
+        }
+      } catch (err: unknown) {
+        if (req !== reqRef.current) return
+        const status = (err as { response?: { status?: number } })?.response?.status
+        setError(status === 404 ? "We couldn't find that instrument." : "Couldn't load this instrument right now.")
+      }
+    },
+    [],
+  )
 
-  // Fetch on open / ticker change; reset the per-instrument lazy state.
   useEffect(() => {
     if (!open || !ticker) return
-    setDetail(null)
-    setForecast(false)
-    setOrders(null)
-    void loadDetail()
-  }, [open, ticker, loadDetail])
+    setData(null)
+    setError(null)
+    setSizerOpen(Boolean(hint?.trade))
+    void load(ticker)
+    return () => {
+      reqRef.current++
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new hint arrives with a new open
+  }, [open, ticker, load])
+
+  // Prefilled trade: bring the panel into view once the sheet has painted it.
+  const prefill = hint?.trade ?? null
+  useEffect(() => {
+    if (!open || !prefill || !data) return
+    const t = window.setTimeout(() => document.getElementById("sizer-amount")?.scrollIntoView({ block: "center", behavior: "smooth" }), 120)
+    return () => window.clearTimeout(t)
+  }, [open, prefill, data])
 
   async function toggleWatch() {
-    if (!detail || !ticker) return
+    if (!data || !ticker) return
     setWatchBusy(true)
     try {
-      if (detail.watchlist) {
-        await deleteWatchlistItem(detail.watchlist.id)
-        toast.success(`Removed ${detail.display_ticker || detail.ticker} from watchlist`)
+      if (data.watchlist) {
+        await deleteWatchlistItem(data.watchlist.id)
+        toast.success(`Stopped watching ${data.display_ticker}`)
       } else {
         await createWatchlistItem({ symbol: ticker })
-        toast.success(`Added ${detail.display_ticker || detail.ticker} to watchlist`)
+        toast.success(`Watching ${data.display_ticker}`)
       }
-      await loadDetail()
+      reqRef.current++
+      await load(ticker, MAX_POLLS)
       onWatchlistChanged?.()
     } catch (err) {
       toastApiError(err, "Watchlist update failed")
@@ -122,298 +129,450 @@ export function InstrumentDetailSheet({
     }
   }
 
-  async function loadOrders() {
-    if (!ticker) return
-    setOrdersLoading(true)
-    try {
-      const res = await getOrderHistory("all", ticker, 50)
-      setOrders(res.orders)
-    } catch (err) {
-      toastApiError(err, "Couldn't load order history")
-      setOrders([])
-    } finally {
-      setOrdersLoading(false)
-    }
-  }
+  const name = data?.name ?? hint?.name ?? null
+  const display = data?.display_ticker ?? ticker ?? ""
 
-  const name = detail?.name ?? hint?.name ?? null
-  const displayTicker = detail?.display_ticker || detail?.ticker || ticker || ""
-  const headerCurrency = detail?.currency ?? hint?.currency ?? currency
-  const price = detail?.price ?? hint?.price ?? null
-  const changePct = detail?.change_pct ?? hint?.change_pct ?? null
-  const riskKey = (detail?.signals.risk_flag || "ok").toLowerCase()
-  const chartTicker = detail?.yfinance_ticker || detail?.instrument_code || ticker || ""
+  const ask = useCallback(
+    (prompt: string) => {
+      if (onAskArchieSend) onAskArchieSend(prompt)
+      else onAskArchie?.(display, name)
+      onOpenChange(false)
+    },
+    [onAskArchieSend, onAskArchie, onOpenChange, display, name],
+  )
+
+  // Sheet shortcuts: A asks Archie, T opens the trade panel. Bare keys only, never
+  // while typing or with a menu/dialog open (the shell owns P, / and ⌘K).
+  useEffect(() => {
+    if (!open || !data) return
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return
+      if (document.querySelector('[role="menu"], [role="alertdialog"]')) return
+      const k = e.key.toLowerCase()
+      if (k === "a") {
+        e.preventDefault()
+        ask(readPrompt(data!, name))
+      } else if (k === "t") {
+        e.preventDefault()
+        setSizerOpen(true)
+        window.setTimeout(() => {
+          const input = document.getElementById("sizer-amount") as HTMLInputElement | null
+          input?.scrollIntoView({ block: "center", behavior: "smooth" })
+          input?.focus()
+          input?.select()
+        }, 60)
+      }
+    }
+    // Capture phase: the sheet's focus trap stops bubbling key events from reaching window.
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [open, data, name, ask])
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full sm:max-w-2xl sm:data-[side=right]:w-[42rem]"
+        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:max-w-none sm:data-[side=right]:w-[44rem] sm:data-[side=right]:max-w-[44rem]"
       >
         {ticker ? (
-          <>
-            <SheetHeader className="border-b border-border/60 px-6 py-5">
-              <div className="flex items-center gap-2.5">
-                <SheetTitle className="text-2xl font-semibold tracking-tight">{displayTicker}</SheetTitle>
-                {detail?.held && detail.position
-                  ? detail.position.accounts.map((a) => (
-                      <Badge key={a} variant="outline" className="text-muted-foreground">
-                        {accountTag(a)}
-                      </Badge>
-                    ))
-                  : null}
-                {detail?.signals.risk_flag ? <RiskBadge flag={detail.signals.risk_flag} className="ml-auto" /> : null}
-              </div>
+          <div className="flex flex-col">
+            <Hero
+              data={data}
+              display={display}
+              name={name}
+              hint={hint}
+              error={error}
+              watchBusy={watchBusy}
+              onToggleWatch={() => void toggleWatch()}
+            />
 
-              <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-                {name ? <span className="font-medium text-foreground/90">{name}</span> : null}
-                {detail?.instrument_code ? (
-                  <span className="font-mono text-muted-foreground">{detail.instrument_code}</span>
-                ) : null}
-                {headerCurrency ? (
-                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
-                    {headerCurrency}
-                  </span>
-                ) : null}
-              </SheetDescription>
-
-              {/* Live price + day change */}
-              <div className="mt-1 flex items-baseline gap-3">
-                {price != null ? (
-                  <span className="font-mono text-xl font-semibold tabular-nums">
-                    <Money value={price} currency={headerCurrency} />
-                  </span>
-                ) : loading ? (
-                  <Skeleton className="h-6 w-24" />
-                ) : (
-                  <span className="text-sm text-muted-foreground">Price unavailable</span>
-                )}
-                {changePct != null ? <PctDelta value={changePct} className="text-sm" /> : null}
-              </div>
-
-              {/* Folded context one-liners (watchlist + thesis) */}
-              {(detail?.watchlist || (detail?.theses?.length ?? 0) > 0) && (
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                  {detail?.watchlist ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <Star className="size-3 text-warning" />
-                      Watchlist
-                      {detail.watchlist.conviction ? <span className="capitalize">· {detail.watchlist.conviction} conviction</span> : null}
-                      {detail.watchlist.note ? <span className="max-w-[18rem] truncate">· {detail.watchlist.note}</span> : null}
-                    </span>
-                  ) : null}
-                  {detail?.theses?.length ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="size-1.5 rounded-full bg-primary" />
-                      Thesis: {detail.theses[0].title || "active"} · {(detail.theses[0].confidence * 100).toFixed(0)}%
-                    </span>
-                  ) : null}
-                </div>
-              )}
-
-              {/* Quick actions */}
-              <div className="mt-2.5 flex items-center gap-2">
-                <Button
-                  variant={detail?.watchlist ? "secondary" : "outline"}
-                  size="sm"
-                  onClick={() => void toggleWatch()}
-                  disabled={watchBusy || !detail}
-                >
-                  {watchBusy ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Star className={cn("size-3.5", detail?.watchlist && "fill-warning text-warning")} />
-                  )}
-                  {detail?.watchlist ? "Watching" : "Watch"}
-                </Button>
-                {onAskArchie ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      onAskArchie(displayTicker, name)
-                      onOpenChange(false)
+            {data ? (
+              <div className="flex flex-col gap-6 px-5 pb-10 sm:px-7">
+                <ForMe data={data} />
+                <Actions
+                  data={data}
+                  name={name}
+                  sizerOpen={sizerOpen}
+                  onToggleSizer={() => setSizerOpen((v) => !v)}
+                  onAsk={ask}
+                  onDeepAnalysis={
+                    onDeepAnalysis
+                      ? () => {
+                          onDeepAnalysis(display, name)
+                          onOpenChange(false)
+                        }
+                      : undefined
+                  }
+                />
+                {sizerOpen ? (
+                  <TradeSizer
+                    key={prefill ? JSON.stringify(prefill) : "fresh"}
+                    insight={data}
+                    prefill={prefill}
+                    onDone={(placed) => {
+                      setSizerOpen(false)
+                      // A placed trade changes the position, weight and cap meter: refresh them.
+                      if (placed && ticker) {
+                        window.dispatchEvent(new Event("openpf:portfolio-changed"))
+                        // Once now, and again after the portfolio refresh has landed.
+                        for (const ms of [0, 3500]) {
+                          window.setTimeout(() => {
+                            reqRef.current++
+                            void load(ticker, MAX_POLLS)
+                          }, ms)
+                        }
+                      }
                     }}
-                  >
-                    <MessageSquareText className="size-3.5" />
-                    Ask Archie
-                  </Button>
+                  />
                 ) : null}
+
+                {data.chart ? (
+                  <InsightChartView
+                    chart={data.chart}
+                    forecastTicker={data.yfinance_ticker}
+                    minorMultiplier={data.chart.unit_multiplier ?? 1}
+                  />
+                ) : data.pending.includes("chart") ? (
+                  <Skeleton className="h-[300px] w-full rounded-xl" />
+                ) : null}
+
+                {data.alerts.length ? <AlertsList alerts={data.alerts} /> : null}
+                {data.risk ? <RiskSection risk={data.risk} held={data.held} /> : data.pending.includes("risk") ? <SectionSkeleton /> : null}
+                {data.events ? <EventsSection events={data.events} /> : null}
+                <SmartMoneySection ticker={data.display_ticker} />
+                <ThesisSection play={primaryPlay(data.plays)} theses={data.theses} held={data.held} />
+                <NewsSection news={data.news} />
+                {data.fundamentals ? <FundamentalsSection f={data.fundamentals} currency={data.quote?.currency ?? "USD"} /> : null}
               </div>
-            </SheetHeader>
-
-            <div className="flex flex-col gap-6 px-6 py-6">
-              {/* Verdict line — only the parts we actually have. */}
-              {detail && <VerdictLine detail={detail} />}
-
-              {/* Position (only if held) */}
-              {detail?.held && detail.position ? (
-                <section className="flex flex-col gap-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Your position</h3>
-                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                    <Stat label="Value"><Money value={detail.position.value} currency={currency} /></Stat>
-                    <Stat label="P/L"><MoneyDelta value={detail.position.ppl} currency={currency} /></Stat>
-                    <Stat label="Weight"><Pct value={detail.position.weight} /></Stat>
-                    <Stat label="Quantity">{detail.position.quantity.toFixed(2)}</Stat>
-                    <Stat label="Avg Price"><Money value={detail.position.average_price} currency={currency} /></Stat>
-                    <Stat label="Last Price"><Money value={detail.position.current_price} currency={currency} /></Stat>
-                  </div>
-                </section>
-              ) : null}
-
-              {/* Chart + forecast toggle */}
-              <section className="flex flex-col gap-3">
-                <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/25 px-4 py-3">
-                  <div className="min-w-0">
-                    <Label htmlFor="spotlight-forecast" className="text-sm font-medium">Kronos forecast</Label>
-                    <p className="text-xs text-muted-foreground">Probabilistic 30-day price cone (p10–p50–p90)</p>
-                  </div>
-                  <Switch id="spotlight-forecast" checked={forecast} onCheckedChange={setForecast} />
-                </div>
-                <div className="rounded-xl border border-border/60 bg-card/40 p-4">
-                  {chartTicker ? (
-                    <StockChart
-                      key={chartTicker}
-                      ticker={chartTicker}
-                      period="6mo"
-                      interval="1d"
-                      chartType="line"
-                      indicators={["sma20", "sma50"]}
-                      height={320}
-                      forecast={forecast}
-                      forecastHorizon={30}
-                      forecastSamples={12}
-                      forecastLookback={180}
-                    />
-                  ) : null}
-                </div>
-              </section>
-
-              {/* Signals & risk */}
-              {detail ? (
-                <section className="flex flex-col gap-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Signals &amp; risk</h3>
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <Stat label="3M Momentum">{fmtSignal(detail.signals.momentum_63d, "pct")}</Stat>
-                    <Stat label="RSI (14)">{fmtSignal(detail.signals.rsi_14, "rsi")}</Stat>
-                    <Stat label="Trend">
-                      {detail.signals.trend_score != null
-                        ? fmtSignal(detail.signals.trend_score, "num")
-                        : detail.signals.trend_direction
-                          ? <span className="capitalize">{detail.signals.trend_direction}</span>
-                          : "—"}
-                    </Stat>
-                  </div>
-                  {detail.signals.risk_flag ? (
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      <span className="font-medium capitalize text-foreground">{riskKey}</span>
-                      {" — "}
-                      {RISK_NOTE[riskKey] ?? RISK_NOTE.ok}
-                    </p>
-                  ) : null}
-                </section>
-              ) : null}
-
-              {/* Attention flags — only when there are open ones. */}
-              {detail?.alerts?.length ? (
-                <section className="flex flex-col gap-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Needs attention
-                  </h3>
-                  <div className="flex flex-col gap-2">
-                    {detail.alerts.map((a) => (
-                      <div key={a.id} className="rounded-lg border border-border/60 bg-muted/20 px-3.5 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className={cn("size-1.5 shrink-0 rounded-full", SEV_DOT[a.severity] ?? SEV_DOT.info)} />
-                          <span className="text-sm font-medium">{a.title}</span>
-                          <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">{a.category.replace(/_/g, " ")}</span>
-                        </div>
-                        {a.detail ? <p className="mt-1 pl-3.5 text-xs text-muted-foreground">{a.detail}</p> : null}
-                        {a.consider ? (
-                          <p className="mt-1 pl-3.5 text-xs text-foreground/80">
-                            <span className="font-medium">Consider:</span> {a.consider}
-                          </p>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-
-              {/* Order history — lazy, the one rate-limited call. */}
-              <section className="flex flex-col gap-2.5">
-                {orders === null ? (
-                  <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => void loadOrders()} disabled={ordersLoading}>
-                    {ordersLoading ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                    {ordersLoading ? "Loading order history…" : "Load order history"}
-                  </Button>
-                ) : orders.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No orders found for {displayTicker}.</p>
-                ) : (
-                  <>
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Order history ({orders.length})
-                    </h3>
-                    <div className="flex flex-col divide-y divide-border/50 overflow-hidden rounded-lg border border-border/60">
-                      {orders.slice(0, 12).map((o, i) => (
-                        <div key={`${o.order_id}-${i}`} className="flex items-center gap-3 px-3.5 py-2 text-xs">
-                          <span className="font-mono tabular-nums text-muted-foreground">
-                            {o.created_at ? dayjs(o.created_at).format("DD MMM YY") : "—"}
-                          </span>
-                          <span className={cn("font-medium uppercase", o.side === "buy" ? "text-positive" : o.side === "sell" ? "text-negative" : "")}>
-                            {o.side ?? "—"}
-                          </span>
-                          <span className="font-mono tabular-nums">
-                            {o.filled_quantity ?? o.quantity ?? "—"}
-                            {o.fill_price != null ? ` @ ${o.fill_price}` : ""}
-                          </span>
-                          <span className="ml-auto truncate text-[10px] uppercase tracking-wide text-muted-foreground">{o.status ?? ""}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </section>
-            </div>
-          </>
+            ) : !error ? (
+              <div className="flex flex-col gap-4 px-5 sm:px-7">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-9 w-64" />
+                <Skeleton className="h-[300px] w-full rounded-xl" />
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </SheetContent>
     </Sheet>
   )
 }
 
-/** Decision-grade one-liner: distance to watchlist target and move vs. your average. */
-function VerdictLine({ detail }: { detail: InstrumentDetail }) {
-  const bits: React.ReactNode[] = []
+function primaryPlay(plays: InsightPlay[]): InsightPlay | null {
+  return plays.find((p) => p.relation === "owner") ?? plays.find((p) => p.relation === "bench") ?? null
+}
 
-  if (detail.target_distance_pct != null && detail.target_price != null) {
-    const below = detail.target_distance_pct > 0 // live price sits below the target
-    bits.push(
-      <span key="target">
-        <Pct value={Math.abs(detail.target_distance_pct)} className="font-semibold text-foreground" />{" "}
-        {below ? "below" : "above"} target {detail.target_price}
-      </span>
-    )
-  }
+// ── 1. What is it doing, and why? ───────────────────────────────────────────
 
-  if (detail.held && detail.position?.ppl_pct != null) {
-    bits.push(
-      <span key="avg">
-        <PctDelta value={detail.position.ppl_pct} className="font-semibold" /> vs your avg
-      </span>
-    )
-  }
-
-  if (bits.length === 0) return null
-
+function Hero({
+  data,
+  display,
+  name,
+  hint,
+  error,
+  watchBusy,
+  onToggleWatch,
+}: {
+  data: InstrumentInsight | null
+  display: string
+  name: string | null
+  hint?: InstrumentHint | null
+  error: string | null
+  watchBusy: boolean
+  onToggleWatch: () => void
+}) {
+  const q = data?.quote
+  const up = (q?.change_pct ?? hint?.change_pct ?? 0) >= 0
+  const watching = Boolean(data?.watchlist)
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border/60 bg-muted/15 px-3.5 py-2.5 text-sm text-muted-foreground">
-      {bits.map((b, i) => (
-        <span key={i} className="inline-flex items-center gap-2">
-          {i > 0 ? <span className="text-border">·</span> : null}
-          {b}
-        </span>
+    <header className="flex flex-col gap-2.5 px-5 pt-6 pb-5 sm:px-7">
+      <div className="flex items-start gap-3 pr-10">
+        <AssetIcon symbol={display} crypto={Boolean(data?.position?.accounts?.includes("crypto") || data?.instrument_code?.includes("/"))} size={44} className="mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <SheetTitle className="truncate text-xl font-semibold tracking-tight">{name || display}</SheetTitle>
+          <SheetDescription className="truncate text-sm text-muted-foreground">
+            {display}
+            {data?.fundamentals?.industry ? ` · ${data.fundamentals.industry}` : ""}
+          </SheetDescription>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("h-8 gap-1.5 text-muted-foreground", watching && "text-foreground")}
+          onClick={onToggleWatch}
+          disabled={watchBusy || !data}
+          aria-pressed={watching}
+          title={watching ? "Stop watching" : "Watch for big moves, earnings and news"}
+        >
+          {watchBusy ? <Loader2 className="size-4 animate-spin" /> : <Star className={cn("size-4", watching && "fill-warning text-warning")} />}
+          {watching ? "Watching" : "Watch"}
+        </Button>
+      </div>
+
+      {error ? (
+        <p className="text-sm text-muted-foreground">{error}</p>
+      ) : q ? (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className={cn("text-[2rem] leading-none font-semibold tracking-tight", num)}>{fmtPrice(q.price, q.currency)}</span>
+          {q.change_pct != null ? (
+            <span className={cn("text-sm font-medium", num, up ? "text-positive" : "text-negative")}>
+              {fmtPct(q.change_pct, 2, { signed: true })}
+              {q.change != null ? <span className="font-normal opacity-80"> ({`${q.change >= 0 ? "+" : "−"}${fmtPrice(Math.abs(q.change), q.currency)}`})</span> : null}
+              <span className="ml-1 font-normal text-muted-foreground">today</span>
+            </span>
+          ) : null}
+          {q.currency !== "GBP" && q.price_gbp != null ? (
+            // The pounds price is secondary: a quiet figure with the currency story in a tooltip.
+            <Tooltip>
+              <TooltipTrigger
+                className={cn("cursor-help text-sm text-muted-foreground underline decoration-dotted decoration-muted-foreground/40 underline-offset-4", num)}
+                aria-label={`${fmtPrice(q.price_gbp, "GBP")} in pounds; priced in ${q.currency}`}
+              >
+                ≈ {fmtPrice(q.price_gbp, "GBP")}
+              </TooltipTrigger>
+              <TooltipContent>Priced in {q.currency}. In pounds at today’s rate.</TooltipContent>
+            </Tooltip>
+          ) : null}
+        </div>
+      ) : data && !data.pending.includes("chart") ? (
+        <span className="text-sm text-muted-foreground">No live price</span>
+      ) : (
+        <Skeleton className="h-9 w-48" />
+      )}
+
+      {data?.why_moved?.text ? (
+        <p className="flex items-start gap-2 text-sm leading-snug text-muted-foreground">
+          <ArchieIcon className="mt-0.5 size-3.5 shrink-0" />
+          <span className="text-foreground/90">{data.why_moved.text}.</span>
+        </p>
+      ) : null}
+    </header>
+  )
+}
+
+// ── 2. What does it mean for me? ────────────────────────────────────────────
+
+function ForMe({ data }: { data: InstrumentInsight }) {
+  const blur = privacyBlurClass(usePrivacyMode())
+  const pos = data.position
+  const book = data.book
+  const plays = data.plays
+  const owner = primaryPlay(plays)
+  const others = plays.filter((p) => p !== owner)
+  const cap = book?.position_cap ?? null
+  const target = owner?.target_weight_of_book ?? null
+
+  if (!pos) {
+    const probe = Math.max(50, Math.round(Math.min(book?.max_order_gbp ?? 500, (book?.total_gbp ?? 0) * 0.01 || 500) / 50) * 50)
+    return (
+      <div className="flex flex-col gap-1 text-sm">
+        <p className={cn("leading-relaxed", num)}>
+          <span className="font-medium">Not in your book</span>
+          {book?.total_gbp ? (
+            <span className="text-muted-foreground">
+              {" "}
+              · <span className={blur}>{fmtMoney(probe)}</span> would be {fmtPct(probe / book.total_gbp)} of it
+            </span>
+          ) : null}
+          {data.watchlist ? <span className="text-muted-foreground"> · on your watchlist</span> : null}
+        </p>
+        <PlayLine owner={owner} others={others} />
+      </div>
+    )
+  }
+
+  const pplUp = pos.ppl_gbp >= 0
+  // One line for the money (weight lives on the meter), one for the play, then the meter.
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-0.5">
+        <p className={cn("text-[15px] leading-relaxed", num)}>
+          <span className={cn("font-semibold", blur)}>{fmtMoney(pos.value_gbp)}</span>
+          <span className="text-muted-foreground"> held · </span>
+          <span className={cn("font-medium", pplUp ? "text-positive" : "text-negative", blur)}>
+            {fmtMoney(pos.ppl_gbp, "GBP", { signed: true })}
+            {pos.ppl_pct != null ? ` (${fmtPct(pos.ppl_pct, 1, { signed: true })})` : ""}
+          </span>
+          <span className="text-muted-foreground"> since you bought</span>
+        </p>
+        <PlayLine owner={owner} others={others} />
+      </div>
+      <CapMeter weight={pos.weight} cap={cap} target={target} />
+    </div>
+  )
+}
+
+function PlayLine({ owner, others }: { owner: InsightPlay | null; others: InsightPlay[] }) {
+  if (!owner && !others.length) return null
+  const role = owner?.role ? `${owner.role[0].toUpperCase()}${owner.role.slice(1)}` : null
+  return (
+    <p className="text-sm leading-relaxed text-muted-foreground">
+      {owner ? (
+        <>
+          {owner.relation === "bench" ? "On the bench for " : role ? `${role} holding in ` : "Part of "}
+          <a href={`#/plays/${owner.id}`} className="font-medium text-foreground underline-offset-2 hover:underline">
+            {owner.title}
+          </a>
+          {owner.status !== "active" ? ` (${owner.status})` : ""}
+          {others.length ? " · " : ""}
+        </>
+      ) : null}
+      {others.length ? (
+        <>
+          Also relevant to{" "}
+          {others.map((p, i) => (
+            <span key={p.id}>
+              {i ? ", " : ""}
+              <a href={`#/plays/${p.id}`} className="text-foreground underline-offset-2 hover:underline">
+                {p.title}
+              </a>
+            </span>
+          ))}
+        </>
+      ) : null}
+    </p>
+  )
+}
+
+// ── 9. Actions ──────────────────────────────────────────────────────────────
+
+function contextLine(d: InstrumentInsight): string {
+  const bits: string[] = []
+  if (d.quote) bits.push(`trading at ${fmtPrice(d.quote.price, d.quote.currency)} (${fmtPct(d.quote.change_pct ?? 0, 1, { signed: true })} today)`)
+  if (d.position)
+    bits.push(
+      `I hold ${fmtMoney(d.position.value_gbp)} (${fmtPct(d.position.weight)} of my book, ${fmtPct(d.position.ppl_pct ?? 0, 1, { signed: true })} vs my cost)`,
+    )
+  else bits.push("I don't hold it")
+  const owner = primaryPlay(d.plays)
+  if (owner) bits.push(`it's ${owner.role ? `a ${owner.role} leg` : "part"} of my "${owner.title}" play`)
+  return bits.join("; ")
+}
+
+function whoOf(data: InstrumentInsight, name: string | null) {
+  return `${data.display_ticker}${name ? ` (${name})` : ""}`
+}
+
+/** The general question Ask Archie (and its A shortcut) sends. */
+function readPrompt(data: InstrumentInsight, name: string | null) {
+  return `What's your read on ${whoOf(data, name)}? Context: ${contextLine(data)}. Anything I should act on?`
+}
+
+/** A key hint inside a button; hidden on touch screens, where there's no keyboard. */
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="ml-0.5 hidden rounded border border-current/25 px-1 font-mono text-[10px] leading-4 font-normal opacity-70 [@media(hover:hover)]:inline">
+      {children}
+    </kbd>
+  )
+}
+
+function Actions({
+  data,
+  name,
+  sizerOpen,
+  onToggleSizer,
+  onAsk,
+  onDeepAnalysis,
+}: {
+  data: InstrumentInsight
+  name: string | null
+  sizerOpen: boolean
+  onToggleSizer: () => void
+  onAsk: (prompt: string) => void
+  onDeepAnalysis?: () => void
+}) {
+  const who = whoOf(data, name)
+  const ctx = contextLine(data)
+  const prompts: { label: string; prompt: string }[] = [
+    data.held
+      ? { label: "Should I trim?", prompt: `Should I trim ${who}? Context: ${ctx}. Weigh concentration, risk contribution and the play's target, and give a clear answer with a size if yes.` }
+      : { label: "Should I buy?", prompt: `Should I buy ${who}? Context: ${ctx}. Consider how it would fit my book (overlap, correlation, sizing) and give a clear answer with a size if yes.` },
+    { label: "What's priced in?", prompt: `What's priced in for ${who}? Context: ${ctx}. What does the current valuation assume about growth and margins, and how does that compare with consensus?` },
+    { label: "Bull vs bear case", prompt: `Give me the bull and bear case for ${who} in a few lines each. Context: ${ctx}. End with what would decide it.` },
+  ]
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* One split button: equal heights, one shared radius, a hairline between the halves. */}
+      <div role="group" aria-label="Ask Archie" className="inline-flex">
+        <Button size="sm" className="rounded-r-none pr-2" onClick={() => onAsk(readPrompt(data, name))} title="Ask Archie (A)">
+          <ArchieIcon className="size-3.5" />
+          Ask Archie
+          <Kbd>A</Kbd>
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                size="icon-sm"
+                className="w-6 rounded-l-none border-l-primary-foreground/20"
+                aria-label="More questions for Archie"
+                title="More questions"
+              />
+            }
+          >
+            <ChevronDown className="size-3.5 opacity-80" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-52">
+            {prompts.map((c) => (
+              <DropdownMenuItem key={c.label} onClick={() => onAsk(c.prompt)}>
+                <ArchieIcon className="size-3.5 text-muted-foreground" />
+                {c.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <Button size="sm" variant={sizerOpen ? "secondary" : "outline"} onClick={onToggleSizer} aria-expanded={sizerOpen} title="Trade (T)">
+        <ArrowLeftRight className="size-3.5" />
+        Trade
+        <Kbd>T</Kbd>
+      </Button>
+      {onDeepAnalysis ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          onClick={onDeepAnalysis}
+          title="Archie runs a full workup and finishes with a verdict"
+          aria-label="Deep analysis"
+        >
+          <Telescope className="size-3.5" />
+          <span className="hidden min-[400px]:inline">Deep analysis</span>
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function AlertsList({ alerts }: { alerts: InstrumentInsight["alerts"] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {alerts.map((a) => (
+        <div
+          key={a.id}
+          className={cn(
+            "rounded-lg border-l-2 bg-muted/20 px-3.5 py-2.5 text-sm",
+            a.severity === "critical" ? "border-negative" : a.severity === "warning" ? "border-warning" : "border-border",
+          )}
+        >
+          <p className="font-medium">{a.title}</p>
+          {a.detail ? <p className="text-xs text-muted-foreground">{a.detail}</p> : null}
+          {a.consider ? <p className="mt-0.5 text-xs">Consider: {a.consider}</p> : null}
+        </div>
       ))}
+    </div>
+  )
+}
+
+function SectionSkeleton() {
+  return (
+    <div className="flex flex-col gap-2">
+      <Skeleton className="h-4 w-32" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-2/3" />
     </div>
   )
 }

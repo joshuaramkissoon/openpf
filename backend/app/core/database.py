@@ -24,6 +24,12 @@ def get_db():
 def init_db() -> None:
     from app.models import entities  # noqa: F401
 
+    # Fresh install / fresh sandbox: the sqlite file's folder may not exist yet.
+    db_file = engine.url.database if engine.url.get_backend_name() == "sqlite" else None
+    if db_file and db_file != ":memory:":
+        from pathlib import Path
+
+        Path(db_file).expanduser().parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _run_lightweight_migrations()
 
@@ -51,9 +57,53 @@ def _run_lightweight_migrations() -> None:
         if "tool_calls" not in cols:
             statements.append("ALTER TABLE chat_messages ADD COLUMN tool_calls JSON DEFAULT NULL")
 
-    if not statements:
-        return
+    if "plays" in existing_tables:
+        cols = {c["name"] for c in inspector.get_columns("plays")}
+        if "related" not in cols:
+            statements.append("ALTER TABLE plays ADD COLUMN related JSON DEFAULT '[]'")
+        if "bench" not in cols:
+            statements.append("ALTER TABLE plays ADD COLUMN bench JSON DEFAULT '[]'")
 
-    with engine.begin() as connection:
-        for stmt in statements:
-            connection.execute(text(stmt))
+    if statements:
+        with engine.begin() as connection:
+            for stmt in statements:
+                connection.execute(text(stmt))
+
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """Generic forward migration: add any model column an older DB lacks.
+
+    ``create_all`` creates new tables but never alters existing ones, so a DB
+    from an older checkout would 500 on the first query touching a new column.
+    Columns are added nullable with their scalar default (SQLite can't add NOT
+    NULL without one). Failures are logged, not fatal."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    preparer = engine.dialect.identifier_preparer
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        have = {c["name"] for c in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in have or column.primary_key:
+                continue
+            col_type = column.type.compile(dialect=engine.dialect)
+            stmt = f"ALTER TABLE {preparer.quote(table.name)} ADD COLUMN {preparer.quote(column.name)} {col_type}"
+            default = getattr(column.default, "arg", None)
+            if isinstance(default, bool):
+                stmt += f" DEFAULT {1 if default else 0}"
+            elif isinstance(default, (int, float)):
+                stmt += f" DEFAULT {default}"
+            elif isinstance(default, str):
+                stmt += " DEFAULT '" + default.replace("'", "''") + "'"
+            try:
+                with engine.begin() as connection:
+                    connection.execute(text(stmt))
+                log.info("Migrated: added %s.%s", table.name, column.name)
+            except Exception:  # noqa: BLE001
+                log.warning("Could not add column %s.%s", table.name, column.name, exc_info=True)

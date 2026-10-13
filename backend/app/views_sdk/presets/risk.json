@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "title": "Where's my risk",
+  "description": "How much rides on a few names? Concentration by holding, sector and country",
+  "icon": "shield",
+  "controls": {"account": true},
+  "data": {"pf": {"source": "portfolio"}},
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "In your five largest holdings",
+      "from": "pf.positions",
+      "value": {"agg": "sum", "field": "weight", "transform": [{"sort": {"by": "value"}}, {"top": {"n": 5}}]},
+      "format": "pct",
+      "caption": "Share of your whole book, cash included. The more that rides on a few names, the more one bad day for one of them hurts.",
+      "width": "two-thirds"
+    },
+    {
+      "type": "kpis",
+      "from": "pf.positions",
+      "width": "third",
+      "items": [
+        {"label": "Largest holding", "value": {"agg": "max", "field": "weight"}, "format": "pct", "hint": "of your book"},
+        {"label": "Holdings", "value": {"agg": "count"}, "format": "int", "hint": "positions across your accounts"}
+      ]
+    },
+    {
+      "type": "bars",
+      "title": "Largest positions",
+      "subtitle": "Your ten biggest holdings and how each has done since you bought",
+      "from": "pf.positions",
+      "transform": [{"sort": {"by": "weight"}}, {"top": {"n": 10}}],
+      "label": "ticker",
+      "value": "weight",
+      "format": "pct",
+      "valueLabel": "% of book",
+      "secondary": "ppl_pct",
+      "secondaryFormat": "signedPct",
+      "secondaryLabel": "Return",
+      "width": "half"
+    },
+    {
+      "type": "treemap",
+      "title": "Concentration map",
+      "subtitle": "Every holding sized by value, grouped by sector; colour is gain or loss since you bought",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["sector"]}],
+      "label": "ticker",
+      "size": "value",
+      "color": "ppl_pct",
+      "colorFormat": "signedPct",
+      "group": "sector",
+      "width": "half"
+    },
+    {
+      "type": "allocation",
+      "title": "By sector",
+      "subtitle": "Funds are grouped together; click a sector to see its holdings",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["sector"]}, {"groupBy": "sector"}, {"sort": {"by": "value"}}],
+      "label": "sector",
+      "value": "value",
+      "width": "half"
+    },
+    {
+      "type": "allocation",
+      "title": "By country",
+      "subtitle": "Where the companies you own are based",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["country"]}, {"groupBy": "country"}, {"sort": {"by": "value"}}],
+      "label": "country",
+      "value": "value",
+      "width": "half"
+    }
+  ]
+}

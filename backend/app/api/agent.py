@@ -1,12 +1,14 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.database import SessionLocal
 from app.core.config import get_settings
+from app.services import model_routing
 from app.schemas.agent import (
     AgentRunItem,
     AgentRunRequest,
@@ -26,7 +28,7 @@ from app.schemas.chat import (
     ChatSessionCreate,
     ChatSessionItem,
 )
-from app.models.entities import Thesis
+from app.models.entities import Thesis, TradeIntent
 from app.services.agent_service import get_run, list_runs, run_agent
 from app.services.chat_service import (
     append_assistant_message,
@@ -39,6 +41,7 @@ from app.services.chat_service import (
     require_session,
     send_message,
 )
+from app.services.chat_errors import MAX_CHAT_CHARS, friendly_chat_error
 from app.services.chat_title_service import retitle_in_request
 from app.services.claude_chat_runtime import claude_chat_runtime
 from app.services.claude_memory_service import schedule_memory_distillation
@@ -70,7 +73,7 @@ def _message_item(row) -> ChatMessageItem:
 
 @router.post("/run", response_model=AgentRunResponse)
 def run(payload: AgentRunRequest, db: Session = Depends(get_db)) -> AgentRunResponse:
-    result = run_agent(db, include_watchlist=payload.include_watchlist, execute_auto=payload.execute_auto)
+    result = run_agent(db, include_watchlist=payload.include_watchlist)
     return AgentRunResponse(**result)
 
 
@@ -113,10 +116,47 @@ def run_detail(run_id: str, db: Session = Depends(get_db)) -> AgentRunResponse:
 
 
 @router.get("/intents", response_model=list[TradeIntentItem])
-def intents(db: Session = Depends(get_db)) -> list[TradeIntentItem]:
-    rows = list_intents(db)
+def intents(
+    ids: str | None = Query(default=None, description="Comma-separated intent ids to fetch (any age)"),
+    db: Session = Depends(get_db),
+) -> list[TradeIntentItem]:
+    if ids:
+        # Chat transcripts reference proposals by id; old ones can fall outside
+        # the recent list, so they're fetched directly.
+        wanted = [i.strip() for i in ids.split(",") if i.strip()][:50]
+        rows = list(db.execute(select(TradeIntent).where(TradeIntent.id.in_(wanted))).scalars().all()) if wanted else []
+    else:
+        rows = list_intents(db)
+    owners: dict[str, dict | None] = {}
+    try:
+        from app.models.entities import Play
+        from app.services import book_service
+
+        idx = book_service.ownership_index(db)
+        titles = {p.id: p.title for p in db.execute(select(Play)).scalars().all()}
+        owners = {r.id: book_service.intent_owner(idx, r, titles) for r in rows}
+    except Exception:  # noqa: BLE001 — labels are cosmetic; never break the queue
+        pass
+
+    perm_labels: dict[str, str] = {}
+    try:
+        from app.services.permissions_service import permission_labels
+
+        perm_labels = permission_labels(db)
+    except Exception:  # noqa: BLE001
+        pass
+    from app.services import intent_category
+
+    def _o(r, key, default=None):
+        o = owners.get(r.id)
+        return o.get(key, default) if o else default
+
     return [
         TradeIntentItem(
+            owner_kind=_o(r, "kind"),
+            owner_play_id=_o(r, "play_id"),
+            owner_label=_o(r, "title"),
+            owner_inferred=bool(_o(r, "inferred", False)),
             id=r.id,
             created_at=r.created_at,
             status=r.status,
@@ -132,14 +172,41 @@ def intents(db: Session = Depends(get_db)) -> list[TradeIntentItem]:
             rationale=r.rationale,
             broker_mode=r.broker_mode,
             account_kind=(r.meta or {}).get("account_kind") if isinstance(r.meta, dict) else None,
+            source=(r.meta or {}).get("source") if isinstance(r.meta, dict) else None,
+            play_id=(r.meta or {}).get("play_id") if isinstance(r.meta, dict) else None,
+            play_title=(r.meta or {}).get("play_title") if isinstance(r.meta, dict) else None,
+            tranche_index=(r.meta or {}).get("tranche_index") if isinstance(r.meta, dict) else None,
+            tranche_label=(r.meta or {}).get("tranche_label") if isinstance(r.meta, dict) else None,
+            instrument_name=((r.meta or {}).get("instrument_name") or None) if isinstance(r.meta, dict) else None,
             approved_at=r.approved_at,
+            approved_by=r.approved_by,
+            permission_label=perm_labels.get(r.approved_by or ""),
+            category=intent_category.of_intent(r),
             executed_at=r.executed_at,
             broker_order_id=r.broker_order_id,
             execution_price=r.execution_price,
             failure_reason=r.failure_reason,
+            crypto=(r.meta or {}).get("crypto") if isinstance(r.meta, dict) else None,
+            read_only=bool((r.meta or {}).get("read_only")) if isinstance(r.meta, dict) else False,
+            place_in=(r.meta or {}).get("place_in") if isinstance(r.meta, dict) else None,
+            account_label=(r.meta or {}).get("account_label") if isinstance(r.meta, dict) else None,
+            not_before=r.not_before,
+            held=(r.meta or {}).get("held") if isinstance(r.meta, dict) else None,
         )
         for r in rows
     ]
+
+
+@router.post("/intents/{intent_id}/stage-tomorrow")
+def stage_tomorrow(intent_id: str, db: Session = Depends(get_db)) -> dict:
+    """Re-propose a held-back ask for tomorrow's limit window. Changes no limit;
+    the proposal still needs the user's approval, and only from tomorrow."""
+    from app.services import proposal_service
+
+    result = proposal_service.stage_held(db, intent_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "; ".join(result.get("violations") or []) or "couldn't stage it")
+    return result
 
 
 @router.post("/intents/{intent_id}/approve", response_model=IntentActionResponse)
@@ -164,7 +231,12 @@ def reject(intent_id: str, payload: IntentDecisionRequest, db: Session = Depends
 def execute(intent_id: str, payload: IntentExecuteRequest, db: Session = Depends(get_db)) -> IntentActionResponse:
     try:
         intent = execute_intent(
-            db, intent_id, force_live=payload.force_live, account_kind=payload.account_kind
+            db,
+            intent_id,
+            force_live=payload.force_live,
+            account_kind=payload.account_kind,
+            approve=payload.approve,
+            approved_via="ui",
         )
         return IntentActionResponse(intent_id=intent.id, status=intent.status, message="intent executed")
     except (ExecutionError, T212Error) as exc:
@@ -283,9 +355,22 @@ async def chat_stream(session_id: str, websocket: WebSocket):
     await websocket.accept()
     db = SessionLocal()
     try:
-        incoming = await websocket.receive_json()
-        payload = ChatSendRequest.model_validate(incoming)
-        session = require_session(db, session_id)
+        try:
+            incoming = await websocket.receive_json()
+            payload = ChatSendRequest.model_validate(incoming)
+        except (ValidationError, ValueError, KeyError) as exc:
+            too_long = "at most" in str(exc) or "string_too_long" in str(exc)
+            await websocket.send_json({
+                "type": "error",
+                "error": (f"Message is too long — keep it under {MAX_CHAT_CHARS:,} characters."
+                          if too_long else "Message is empty or unreadable."),
+            })
+            return
+        try:
+            session = require_session(db, session_id)
+        except Exception:  # noqa: BLE001
+            await websocket.send_json({"type": "error", "error": "This chat no longer exists — start a new one."})
+            return
         user_row = append_user_message(db, session, payload.content)
 
         await websocket.send_json(
@@ -421,6 +506,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                         on_delta=_on_delta,
                         on_status=_on_status,
                         on_question=_on_question,
+                        inline_proposals=True,
                     ),
                     timeout=timeout,
                 )
@@ -433,7 +519,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                             _cost_db,
                             source="chat",
                             source_id=session.id,
-                            model=settings.claude_model,
+                            model=model_routing.sdk_model("chat"),
                             total_cost_usd=reply.cost_usd,
                             duration_ms=reply.duration_ms,
                             num_turns=reply.num_turns,
@@ -441,6 +527,15 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             except asyncio.TimeoutError:
                 assistant_text = "".join(streamed_chunks).strip() or "Response timed out."
                 result_subtype = "error_timeout"
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:  # noqa: BLE001 — model unavailable, CLI crash, …
+                # Keep any partial answer; otherwise store a clear, actionable
+                # reason as Archie's reply so the UI (and history) never hangs.
+                partial = "".join(streamed_chunks).strip()
+                reason = friendly_chat_error(exc)
+                assistant_text = f"{partial}\n\n_{reason}_" if partial else reason
+                result_subtype = "error_runtime"
             finally:
                 keepalive_task.cancel()
                 try:
@@ -470,7 +565,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
         pass
     except Exception as exc:
         try:
-            await websocket.send_json({"type": "error", "error": str(exc)})
+            await websocket.send_json({"type": "error", "error": friendly_chat_error(exc)})
         except Exception:
             pass
     finally:

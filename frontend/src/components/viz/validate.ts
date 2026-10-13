@@ -1,0 +1,156 @@
+import type { Block, VizSpec } from './types'
+
+/**
+ * Client-side structural check for specs that arrive from chat or storage.
+ * The backend (app/services/viz_spec.py) is the authority; this only makes sure
+ * the renderer gets something it can draw, with a readable reason when not.
+ */
+const BLOCK_TYPES = new Set(['hero', 'meter', 'kpis', 'treemap', 'allocation', 'bars', 'timeseries', 'multiples', 'heatgrid', 'table', 'note'])
+const SOURCES = new Set(['portfolio', 'history', 'orders', 'dividends', 'prices', 'quotes', 'fundamentals', 'watchlist', 'proposals', 'plays', 'profiles', 'fx', 'cashflows', 'news'])
+const NEEDS_FROM = new Set(['treemap', 'allocation', 'bars', 'timeseries', 'multiples', 'heatgrid', 'table'])
+const FROM_RE = /^[a-z][a-z0-9_]{0,23}(\.[A-Za-z_][A-Za-z0-9_]{0,39}){0,3}$/
+
+const DEFAULTS: Record<string, Record<string, unknown>> = {
+  hero: { format: 'money', deltaFormat: 'signedPct' },
+  meter: { format: 'money' },
+  treemap: { format: 'money', colorFormat: 'signedPct' },
+  allocation: { style: 'bar', format: 'money' },
+  bars: { format: 'money', orientation: 'horizontal', limit: 12, secondaryFormat: 'signedPct' },
+  timeseries: { x: 'date', style: 'area', format: 'moneyCompact' },
+  multiples: { ticker: 'yf', range: '3mo', valueFormat: 'signedPct' },
+  heatgrid: { mode: 'pivot', ticker: 'yf', days: 10, range: '6mo', format: 'money' },
+  table: { limit: 25 },
+}
+
+/** Fill the same defaults the backend schema applies. */
+export function withDefaults(block: Block): Block {
+  const base = { width: 'full', ...(DEFAULTS[block.type] ?? {}) }
+  const out = { ...base, ...block } as Block
+  if (out.type === 'kpis') out.items = out.items.map((it) => ({ format: 'money', deltaFormat: 'signedPct', ...it }))
+  return out
+}
+
+export type ValidateResult = { ok: true; spec: VizSpec } | { ok: false; error: string }
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+export function validateVizSpec(input: unknown): ValidateResult {
+  let raw = input
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw)
+    } catch {
+      return { ok: false, error: 'The chart data is not valid JSON.' }
+    }
+  }
+  if (!isObj(raw)) return { ok: false, error: 'A chart spec must be an object.' }
+  if (raw.version !== undefined && raw.version !== 1) return { ok: false, error: `Unsupported spec version ${String(raw.version)}.` }
+  if (typeof raw.title !== 'string' || !raw.title.trim()) return { ok: false, error: 'The spec needs a title.' }
+  if (!Array.isArray(raw.blocks) || raw.blocks.length === 0) return { ok: false, error: 'The spec has no blocks.' }
+  if (raw.blocks.length > 12) return { ok: false, error: 'At most 12 blocks.' }
+
+  const data = isObj(raw.data) ? raw.data : {}
+  for (const [name, q] of Object.entries(data)) {
+    if (!isObj(q) || typeof q.source !== 'string' || !SOURCES.has(q.source)) return { ok: false, error: `Query "${name}" uses an unknown source.` }
+  }
+  const names = new Set([...Object.keys(data), 'pf'])
+
+  for (const [i, b] of (raw.blocks as unknown[]).entries()) {
+    if (!isObj(b) || typeof b.type !== 'string' || !BLOCK_TYPES.has(b.type)) return { ok: false, error: `Block ${i + 1} has an unknown type.` }
+    const from = b.from
+    if (from !== undefined && (typeof from !== 'string' || !FROM_RE.test(from))) return { ok: false, error: `Block ${i + 1} has an invalid "from".` }
+    if (NEEDS_FROM.has(b.type) && !from) return { ok: false, error: `Block ${i + 1} (${b.type}) needs "from".` }
+    if (typeof from === 'string' && !names.has(from.split('.')[0])) return { ok: false, error: `Block ${i + 1} reads an undefined query "${from.split('.')[0]}".` }
+    if (b.type === 'kpis' && (!Array.isArray(b.items) || !b.items.length)) return { ok: false, error: `Block ${i + 1} (kpis) has no items.` }
+    if (b.type === 'timeseries' && (!Array.isArray(b.series) || !b.series.length)) return { ok: false, error: `Block ${i + 1} (timeseries) has no series.` }
+    if (b.type === 'table' && (!Array.isArray(b.columns) || !b.columns.length)) return { ok: false, error: `Block ${i + 1} (table) has no columns.` }
+    if (b.type === 'note' && typeof b.text !== 'string') return { ok: false, error: `Block ${i + 1} (note) has no text.` }
+  }
+  return { ok: true, spec: { ...(raw as unknown as VizSpec), version: 1, data: data as VizSpec['data'], blocks: tidyBlocks((raw.blocks as Block[]).map(withDefaults)) } }
+}
+
+const groupKey = (b: Block) => {
+  let key: string | undefined
+  for (const s of b.transform ?? []) if ('groupBy' in s) key = s.groupBy
+  return key
+}
+
+/**
+ * Mirror of the backend tidy pass (app/services/viz_spec.py): a table that
+ * lists the same rows as a chart is dropped, and its extra columns move into
+ * the chart's `details` (tooltip + table view).
+ */
+export function dropDuplicateTables(blocks: Block[]): Block[] {
+  const charts = blocks.filter((b) => b.type === 'bars' || b.type === 'allocation' || b.type === 'treemap')
+  const out: Block[] = []
+  for (const b of blocks) {
+    if (b.type === 'table') {
+      const twin = charts.find((c) => {
+        if (c.from !== b.from) return false
+        const tk = groupKey(b)
+        const ck = groupKey(c)
+        if (tk || ck) return !!tk && (tk === ck || (c.type === 'treemap' && c.group === tk))
+        return 'label' in c && b.columns.some((col) => col.field === c.label)
+      })
+      if (twin && (twin.type === 'bars' || twin.type === 'allocation' || twin.type === 'treemap')) {
+        const r = twin as unknown as Record<string, unknown>
+        const shown = new Set(['label', 'value', 'size', 'color', 'secondary', 'group'].map((k) => r[k]))
+        const details = [...(twin.details ?? [])]
+        for (const col of b.columns) if (!shown.has(col.field) && !details.some((d) => d.field === col.field) && details.length < 6) details.push(col)
+        twin.details = details
+        continue
+      }
+    }
+    out.push(b)
+  }
+  return out
+}
+
+/**
+ * A hero's sparkline is dropped when the page already charts the same series
+ * (same rows and field): one series, drawn once.
+ */
+export function dropDuplicateTrends(blocks: Block[]): Block[] {
+  const charted = new Set(blocks.flatMap((b) => (b.type === 'timeseries' ? b.series.map((s) => `${b.from}|${s.field}`) : [])))
+  return blocks.map((b) => (b.type === 'hero' && b.trend && charted.has(`${b.trend.from}|${b.trend.field}`) ? { ...b, trend: undefined } : b))
+}
+
+/** Client mirror of the backend tidy pass. */
+export function tidyBlocks(blocks: Block[]): Block[] {
+  return dropDuplicateTrends(dropDuplicateTables(blocks))
+}
+
+export type Cell = { block: Block; index: number; span: number }
+const SPAN: Record<NonNullable<Block['width']>, number> = { full: 12, 'two-thirds': 8, half: 6, third: 4 }
+
+/**
+ * Pack blocks into 12-column rows so every row is full: a row that comes up
+ * short (a half followed by a full) widens its blocks instead of leaving a
+ * void — equal blocks share the row, otherwise the last one takes the rest.
+ */
+export function packRows(blocks: Block[]): Cell[][] {
+  const rows: Cell[][] = []
+  let cur: Cell[] = []
+  let used = 0
+  const close = () => {
+    if (!cur.length) return
+    const rest = 12 - used
+    if (rest > 0) {
+      if (cur.every((c) => c.span === cur[0].span) && 12 % cur.length === 0) cur = cur.map((c) => ({ ...c, span: 12 / cur.length }))
+      else cur[cur.length - 1] = { ...cur[cur.length - 1], span: cur[cur.length - 1].span + rest }
+    }
+    rows.push(cur)
+    cur = []
+    used = 0
+  }
+  blocks.forEach((block, index) => {
+    const span = SPAN[block.width ?? 'full'] ?? 12
+    if (used + span > 12) close()
+    cur.push({ block, index, span })
+    used += span
+  })
+  close()
+  return rows
+}

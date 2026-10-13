@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -243,7 +243,7 @@ def order_history(
 
 @router.delete("/{order_id}", response_model=CancelOrderResponse)
 def cancel_order(
-    order_id: str,
+    order_id: str = Path(pattern=r"^[A-Za-z0-9_-]{1,64}$"),
     account: SingleAccount = Query(...),
     db: Session = Depends(get_db),
 ) -> CancelOrderResponse:
@@ -263,7 +263,7 @@ def cancel_order(
             status_code=400,
             detail=ClassifiedError(
                 CODE_VALIDATION,
-                f"no execution key configured for {account} (add it in Settings → Credentials)",
+                f"no execution key configured for {account} (add a trade key in Settings → Accounts → Trading 212)",
                 {"account_kind": account},
             ).as_detail(),
         )

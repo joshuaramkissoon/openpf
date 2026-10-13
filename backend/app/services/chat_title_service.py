@@ -1,6 +1,7 @@
 """Generate concise, descriptive titles for Archie chat sessions.
 
-A cheap, fast Gemini call (structured output) names a conversation after its
+A cheap, fast one-shot call (fast_llm: Together, then Claude Haiku; Gemini
+if its key is configured) names a conversation after its
 first assistant reply, then re-evaluates every few turns to catch topic drift.
 The model receives the current title plus a trimmed slice of recent context and
 *decides* whether to rename or keep it — so settled conversations don't churn
@@ -123,17 +124,60 @@ def _clean_title(raw: str) -> str:
     return (raw or "").strip().strip("\"'").strip()[:240]
 
 
+def _fast_chain() -> list[tuple[str, str]]:
+    """Configured one-shot providers for titles (Settings → Models), minus Gemini,
+    which goes through its own client below."""
+    from app.services import fast_llm, model_routing
+
+    return [(p, m) for p, m in model_routing.fast_chain("chat_title") if p != "gemini" and fast_llm.available(p)]
+
+
+def title_model_available() -> bool:
+    return bool(_fast_chain()) or bool(settings.gemini_api_key)
+
+
+_TITLE_SCHEMA = {
+    "type": "object",
+    "properties": {"should_rename": {"type": "boolean"}, "title": {"type": "string"}},
+    "required": ["should_rename", "title"],
+}
+
+
+async def _decide(current_title: str, transcript: str) -> TitleDecision | None:
+    from app.services import model_routing
+
+    prompt = _build_prompt(current_title, transcript)
+    gemini_first = model_routing.route("chat_title")["provider"] == "gemini" and bool(settings.gemini_api_key)
+    chain = [] if gemini_first else _fast_chain()
+    if chain:
+        from app.services import fast_llm
+
+        try:
+            res = await fast_llm.complete_json(
+                "chat_title", system="Reply with JSON: {\"should_rename\": bool, \"title\": string}.", user=prompt,
+                schema=_TITLE_SCHEMA, chain=chain, timeout=TITLE_GENERATION_TIMEOUT, max_tokens=200,
+                validate=lambda d: TitleDecision(**d).model_dump(),
+            )
+            return TitleDecision(**res.data)
+        except Exception as exc:  # noqa: BLE001 — try Gemini if configured
+            if not settings.gemini_api_key:
+                raise
+            logger.debug("fast title call failed, trying Gemini: %s", exc)
+    # Gemini stays available as an option when its key is configured.
+    return await generate_structured(
+        model=settings.gemini_title_model,
+        contents=prompt,
+        response_schema=TitleDecision,
+        thinking_level="low",
+    )
+
+
 async def generate_title(current_title: str, transcript: str) -> str | None:
     """Ask the model for a title. Returns a new title to apply, or ``None`` to
     keep the current one. Shared by the live path and the backfill script."""
     if not transcript.strip():
         return None
-    decision = await generate_structured(
-        model=settings.gemini_title_model,
-        contents=_build_prompt(current_title, transcript),
-        response_schema=TitleDecision,
-        thinking_level="low",
-    )
+    decision = await _decide(current_title, transcript)
     if decision is None or not decision.should_rename:
         return None
     new_title = _clean_title(decision.title)
@@ -142,12 +186,37 @@ async def generate_title(current_title: str, transcript: str) -> str | None:
     return new_title
 
 
+def _fallback_title(text: str, limit: int = 48) -> str:
+    words = " ".join((text or "").split())
+    if len(words) <= limit:
+        return words
+    cut = words[:limit].rsplit(" ", 1)[0]
+    return f"{cut}…"
+
+
 async def maybe_retitle_session(db: Session, session: ChatSession) -> bool:
     """(Re)title `session` if it is due, persisting and mutating `session.title`
     in place so the caller's response payload reflects the new title. Returns
     True if the title changed."""
-    if not settings.gemini_api_key:
-        return False
+    if not title_model_available():
+        # No title model configured: name a placeholder chat after its first
+        # message so the conversation list stays scannable.
+        if not is_placeholder_title(session.title or ""):
+            return False
+        first = db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session.id, ChatMessage.role == "user")
+            .order_by(ChatMessage.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        title = _fallback_title(first.content if first else "")
+        if not title:
+            return False
+        session.title = title
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return True
     if not _is_due(_assistant_turn_count(db, session.id)):
         return False
     new_title = await generate_title(session.title or "", build_transcript(db, session.id))

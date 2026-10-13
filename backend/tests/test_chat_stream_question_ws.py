@@ -66,7 +66,7 @@ def test_question_frame_round_trips_answer_into_runtime(monkeypatch):
 
     seen_answers = {}
 
-    async def fake_stream_reply(*, chat_session_id, prompt, on_delta, on_status, on_question):
+    async def fake_stream_reply(*, chat_session_id, prompt, on_delta, on_status, on_question, inline_proposals=False):
         answers = await on_question({"questions": [_QUESTION]})
         seen_answers.update(answers or {})
         text = f"Great — going with {answers['Which KEYS did you mean?']}."
@@ -105,7 +105,7 @@ def test_cancel_frame_resolves_question_as_dismissed(monkeypatch):
 
     captured = {}
 
-    async def fake_stream_reply(*, chat_session_id, prompt, on_delta, on_status, on_question):
+    async def fake_stream_reply(*, chat_session_id, prompt, on_delta, on_status, on_question, inline_proposals=False):
         answers = await on_question({"questions": [_QUESTION]})
         captured["answers"] = answers
         return ReplyResult(text="No worries, I'll use my best judgement.")
@@ -137,7 +137,7 @@ def test_disconnect_mid_question_resolves_without_hanging(monkeypatch):
     resolved = threading.Event()
     captured = {}
 
-    async def fake_stream_reply(*, chat_session_id, prompt, on_delta, on_status, on_question):
+    async def fake_stream_reply(*, chat_session_id, prompt, on_delta, on_status, on_question, inline_proposals=False):
         captured["answers"] = await on_question({"questions": [_QUESTION]})
         resolved.set()
         return ReplyResult(text="done")

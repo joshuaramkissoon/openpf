@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 
 import type { PositionItem } from "@/types"
-import { InstrumentSpotlight, type RecentInstrument } from "./instrument-spotlight"
+import { InstrumentSpotlight, type RecentInstrument, type SpotlightCommand } from "./instrument-spotlight"
 import { InstrumentDetailSheet, type InstrumentHint } from "./instrument-detail-sheet"
 
 type InstrumentContextValue = {
@@ -9,6 +9,8 @@ type InstrumentContextValue = {
   openInstrument: (ticker: string, hint?: InstrumentHint) => void
   /** Open the Cmd+K command palette. */
   openPalette: () => void
+  /** Current holdings (for ticker chips + Archie's suggestions). */
+  positions: PositionItem[]
 }
 
 const InstrumentContext = createContext<InstrumentContextValue | null>(null)
@@ -19,12 +21,23 @@ export function useInstrument() {
   return ctx
 }
 
+/** Holdings without throwing outside the provider (e.g. in isolated renders). */
+export function useHeldPositions(): PositionItem[] {
+  return useContext(InstrumentContext)?.positions ?? EMPTY_POSITIONS
+}
+const EMPTY_POSITIONS: PositionItem[] = []
+
+/** ``openInstrument`` without throwing outside the provider (null there). */
+export function useOpenInstrument(): InstrumentContextValue["openInstrument"] | null {
+  return useContext(InstrumentContext)?.openInstrument ?? null
+}
+
 const RECENT_KEY = "openpf:recent-instruments"
 const RECENT_LIMIT = 8
 
 /** Fired when the watchlist is mutated from the Spotlight sheet, so independently
  *  data-fetching surfaces (e.g. the Watchlist board) can refresh. */
-export const WATCHLIST_CHANGED_EVENT = "mypf:watchlist-changed"
+export const WATCHLIST_CHANGED_EVENT = "openpf:watchlist-changed"
 
 function loadRecent(): RecentInstrument[] {
   try {
@@ -40,11 +53,23 @@ export function InstrumentProvider({
   positions,
   currency,
   onAskArchie,
+  onAskArchieSend,
+  onDeepAnalysis,
+  commands,
+  onAskArchiePrompt,
   children,
 }: {
   positions: PositionItem[]
   currency: "GBP" | "USD"
   onAskArchie?: (ticker: string, name?: string | null) => void
+  /** Start an Archie chat with a contextual prompt and send it (sheet prompt chips). */
+  onAskArchieSend?: (prompt: string) => void
+  /** "Deep analysis" in the detail sheet — hand the ticker to Archie for a full workup. */
+  onDeepAnalysis?: (ticker: string, name?: string | null) => void
+  /** Navigation + actions for the ⌘K palette. */
+  commands?: SpotlightCommand[]
+  /** Free-text "Ask Archie: …" from the palette. */
+  onAskArchiePrompt?: (prompt: string) => void
   children: React.ReactNode
 }) {
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -92,7 +117,7 @@ export function InstrumentProvider({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  const value = useMemo(() => ({ openInstrument, openPalette }), [openInstrument, openPalette])
+  const value = useMemo(() => ({ openInstrument, openPalette, positions }), [openInstrument, openPalette, positions])
 
   return (
     <InstrumentContext.Provider value={value}>
@@ -103,6 +128,8 @@ export function InstrumentProvider({
         positions={positions}
         recent={recent}
         onSelect={openInstrument}
+        commands={commands}
+        onAskArchie={onAskArchiePrompt}
       />
       <InstrumentDetailSheet
         ticker={ticker}
@@ -111,6 +138,8 @@ export function InstrumentProvider({
         onOpenChange={setDetailOpen}
         hint={hint}
         onAskArchie={onAskArchie}
+        onAskArchieSend={onAskArchieSend}
+        onDeepAnalysis={onDeepAnalysis}
         onWatchlistChanged={() => window.dispatchEvent(new Event(WATCHLIST_CHANGED_EVENT))}
       />
     </InstrumentContext.Provider>

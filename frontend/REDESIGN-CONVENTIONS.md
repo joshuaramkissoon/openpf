@@ -1,4 +1,4 @@
-# MyPF Dashboard — Redesign Conventions (shadcn + Tailwind v4)
+# OpenPF Dashboard — Redesign Conventions (shadcn + Tailwind v4)
 
 This is the single source of truth for the redesign. Every screen must look like
 it came from one designer. **Do not invent new visual patterns.** Compose the

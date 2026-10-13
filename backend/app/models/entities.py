@@ -161,10 +161,17 @@ class TradeIntent(Base):
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Who approved it: "human", or "permission:<id>" for a standing permission
+    # the user granted (permissions_service). NULL on rows from before this column.
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     execution_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Not to be placed before this (UTC) day: a proposal staged for a later
+    # daily-limit window. execute_intent refuses it until then, and it counts
+    # against that day's daily notional cap, not today's.
+    not_before: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
 
 
 class ExecutionEvent(Base):
@@ -224,7 +231,7 @@ class WatchlistItem(Base):
     """A tracked idea on the watchlist — the layer between a passing mention and a
     full Thesis. Holds *why* a symbol is being watched (``note``, which doubles as
     the natural-language watch condition) plus the knobs that let the watch service
-    resurface it (``target_price``/``target_direction``, ``monitor``). CRUD'd by Josh
+    resurface it (``target_price``/``target_direction``, ``monitor``). CRUD'd by the user
     (UI) or Archie (watchlist MCP). ``active_symbols`` (status='watching') is what the
     agent run + leveraged scan consume — this table replaced the old config symbol list.
     """
@@ -342,7 +349,7 @@ class ScheduledTask(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     cron_expr: Mapped[str] = mapped_column(String(80))
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/London")
-    model: Mapped[str] = mapped_column(String(64), default="claude-sonnet-4-6")
+    model: Mapped[str] = mapped_column(String(64), default="claude-sonnet-5-5")
     prompt: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
@@ -363,3 +370,159 @@ class ScheduledTaskLog(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     output_path: Mapped[str | None] = mapped_column(String(360), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class Play(Base):
+    """A theme bet: a plain-English thesis turned into a sized, staged, monitored
+    basket. Orders are never placed from here — staging a tranche creates
+    ``proposed`` TradeIntents that still need human approval."""
+
+    __tablename__ = "plays"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    title: Mapped[str] = mapped_column(String(240), default="")
+    thesis: Mapped[str] = mapped_column(Text, default="")  # markdown
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)  # draft | active | paused | closed
+    conviction: Mapped[str] = mapped_column(String(12), default="medium")  # low | medium | high
+    horizon_months: Mapped[int] = mapped_column(Integer, default=12)
+    account_kind: Mapped[str] = mapped_column(String(24), default="stocks_isa")  # invest | stocks_isa
+    budget_gbp: Mapped[float] = mapped_column(Float, default=0.0)
+    budget_pct_of_book: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # [{ticker, instrument_code, name, role, target_weight, rationale, currency?}]
+    legs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # {rationale, tranches: [{label, pct_of_budget, trigger}], max_loss_gbp, ...}
+    sizing: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # [{text, rule?: {type, ticker?, value}}]
+    kill_criteria: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    what_would_change_my_mind: Mapped[str] = mapped_column(Text, default="")
+    # {last_reviewed_at, verdict, notes, history: [...]}
+    review: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Ring 2 — holdings owned elsewhere (another play or Core) that matter to this
+    # theme: [{ticker, why, added_at}]. Never counted in the play's size.
+    related: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # Ring 3 — not-held candidates for later tranches: [{ticker, name, why, instrument_verified, added_at}]
+    bench: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+    source_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class Recipe(Base):
+    """A recipe: a skill Archie runs (instructions in a SKILL.md) + a trigger +
+    delivery. Instructions only — a recipe can never grant tools, touch risk
+    rails or execute anything; runs use the scheduled-task MCP context, so the
+    most a recipe can do is create proposals. Versions live in RecipeVersion."""
+
+    __tablename__ = "recipes"
+
+    slug: Mapped[str] = mapped_column(String(48), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    source: Mapped[str] = mapped_column(String(16), default="user")  # builtin | user
+    created_by: Mapped[str] = mapped_column(String(16), default="user")  # builtin | user | archie
+    title: Mapped[str] = mapped_column(String(80), default="")
+    summary: Mapped[str] = mapped_column(String(300), default="")
+    icon: Mapped[str] = mapped_column(String(40), default="sparkles")
+    body: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # {"kind": "manual"} | {"kind": "schedule", "cron", "timezone"} |
+    # {"kind": "event", "event": "earnings_week"|"big_move", "threshold_pct"?}
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    delivery: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # {"home": true, "telegram": bool}
+    current_version: Mapped[int] = mapped_column(Integer, default=0)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class RecipeVersion(Base):
+    """Immutable snapshot of a recipe after each change (for diff + revert)."""
+
+    __tablename__ = "recipe_versions"
+    __table_args__ = (UniqueConstraint("slug", "version", name="uq_recipe_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    slug: Mapped[str] = mapped_column(String(48), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    author: Mapped[str] = mapped_column(String(16), default="user")  # builtin | user | archie
+    note: Mapped[str] = mapped_column(String(240), default="")
+    title: Mapped[str] = mapped_column(String(80), default="")
+    summary: Mapped[str] = mapped_column(String(300), default="")
+    icon: Mapped[str] = mapped_column(String(40), default="sparkles")
+    body: Mapped[str] = mapped_column(Text, default="")
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    delivery: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class RecipeSuggestion(Base):
+    """A change Archie proposed from an unattended (scheduled) run. Never applied
+    until the user approves it — news text can't rewrite the harness."""
+
+    __tablename__ = "recipe_suggestions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    slug: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)  # None → new recipe
+    action: Mapped[str] = mapped_column(String(16), default="update")  # create | update | enable | disable
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(String(600), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending | accepted | dismissed
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class HoldingOwner(Base):
+    """Explicit owner of one holding (per account): a play, Core or Unsorted.
+
+    Holdings without a row get a derived owner (the active play whose basket
+    holds them, else Unsorted) — see ``plays_service.compute_book``."""
+
+    __tablename__ = "holding_owners"
+    __table_args__ = (UniqueConstraint("account_kind", "ticker", name="uq_holding_owner"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    account_kind: Mapped[str] = mapped_column(String(24), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)  # display ticker, upper-case
+    owner_kind: Mapped[str] = mapped_column(String(12), default="unsorted")  # play | core | unsorted
+    play_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(16), default="user")  # user | archie | suggestion | system
+
+
+class PlayDraftJob(Base):
+    """A play draft running (or run) in the background. Persisted so a restart
+    mid-draft surfaces as a failed job with Retry instead of a stuck spinner."""
+
+    __tablename__ = "play_draft_jobs"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)  # running | done | error
+    request: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    progress: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    play_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)  # friendly, shown to the user
+    # unclear_idea | no_instruments | interrupted | model | failed
+    error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    retry_of: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+# Smart-money disclosure tables live in their own module; importing them here
+# registers them with Base.metadata for init_db.
+from app.models.smart_money import Disclosure, DisclosureCache  # noqa: E402,F401
+
+# Track record + standing permissions live in their own module; importing it
+# here registers their tables wherever entities is imported.
+from app.models.autonomy import (  # noqa: E402,F401
+    PermissionEvent,
+    PermissionSuggestion,
+    ProposalOutcome,
+    StandingPermission,
+)

@@ -130,7 +130,66 @@
     --sidebar-ring: oklch(0.685 0.072 162 / 50%);
 }
 
+/*
+ * Light theme — same hues and semantics, inverted lightness. Applied by the
+ * theme provider (`<html class="light">`) when the user picks Light, or System
+ * with a light OS preference.
+ */
+.light {
+    --background: oklch(0.985 0.002 256);
+    --foreground: oklch(0.21 0.012 256);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.21 0.012 256);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.21 0.012 256);
+
+    --primary: oklch(0.52 0.085 162);
+    --primary-foreground: oklch(0.985 0.01 162);
+
+    --secondary: oklch(0.955 0.004 256);
+    --secondary-foreground: oklch(0.21 0.012 256);
+    --muted: oklch(0.955 0.004 256);
+    --muted-foreground: oklch(0.50 0.015 256);
+    --accent: oklch(0.94 0.005 256);
+    --accent-foreground: oklch(0.21 0.012 256);
+
+    --destructive: oklch(0.56 0.19 24);
+    --destructive-foreground: oklch(0.98 0.01 24);
+
+    --border: oklch(0.21 0.012 256 / 10%);
+    --input: oklch(0.21 0.012 256 / 14%);
+    --ring: oklch(0.52 0.085 162 / 45%);
+
+    --positive: oklch(0.55 0.13 152);
+    --positive-foreground: oklch(0.98 0.02 152);
+    --negative: oklch(0.56 0.18 24);
+    --negative-foreground: oklch(0.98 0.01 24);
+    --warning: oklch(0.62 0.13 70);
+    --warning-foreground: oklch(0.98 0.02 80);
+
+    --chart-1: oklch(0.58 0.085 162);
+    --chart-2: oklch(0.58 0.09 232);
+    --chart-3: oklch(0.68 0.11 78);
+    --chart-4: oklch(0.60 0.12 18);
+    --chart-5: oklch(0.57 0.10 292);
+    --chart-6: oklch(0.62 0.08 202);
+    --chart-7: oklch(0.66 0.11 122);
+    --chart-8: oklch(0.60 0.10 44);
+
+    --sidebar: oklch(0.97 0.003 256);
+    --sidebar-foreground: oklch(0.25 0.012 256);
+    --sidebar-primary: oklch(0.52 0.085 162);
+    --sidebar-primary-foreground: oklch(0.985 0.01 162);
+    --sidebar-accent: oklch(0.925 0.005 256);
+    --sidebar-accent-foreground: oklch(0.21 0.012 256);
+    --sidebar-border: oklch(0.21 0.012 256 / 8%);
+    --sidebar-ring: oklch(0.52 0.085 162 / 45%);
+}
+
 @layer base {
+  html.light {
+    color-scheme: light;
+  }
   * {
     @apply border-border outline-ring/50;
   }
@@ -147,4 +206,76 @@
     font-variant-numeric: tabular-nums lining-nums;
     font-feature-settings: "tnum" 1, "lnum" 1;
   }
+}
+
+/* Asset monogram tile (components/kit/asset-icon): a quiet tint per ticker. */
+.asset-mono {
+  background: oklch(0.34 0.045 var(--asset-h));
+  color: oklch(0.9 0.06 var(--asset-h));
+  box-shadow: inset 0 0 0 1px oklch(0.6 0.06 var(--asset-h) / 0.22);
+}
+.light .asset-mono {
+  background: oklch(0.94 0.035 var(--asset-h));
+  color: oklch(0.42 0.09 var(--asset-h));
+  box-shadow: inset 0 0 0 1px oklch(0.5 0.06 var(--asset-h) / 0.14);
+}
+
+/* Company logos (kit/asset-icon): a light tile so transparent or dark marks
+   stay legible on the dark theme; a hairline keeps white logos from melting
+   into a white card in light mode. */
+.asset-logo {
+  background: oklch(0.97 0 0);
+  box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.08);
+}
+.asset-logo > img {
+  border-radius: inherit;
+}
+.asset-logo-skeleton {
+  background: color-mix(in oklch, var(--muted) 80%, transparent);
+}
+
+/* Proposal tile "placing" bar (features/home/proposal-tiles). */
+.ptile-bar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  overflow: hidden;
+  background: color-mix(in oklch, var(--primary) 18%, transparent);
+}
+.ptile-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--primary);
+  border-radius: 2px;
+  animation: ptile-bar 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes ptile-bar {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ptile-bar::after { animation: none; width: 100%; opacity: 0.6; }
+}
+
+/* Proposal carousel: one row, snap, scrollbar hidden, edge fades only where there's more. */
+.pcar {
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent 100%);
+}
+.pcar::-webkit-scrollbar { display: none; }
+
+/* Settings → Risk rails: the field a "Change limits" link points at. */
+.field-spotlight {
+  border-radius: 0.75rem;
+  animation: field-spotlight 2.4s ease-out 1 forwards;
+}
+@keyframes field-spotlight {
+  0%, 35% { box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 45%, transparent); background: color-mix(in oklch, var(--primary) 7%, transparent); }
+  100% { box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--primary) 35%, transparent); background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field-spotlight { animation: none; box-shadow: 0 0 0 2px color-mix(in oklch, var(--primary) 45%, transparent); }
 }

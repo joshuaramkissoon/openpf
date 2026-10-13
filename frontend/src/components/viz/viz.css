@@ -1,0 +1,108 @@
+/*
+ * Viz tokens. Palettes validated with the dataviz skill's validate_palette.js
+ * against the surfaces charts actually sit on — the page canvas (light #f9fafb,
+ * dark #15181c; views draw on the canvas, not in cards) and the card (light
+ * #ffffff, dark #212428; chat + widgets):
+ *  - categorical, 6 slots in this fixed order (adjacent CVD ΔE ≥ 9.2 light /
+ *    9.4 dark, normal-vision ≥ 19.3). A 7th series folds into "Other".
+ *    Light slots 3/5/6 sit below 3:1 → every categorical chart ships a legend
+ *    with values and a table view (the relief rule).
+ *  - diverging gain/loss poles, lightness-offset so they survive deutan/protan
+ *    (CVD ΔE 12.2 light / 10.5 dark), ≥ 3:1 on both surfaces, grey midpoint.
+ *  - emphasis: one accent (slot 1) for the point a chart makes; every other
+ *    one-series mark is the neutral (2.6:1 dark / 2.3:1 light — visible but
+ *    recessive; values are always direct-labelled).
+ * Red/green hues are kept out of the categorical set so identity never reads
+ * as gain/loss.
+ */
+:root,
+.dark {
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #9085e9;
+  --viz-5: #c98500;
+  --viz-6: #d55181;
+  --viz-other: #6b7079;
+  --viz-gain: #26ac80;
+  --viz-loss: #c6413f;
+  --viz-mid: #3a3e45;
+  --viz-grid: rgba(255, 255, 255, 0.07);
+  --viz-axis: rgba(255, 255, 255, 0.16);
+  --viz-cool: #3987e5;
+  --viz-warm: #d95926;
+  --viz-accent: var(--viz-1);
+  --viz-neutral: #555c66;
+}
+
+.light {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #6250d6;
+  --viz-5: #eda100;
+  --viz-6: #e87ba4;
+  --viz-other: #a3a6ad;
+  --viz-gain: #17a478;
+  --viz-loss: #ba2b2e;
+  --viz-mid: #eceef1;
+  --viz-grid: rgba(15, 18, 25, 0.07);
+  --viz-axis: rgba(15, 18, 25, 0.18);
+  --viz-cool: #2a78d6;
+  --viz-warm: #eb6834;
+  --viz-accent: var(--viz-1);
+  --viz-neutral: #a3a9b2;
+}
+
+.viz-axis-text {
+  font-size: 10.5px;
+  fill: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-tile-text {
+  pointer-events: none;
+  user-select: none;
+}
+
+@keyframes viz-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.viz-in {
+  animation: viz-in 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .viz-in { animation: none; }
+}
+
+/* The surface marks sit on (rings, gaps): cards by default, the canvas on view pages. */
+:root { --viz-surface: var(--card); }
+.viz-page { --viz-surface: var(--background); }
+
+/* ── type scale (views) ──────────────────────────────────────────────── */
+.viz-hero-value {
+  font-size: clamp(2.75rem, 1.6rem + 3.4vw, 4rem);
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+}
+.viz-kpi-value {
+  font-size: 1.625rem;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 600;
+}
+.viz-kicker {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--muted-foreground);
+}
+.viz-colhead {
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  white-space: nowrap;
+}

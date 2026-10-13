@@ -4,9 +4,7 @@ import json
 import logging
 import os
 import re
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -21,16 +19,24 @@ from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
-    parse_setting_sources, project_root, resolve_sdk_cwd, resolve_t212_env,
-    _T212_MCP_TOOLS, _MARKET_MCP_TOOLS, _SCHEDULER_MCP_TOOLS,
-    _FUNDAMENTALS_MCP_TOOLS, _INTEL_MCP_TOOLS, _WATCHLIST_MCP_TOOLS,
+    artifacts_dir, parse_setting_sources, project_root, resolve_sdk_cwd,
 )
+from app.services import mcp_registry
 from app.services import costs_service
+from app.services.artifact_service import (
+    data_frontmatter_line,
+    extract_machine_blocks,
+    extract_summary,
+    summary_frontmatter_line,
+)
+from app.core.cron import cron_trigger
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import (
     _daily_entry_count,
     _daily_realized_pnl,
     append_daily_goal_line,
+    filter_agent_policy_patch,
+    get_policy,
     list_held_leveraged_positions,
     monitor_open_trades,
     read_recent_daily_goal_lines,
@@ -41,8 +47,6 @@ from app.services.leveraged_service import (
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
-_MCP_SERVER_DIR = Path(__file__).resolve().parent.parent.parent / "mcp_servers"
 
 # A4 — blocked-run handling: a scheduled run can "succeed" (agent returns text)
 # yet be unable to act because a dependency (T212/MCP) was offline. Detect that,
@@ -231,36 +235,65 @@ def _persist_goal_proposals(
     db.commit()
     return {"created": len(pending), "run_id": run.id}
 
+# The morning brief, watchlist review and weekly review used to live here as
+# plain prompts. They're now built-in *recipes* (backend/app/recipes_builtin):
+# real skills the user can edit, version and revert. recipes_service adopts any
+# existing rows (and their run history) on first sync.
+
+SUMMARY_RULES = (
+    "END every report with a fenced block tagged `summary` containing one JSON object — it is what the "
+    "user sees on Home, so it must be high signal, specific to their book, and never filler: "
+    "```summary\n"
+    '{"headline": "...", "points": ["..."], "action": "..." or null, "signal": "none" | "low" | "high"}\n'
+    "``` "
+    "headline: ONE sentence, the single most important takeaway, concrete and about this book "
+    "(e.g. 'NVDA + PLTR are now 55% of your money — up from 48% last week'). "
+    "points: at most 3 short lines, each ONLY if it changes what the user would do (empty list is fine); "
+    "never repeat the headline or a number already shown as a stat. "
+    "action: what to do now in a few words, with a link where one exists — '[Review the NVDA trim](proposal:<id>)' "
+    "or '[Open the play](#/plays/<id>)' — or null. "
+    "signal: 'high' if the user should act or look today, 'low' if worth a glance, 'none' if nothing needs "
+    "them. Saying nothing is worth their attention is a valid, good answer: use signal 'none' and a plain "
+    "headline like 'Nothing worth your attention today'. "
+    "If the task also asks for a JSON block, put that before the summary block (it is stored as data, never shown)."
+)
+
+SUMMARY_STATS_RULES = (
+    "The summary object may also carry 'stats': at most 4 headline numbers drawn as visual tiles — "
+    '[{"label": "Exposure", "value": 11320, "kind": "money", "sub": "13.6% of book", "bar": {"value": 0.136, "max": 1}}, '
+    '{"label": "Week", "value": 0.024, "kind": "signedPct", "tone": "positive", "spark": [100, 101.2, 102.4]}, '
+    '{"label": "Next report", "value": "2026-10-14", "kind": "date", "tickers": ["ASML"], '
+    '"timeline": [{"date": "2026-10-14", "label": "ASML"}]}]. '
+    "kind is money | pct | signedPct | date | count | text; money/pct/count values are plain numbers "
+    "(percent as a fraction: 0.024 = 2.4%), dates are YYYY-MM-DD; labels at most 3 words, text values at most "
+    "4 words (put the rest in 'sub'). Only numbers you actually have, never invented; omit 'stats' if you have none. "
+    "When the report covers several names (earnings, plays, watchlist), also add 'holdings': "
+    '[{"ticker": "ASML", "date": "2026-10-14", "timing": "before open", "verdict": "hold" | "trim" | "opportunity", '
+    '"value": 6200, "weight": 0.074, "gain_pct": 0.21, "forward_pe": 31.2, "watch": ["2027 order guidance", "China mix"]}].'
+)
+
+# The report body rules on their own (digest mode computes the stats in code).
+REPORT_BODY_RULES = (
+    "REPORT FORMAT (the app renders this richly — follow it exactly): "
+    "Start with '## Key numbers' — 3-4 bullets as '- Label: value' with SHORT values (e.g. '- Week: +2.4%', "
+    "'- Cash: £5,055'); context goes in a later section, never in the value. "
+    "Then short '##' sections, most important first. Use '## What stands out' for highlights and "
+    "'## Risks' for risk notes (both render as callouts; neither restates the headline). When the report "
+    "covers several names, give each its own '## TICKER' section with bullets 'Exposure: …', 'Timing: …', "
+    "'Valuation: …', 'What to watch: …', 'Verdict: Hold through | Consider trimming | Opportunity'. "
+    "Tables only for genuinely tabular data, with numbers in their own columns and explicit signs on moves. "
+    "Bold sparingly — never whole sentences. No emoji traffic lights. "
+    "Reference a proposal you created as '[label](proposal:<intent_id>)' on its own line. "
+    "Write for the investor, not about the system: never mention the trigger context, tools, data sources, "
+    "JSON or what data was 'provided'. If something you needed wasn't available, say so in at most one short "
+    "last line ('Some data wasn't available: timing, surprise history'), never a section. "
+    "Do NOT write a TL;DR section: the summary block below becomes the TL;DR. "
+)
+
+REPORT_FORMAT = f"{REPORT_BODY_RULES}{SUMMARY_RULES} {SUMMARY_STATS_RULES}"
+
+
 _DEFAULT_TASKS: list[dict[str, Any]] = [
-    {
-        "name": "morning_brief",
-        "cron_expr": "0 7 * * 1-5",
-        "timezone": "Europe/London",
-        "model": settings.claude_model,  # Sonnet — strong enough to triage news, lighter for a daily run
-        "enabled": True,
-        "meta": {
-            "task_kind": "claude",
-            "description": "Curated pre-open brief — what matters today across your holdings + macro",
-        },
-        "prompt": (
-            "Produce Josh's pre-open MARKET BRIEF as a tight markdown artifact. The goal: he has no time to "
-            "follow news, so YOU read everything and surface only what matters. Steps:\n\n"
-            "1. Pull current holdings via the T212 tools; focus on the top ~8 by value (both Invest + ISA).\n"
-            "2. For those names, call `get_company_news` (since_days=1) and `get_earnings` — note any earnings "
-            "within ~7 days.\n"
-            "3. Call `get_market_news` and `get_macro_snapshot` for the wider picture (yields, VIX, USD/GBP, "
-            "Fed funds) and read the current market regime if available.\n"
-            "4. Skim active theses/market_views in memory; flag any news that supports or threatens one.\n\n"
-            "Then CURATE hard. Output ONLY:\n"
-            "- **Top 3-5 things that matter today** — each: one-line what + why-it-matters-to-your-book + an "
-            "optional 'consider:' action. Tie each to a holding or a real macro move.\n"
-            "- **Macro line**: 10Y/2Y, VIX, USD/GBP with the day's direction.\n"
-            "- **On the radar**: earnings/events in the next 7 days for held names.\n\n"
-            "RULES: portfolio-relevant only. Ignore aggregator/SEO filler (e.g. 'most active stocks today', "
-            "generic listicles). If nothing is material, say so in one line — do NOT manufacture noise. No raw "
-            "headline dumps. Keep it a genuine 2-minute read."
-        ),
-    },
     {
         "name": "watch_cycle",
         "cron_expr": "0 8-21 * * 1-5",
@@ -277,35 +310,6 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "Deterministic watch cycle: run portfolio-scoped watches (concentration breach, thesis "
             "invalidation, earnings within 3 days, big intraday moves on holdings) and raise ranked, "
             "deduped alerts to the Attention inbox. Materiality-gated; no LLM call."
-        ),
-    },
-    {
-        "name": "watchlist_review",
-        "cron_expr": "15 7 * * 1-5",
-        "timezone": "Europe/London",
-        "model": settings.claude_model,  # Sonnet — reads notes + triages fresh data, no execution
-        "enabled": True,
-        "meta": {
-            "task_kind": "claude",
-            "description": "Daily reasoned review of the watchlist → flags worth-noticing items into Attention",
-        },
-        "prompt": (
-            "Review Josh's WATCHLIST and resurface anything worth noticing — the watchlist must never "
-            "become a graveyard. Steps:\n\n"
-            "1. Call `list_watchlist` (status=watching). For EACH item, the `note` is the *reason* it's "
-            "being watched — that note is your watch condition.\n"
-            "2. For each item, gather fresh context: `get_company_news` (since_days=1) and `get_earnings` "
-            "for catalysts; marketdata `get_price_snapshot` / `get_technical_snapshot` for price + technicals; "
-            "and a Kronos `forecast_prices` read when the note is about timing/entry.\n"
-            "3. JUDGE, per item: is the stated reason now PLAYING OUT (entry setup triggered, catalyst hit, "
-            "target approached), BREAKING (thesis for watching invalidated), or UNCHANGED?\n"
-            "4. Only when something is MATERIAL relative to the note, call `flag_watchlist_item` with a tight "
-            "title, a detail grounded in the data you just pulled, an optional `consider:` action, and a "
-            "severity (info/warning/critical). If a name has clearly graduated to a real setup, you may also "
-            "`update_watchlist_item` (e.g. raise conviction, set a target_price/target_direction, or note the "
-            "change). Do NOT flag routine noise — if nothing is material, flag nothing.\n\n"
-            "Then write a short markdown artifact: one line per item (PLAYING OUT / BREAKING / UNCHANGED + a "
-            "few words), and list what you flagged. Keep it a genuine 1-minute read."
         ),
     },
     {
@@ -336,7 +340,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "lev_midday_check",
         "cron_expr": "0 12 * * 1-5",
         "timezone": "Europe/London",
-        "model": "claude-haiku-4-5",
+        "model": settings.claude_model,
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_monitor",
@@ -368,7 +372,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         },
         # Deterministic engine run (not sent to an LLM): detects cap breaches and
         # queues trim proposals into Execution. Disabled by default — enable it
-        # to put core-book rebalancing on autopilot.
+        # to run the core-book check weekly.
         "prompt": (
             "Deterministic portfolio rebalance check: aggregate holdings by ticker across accounts, "
             "flag any name over its concentration cap, and queue minimum-turnover trim proposals for "
@@ -376,33 +380,17 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         ),
     },
     {
-        "name": "weekly_review",
-        "cron_expr": "0 10 * * 0",
+        "name": "smart_money_refresh",
+        "cron_expr": "15 6 * * *",
         "timezone": "Europe/London",
-        "model": settings.claude_agent_model,
+        "model": settings.claude_model,
         "enabled": True,
         "meta": {
-            "task_kind": "claude",
-            "description": "Weekly strategy review and policy suggestions",
+            "task_kind": "smart_money_refresh",
+            "description": "Daily fetch of insider / 13F / Congress disclosures → detections → signals (deterministic)",
         },
-        "prompt": (
-            "Produce a weekly strategy review artifact. Follow these steps:\n\n"
-            "1. **Portfolio snapshot**: Use T212 MCP tools to pull current ISA positions and account summary "
-            "(balances, holdings). For current prices and technicals of held tickers, use marketdata MCP tools. "
-            "Summarise total value, cash available, and top holdings.\n\n"
-            "2. **Leveraged positions**: List any open leveraged positions with current P&L, "
-            "entry price, and days held. Use marketdata MCP for current prices. If none, state that clearly.\n\n"
-            "3. **Market context**: Use marketdata MCP to get price and technicals for key indices "
-            "(SPY, QQQ) and any leveraged products held. Summarise trend, RSI, and notable moves.\n\n"
-            "4. **Trade log review**: Read memory/decisions/ for this month's trade decisions. "
-            "Summarise wins, losses, and patterns. If no trades yet, note that.\n\n"
-            "5. **Lessons & recommendations**: Based on the above, provide 2-3 actionable takeaways "
-            "and any suggested changes to position sizing, stop-loss levels, or strategy.\n\n"
-            "6. **Policy updates** (optional): If risk rails or trading parameters should change, "
-            "include a JSON block with key policy_updates.\n\n"
-            "Format your response as a clean, readable markdown report with headers and tables. "
-            "This is your final artifact — make it polished and information-dense, not a thinking log."
-        ),
+        # Deterministic (no LLM): see app/services/smart_money/service.refresh.
+        "prompt": "Deterministic smart-money refresh: fetch disclosures, run the trend detector, raise high-signal alerts.",
     },
     # ── Agentic alpha loop — three reasoned passes a day (open / midday / EOD) ──
     # Each pass runs Archie with the live regime + macro context + the day's
@@ -457,7 +445,7 @@ def _aware_utc(value: datetime) -> datetime:
 def _next_run_utc(cron_expr: str, tz_name: str, now_utc: datetime | None = None) -> datetime:
     now = _aware_utc(now_utc or _utcnow())
     tz = ZoneInfo(tz_name)
-    trigger = CronTrigger.from_crontab(cron_expr, timezone=tz)
+    trigger = cron_trigger(cron_expr, timezone=tz)
     next_local = trigger.get_next_fire_time(previous_fire_time=None, now=now.astimezone(tz))
     if next_local is None:
         raise RuntimeError(f"invalid next run for cron '{cron_expr}'")
@@ -473,7 +461,7 @@ def fires_in_window(cron_expr: str, tz_name: str, start: datetime, end: datetime
     cron over a long window.
     """
     tz = ZoneInfo(tz_name)
-    trigger = CronTrigger.from_crontab(cron_expr, timezone=tz)
+    trigger = cron_trigger(cron_expr, timezone=tz)
     fires: list[datetime] = []
     # get_next_fire_time returns the first fire at-or-after its ``now`` arg, so we
     # advance a cursor past each hit. Starting one tick past ``start`` makes the
@@ -645,16 +633,6 @@ def list_task_logs(db: Session, task_id: str, limit: int = 30) -> list[dict[str,
     ]
 
 
-def _build_sdk_env() -> dict[str, str]:
-    """T212 creds (DB-sourced, in sync with the dashboard) + PYTHONPATH for the MCP
-    subprocesses. Without PYTHONPATH the t212 MCP server (which does `from app...`)
-    crashes on import and never registers, so every scheduled job loses T212 — match
-    the chat/analyst runtimes which set it. Credentials live in subprocess memory only."""
-    env = resolve_t212_env()
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent.parent)
-    return env
-
-
 def _extract_text_from_sdk_message(message: Any) -> str:
     if message is None:
         return ""
@@ -696,6 +674,26 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _recipe_plugins() -> list[dict[str, str]]:
+    from app.services.claude_sdk_config import recipe_plugins
+
+    return recipe_plugins()
+
+
+# Models that were only ever stored on tasks as the old defaults. A task still
+# carrying one follows Settings -> Models ("Scheduled investigations") instead,
+# so moving the default off Opus actually reaches existing installs; a model the
+# user picked deliberately for a task is kept.
+_LEGACY_DEFAULT_MODELS = {"", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"}
+
+
+def scheduled_model(task_model: str | None) -> str:
+    from app.services import model_routing
+
+    m = (task_model or "").strip()
+    return model_routing.sdk_model("scheduled_agent") if m in _LEGACY_DEFAULT_MODELS else m
+
+
 def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
@@ -708,99 +706,32 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
     if settings.agent_allow_bash:
         allowed_tools.append("Bash")
 
-    mcp_servers: dict[str, Any] = {}
-    t212_script = _MCP_SERVER_DIR / "t212.py"
-    yfinance_script = _MCP_SERVER_DIR / "marketdata.py"
-    scheduler_script = _MCP_SERVER_DIR / "scheduler.py"
-    fundamentals_script = _MCP_SERVER_DIR / "fundamentals.py"
-    intel_script = _MCP_SERVER_DIR / "intel.py"
-    if t212_script.is_file():
-        mcp_servers["trading212"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(t212_script)],
-            "env": _build_sdk_env(),
-        }
-        allowed_tools.extend(_T212_MCP_TOOLS)
-
-    # The marketdata + scheduler MCP servers import from the `app`
-    # package, so the backend root must be on PYTHONPATH when they
-    # are launched as stdio subprocesses by the SDK.
-    _backend_root = str(_MCP_SERVER_DIR.parent)
-
-    # The scheduler (and marketdata) MCP servers use the same SQLite
-    # database as the main app.  Because the default DATABASE_URL is a
-    # relative path (sqlite:///./mypf.db) and MCP subprocesses may run
-    # with a different CWD, we resolve it to an absolute path and pass
-    # it explicitly so every process opens the *same* database file.
-    _db_url = settings.database_url
-    if _db_url.startswith("sqlite:///./") or _db_url.startswith("sqlite:///mypf"):
-        _rel = _db_url.replace("sqlite:///", "", 1)
-        _abs = str((Path(_backend_root) / _rel).resolve())
-        _db_url = f"sqlite:///{_abs}"
-    _mcp_env = {"PYTHONPATH": _backend_root, "DATABASE_URL": _db_url}
-
-    if yfinance_script.is_file():
-        mcp_servers["marketdata"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(yfinance_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_MARKET_MCP_TOOLS)
-    if scheduler_script.is_file():
-        mcp_servers["scheduler"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(scheduler_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_SCHEDULER_MCP_TOOLS)
-    if fundamentals_script.is_file():
-        mcp_servers["fundamentals"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(fundamentals_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_FUNDAMENTALS_MCP_TOOLS)
-    if intel_script.is_file():
-        mcp_servers["intel"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(intel_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_INTEL_MCP_TOOLS)
-    watchlist_script = _MCP_SERVER_DIR / "watchlist.py"
-    if watchlist_script.is_file():
-        mcp_servers["watchlist"] = {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(watchlist_script)],
-            "env": _mcp_env,
-        }
-        allowed_tools.extend(_WATCHLIST_MCP_TOOLS)
+    mcp_servers, mcp_tools = mcp_registry.build_mcp_servers(mcp_registry.SCHEDULED)
+    allowed_tools.extend(mcp_tools)
 
     options = ClaudeAgentOptions(
         system_prompt={
             "type": "preset",
             "preset": "claude_code",
             "append": (
-                "You are Archie, Josh's portfolio copilot and leveraged strategy operator. "
+                f"You are Archie, {settings.user_possessive} portfolio copilot and leveraged strategy operator. "
                 "Always respect configured risk rails. "
+                "You cannot place, modify or cancel broker orders. To act on a trade idea, call "
+                "propose_trade (it checks the rails and queues it for human approval) or return it in "
+                "your JSON output as the task asks; never claim a trade was executed. "
                 f"Today is {datetime.now(tz=timezone.utc).strftime('%A %d %B %Y %H:%M UTC')}. "
                 "Tool routing: "
                 "Use mcp__marketdata__ tools (get_price_snapshot, get_price_history_rows, get_technical_snapshot) "
                 "for ALL price quotes, historical candles, and technical analysis — these are yfinance-backed "
                 "with no rate limits. "
-                "Use mcp__trading212__ tools ONLY for account-specific operations: positions, balances, "
-                "orders, execution, dividends, and transaction history. "
+                "Use mcp__trading212__ tools ONLY for account-specific reads: positions, balances, "
+                "pending/historical orders, dividends, and transaction history. "
                 "Never use T212 tools to look up prices or market data — T212 has strict API rate limits "
-                "(1 req/s for positions, 1 req/50s for instrument search)."
+                "(1 req/s for positions, 1 req/50s for instrument search). "
+                f"{REPORT_FORMAT}"
             ),
         },
-        model=task.model or settings.claude_model,
+        model=scheduled_model(task.model),
         cwd=str(cwd),
         setting_sources=setting_sources,
         allowed_tools=allowed_tools,
@@ -810,10 +741,14 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         # file edits; the PreToolUse security hooks still block secrets and
         # dangerous bash regardless of this mode.
         permission_mode="acceptEdits",
+        env=mcp_registry.sdk_env(),
         mcp_servers=mcp_servers,
-        max_turns=settings.agent_max_turns,
+        # Scheduled runs are capped: a runaway investigation stops, it doesn't bill.
+        max_turns=min(settings.agent_max_turns, settings.scheduled_max_turns),
+        max_budget_usd=settings.scheduled_max_budget_usd or None,
         hooks=build_security_hooks(),
         agents=build_subagents(),
+        plugins=_recipe_plugins(),
     )
 
     async def _run() -> tuple[str, dict]:
@@ -826,6 +761,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         async for message in query(prompt=_prompt, options=options):
             if isinstance(message, ResultMessage):
                 cost_info = {
+                    "model": options.model,
                     "total_cost_usd": getattr(message, "total_cost_usd", None),
                     "duration_ms": getattr(message, "duration_ms", None),
                     "num_turns": getattr(message, "num_turns", None),
@@ -837,14 +773,34 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
 
     output, cost_info = anyio.run(_run)
     meta: dict[str, Any] = {}
-    parsed = _extract_json_block(output)
+    # The ```summary block feeds Home's digest. JSON extraction must not mistake
+    # it for the task's JSON block; the output itself keeps it so any caller of
+    # _cron_log_path (scheduled tasks, recipes) stores it as frontmatter.
+    summary, without_summary = extract_summary(output)
+    if not summary and output.strip():
+        # The agent forgot the summary block: one fast call extracts it.
+        from app.services.report_digest import summarize_report
+
+        summary = summarize_report(output)
+        if summary:
+            output = output.rstrip() + "\n\n```summary\n" + json.dumps(summary, ensure_ascii=False) + "\n```\n"
+    if summary:
+        meta["summary"] = summary
+    parsed = _extract_json_block(without_summary)
     if parsed:
         meta["json"] = parsed
     return output, meta, cost_info
 
 
-def _cron_log_path(task_name: str, content: str, *, task_kind: str = "", description: str = "") -> str:
-    root = project_root() / ".claude" / "runtime" / "artifacts" / "scheduled" / task_name
+def _cron_log_path(
+    task_name: str, content: str, *, task_kind: str = "", description: str = "", summary: dict[str, Any] | None = None
+) -> str:
+    # Parse + strip a trailing ```summary block; it's stored as frontmatter.
+    found, content = extract_summary(content)
+    summary = summary or found
+    # Machine-readable ```json blocks are data for code, never shown to the user.
+    data, content = extract_machine_blocks(content)
+    root = artifacts_dir() / "scheduled" / task_name
     root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
 
@@ -854,7 +810,7 @@ task_name: {task_name}
 task_kind: {task_kind}
 created_at: {datetime.now(tz=timezone.utc).isoformat()}
 title: {description or task_name}
----
+{summary_frontmatter_line(summary)}{data_frontmatter_line(data)}---
 
 """
     path = root / f"{stamp}.md"
@@ -1257,7 +1213,7 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         return "ok", {"result": result}, path, {}
 
     if kind == "portfolio_rebalance":
-        # Autopilot core-book check: detect concentration drift and queue trims
+        # Core-book check: detect concentration drift and queue trims
         # as proposed intents for the operator to approve. Never auto-executes.
         from app.services.portfolio_optimizer import propose_rebalance
 
@@ -1265,6 +1221,14 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         content = _render_rebalance_md(result)
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
+
+    if kind == "recipe":
+        # A user/Archie/built-in recipe: a validated skill run in this same
+        # SCHEDULED context (propose-only). May return "skipped" when an event
+        # trigger's deterministic gate doesn't pass.
+        from app.services.recipes_service import run_recipe_task
+
+        return run_recipe_task(db, task)
 
     if kind == "watch_cycle":
         # The 'Spot' layer: deterministic watches → ranked Alerts in the
@@ -1276,20 +1240,43 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         path = _cron_log_path(task.name, content, task_kind=kind, description=description)
         return "ok", {"result": result}, path, {}
 
+    if kind == "smart_money_refresh":
+        from app.services.smart_money.service import refresh as smart_money_refresh
+
+        result = smart_money_refresh(db)
+        content = (
+            "# Smart money refresh\n\n"
+            f"- Added: {result.get('added') or {}}\n"
+            f"- Alerts: {(result.get('alerts') or {}).get('created', 0)}\n"
+            + "".join(f"- Error: {e}\n" for e in result.get("errors") or [])
+        )
+        path = _cron_log_path(task.name, content, task_kind=kind, description=description)
+        return "ok", {"result": result}, path, {}
+
     goal_context = _build_goal_context(db, task) if kind == "claude_with_goal" else ""
     output, meta, cost_info = _run_claude_prompt(task, goal_context=goal_context)
-    path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
+    path = _cron_log_path(
+        task.name, output or "(no output)", task_kind=kind, description=description, summary=meta.get("summary")
+    )
 
     policy_updates = None
+    rejected_updates: dict[str, str] = {}
     parsed = meta.get("json") if isinstance(meta.get("json"), dict) else None
     if isinstance(parsed, dict):
         maybe_updates = parsed.get("policy_updates")
         if isinstance(maybe_updates, dict):
-            policy_updates = update_policy(db, maybe_updates, actor="archie")
+            # Agent output may only tighten rails; auto-execute & loosening are human-only.
+            allowed_updates, rejected_updates = filter_agent_policy_patch(get_policy(db), maybe_updates)
+            if allowed_updates:
+                policy_updates = update_policy(db, allowed_updates, actor="archie")
+            if rejected_updates:
+                logger.warning("ignored agent policy updates for %s: %s", task.name, rejected_updates)
 
     payload: dict[str, Any] = {"meta": meta}
     if policy_updates is not None:
         payload["policy_updates_applied"] = policy_updates
+    if rejected_updates:
+        payload["policy_updates_rejected"] = rejected_updates
 
     block_reason = _detect_block(output, parsed)
 
@@ -1347,6 +1334,16 @@ def _touch_task_after_run(db: Session, task: ScheduledTask, *, status: str, bloc
     db.commit()
 
 
+def _finish_skipped(db: Session, task: ScheduledTask) -> None:
+    """A gated run (e.g. an event recipe whose condition didn't hold): no log,
+    no run count — just move on to the next check."""
+    if task.last_status == "running":
+        task.last_status = "idle"
+    task.next_run_at = _next_run_utc(task.cron_expr, task.timezone, _utcnow())
+    db.add(task)
+    db.commit()
+
+
 def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
     task = db.get(ScheduledTask, task_id)
     if not task:
@@ -1354,6 +1351,9 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
 
     try:
         status, payload, output_path, cost_info = _run_task_impl(db, task)
+        if status == "skipped":
+            _finish_skipped(db, task)
+            return {"task": _serialize_task(task), "status": status, "payload": payload, "output_path": None}
         blocked = bool(payload.get("blocked"))
         _record_log(
             db,
@@ -1368,7 +1368,7 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
                 db,
                 source="scheduled",
                 source_id=task.name,
-                model=task.model or settings.claude_model,
+                model=cost_info.get("model") or task.model or settings.claude_model,
                 total_cost_usd=cost_info.get("total_cost_usd"),
                 duration_ms=cost_info.get("duration_ms"),
                 num_turns=cost_info.get("num_turns"),
@@ -1413,6 +1413,9 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                 return
             try:
                 status, payload, output_path, cost_info = _run_task_impl(bg_db, bg_task)
+                if status == "skipped":
+                    _finish_skipped(bg_db, bg_task)
+                    return
                 blocked = bool(payload.get("blocked"))
                 _record_log(
                     bg_db,
@@ -1427,7 +1430,7 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                         bg_db,
                         source="scheduled",
                         source_id=bg_task.name,
-                        model=bg_task.model or settings.claude_model,
+                        model=cost_info.get("model") or bg_task.model or settings.claude_model,
                         total_cost_usd=cost_info.get("total_cost_usd"),
                         duration_ms=cost_info.get("duration_ms"),
                         num_turns=cost_info.get("num_turns"),

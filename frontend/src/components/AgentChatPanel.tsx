@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Sparkles, Square, Wrench } from 'lucide-react'
+import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Square, Wrench } from 'lucide-react'
 
 import { getChatMessages, stopChat, streamChatMessage, type StreamHandle } from '../api/client'
 import type { ChatMessage, ChatQuestionAnswers, ChatQuestionPrompt, ChatSession, ToolCallEntry } from '../types'
@@ -13,6 +13,8 @@ import {
   InputGroupTextarea,
 } from './ui/input-group'
 import { RichMarkdown } from './RichMarkdown'
+import { ArchieEmptyState } from './chat/archie-empty-state'
+import { proposalIdsIn } from './rich/proposal'
 
 type SegmentGroup =
   | { type: 'tools'; segments: StreamSegment[] }
@@ -137,16 +139,6 @@ function ToolCallsSummary({ toolCalls, expanded, onToggle }: {
   )
 }
 
-const SUGGESTED_PROMPTS = [
-  "How's my portfolio doing?",
-  'What are my biggest positions?',
-  'Any risk concerns?',
-  'Summarise my allocation',
-]
-
-const MARKDOWN_CLASS =
-  'text-sm leading-relaxed [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ul]:list-disc [&_ul]:pl-5 [&_table]:w-full'
-
 type StatusItem = { id: string; phase: string; message: string }
 type StreamSegment = {
   id: string
@@ -223,6 +215,8 @@ interface Props {
   pendingPrompt?: string | null
   /** Called once the pendingPrompt has been applied, so the parent can clear it. */
   onPendingPromptConsumed?: () => void
+  /** Send the pendingPrompt straight away instead of only pre-filling it. */
+  pendingPromptSend?: boolean
 }
 
 export function AgentChatPanel({
@@ -237,6 +231,7 @@ export function AgentChatPanel({
   onOpenSessions,
   pendingPrompt = null,
   onPendingPromptConsumed,
+  pendingPromptSend = false,
 }: Props) {
   const sessionsRef = useRef(new Map<string, SessionState>())
   const activeStreamsRef = useRef(new Map<string, StreamHandle>())
@@ -311,6 +306,11 @@ export function AgentChatPanel({
   // Pre-fills + focuses but never auto-sends, so the prompt can be edited first.
   useEffect(() => {
     if (!pendingPrompt) return
+    if (pendingPromptSend && activeSessionId) {
+      onPendingPromptConsumed?.()
+      void submitContent(pendingPrompt)
+      return
+    }
     setInput(pendingPrompt)
     onPendingPromptConsumed?.()
     // Focus after the panel has painted (the parent switches to the chat tab in
@@ -322,6 +322,7 @@ export function AgentChatPanel({
       ta.setSelectionRange(ta.value.length, ta.value.length)
       autoResize()
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrompt, onPendingPromptConsumed, autoResize])
 
   useEffect(() => {
@@ -453,6 +454,24 @@ export function AgentChatPanel({
                   ? 'tool_result'
                   : 'thinking'
             const prev = s.streamSegments[s.streamSegments.length - 1]
+            if (kind === 'tool_result') {
+              // "Building the view — done" completes the matching step in place
+              // instead of adding a second row for the same tool.
+              const base = next.replace(/ — (done|hit a snag)$/, '')
+              const snag = next.endsWith('hit a snag')
+              const idx = [...s.streamSegments].reverse().findIndex((seg) => seg.kind === 'tool_start' && seg.text === base)
+              if (idx !== -1) {
+                const at = s.streamSegments.length - 1 - idx
+                s.streamSegments = s.streamSegments.map((seg, i) =>
+                  i === at ? { ...seg, kind: 'tool_result', text: snag ? `${base} — hit a snag` : base } : seg)
+                return
+              }
+            }
+            if (kind === 'thinking' && prev?.kind === 'thinking') {
+              // One live "what I'm doing" line, not a growing list of status pings.
+              s.streamSegments = [...s.streamSegments.slice(0, -1), { ...prev, text: next }]
+              return
+            }
             if (!prev || prev.kind !== kind || prev.text !== next) {
               s.streamSegments = [...s.streamSegments, {
                 id: `seg-${Date.now()}-${Math.random()}`,
@@ -691,6 +710,18 @@ export function AgentChatPanel({
     void submitContent(prompt)
   }
 
+  /** Start a sentence in the composer for the user to finish ("Build me a view of …"). */
+  function prefillComposer(text: string) {
+    setInput(text)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(text.length, text.length)
+      autoResize()
+    })
+  }
+
   function onInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -730,28 +761,7 @@ export function AgentChatPanel({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6"
       >
         {visibleMessages.length === 0 && !current.sending ? (
-          <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted/40 text-muted-foreground">
-              <Sparkles className="size-5" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">Hey Josh! I'm Archie, your portfolio copilot.</p>
-              <p className="text-xs text-muted-foreground">Ask about performance, positions, allocation or risk.</p>
-            </div>
-            <div className="flex max-w-md flex-wrap justify-center gap-2">
-              {SUGGESTED_PROMPTS.map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => onPromptChipClick(prompt)}
-                  disabled={!activeSessionId}
-                  className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ArchieEmptyState disabled={!activeSessionId} onSend={onPromptChipClick} onPrefill={prefillComposer} />
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
             {visibleMessages.map((message) => {
@@ -761,15 +771,22 @@ export function AgentChatPanel({
                 if (isStreaming) {
                   const groups = groupSegments(current.streamSegments)
                   const expanded = current.toolCallsExpanded
+                  // Proposals made across tool calls in this reply render as one group.
+                  const streamProposalIds = proposalIdsIn(
+                    groups.map((g) => (g.type === 'text' ? g.text : '')).join('\n\n'),
+                  )
 
                   return (
                     <article key={`${message.id}-${message.role}`} className="space-y-3">
                       {groups.map((group, gi) => {
                         if (group.type === 'text') {
                           return (
-                            <div key={`text-${gi}`} className={MARKDOWN_CLASS}>
-                              <RichMarkdown markdown={group.text} />
-                            </div>
+                            <RichMarkdown
+                              key={`text-${gi}`}
+                              markdown={group.text}
+                              streaming={gi === groups.length - 1}
+                              proposalGroup={streamProposalIds}
+                            />
                           )
                         }
                         const isLastToolGroup = !groups.slice(gi + 1).some(g => g.type === 'tools')
@@ -843,9 +860,11 @@ export function AgentChatPanel({
                         }}
                       />
                     )}
-                    <div className={cn(MARKDOWN_CLASS, isError && 'text-negative')}>
+                    {isError ? (
+                      <p className="text-sm text-negative">{message.content}</p>
+                    ) : (
                       <RichMarkdown markdown={message.content} />
-                    </div>
+                    )}
                   </article>
                 )
               }

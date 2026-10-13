@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Money, MoneyDelta, Pct, PctDelta, SectionCard } from "@/components/kit"
-import { accountTag } from "@/utils/format"
+import { AssetIcon, Money, MoneyDelta, Pct, PctDelta, SectionCard } from "@/components/kit"
+import { useCryptoStatus } from "@/lib/crypto-status"
+import { formatQuantity } from "@/utils/format"
+import { AccountChip } from "@/components/kit"
+import { isCryptoAccount } from "@/lib/accounts"
 import { cn } from "@/lib/utils"
 import type { PositionItem } from "@/types"
 
@@ -46,12 +48,16 @@ export function PositionsTable({
   accountView,
   displayCurrency,
   onSelect,
+  renderOwner,
 }: {
   positions: PositionItem[]
-  accountView: "all" | "invest" | "stocks_isa"
+  accountView: "all" | "invest" | "stocks_isa" | "crypto"
   displayCurrency: "GBP" | "USD"
   onSelect: (position: PositionItem) => void
+  /** Optional "Play" column — who owns the holding (a play, Core or Unsorted). */
+  renderOwner?: (position: PositionItem) => ReactNode
 }) {
+  useCryptoStatus() // re-render once the exchange name for the crypto chip is known
   const [expanded, setExpanded] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>("value")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
@@ -103,7 +109,7 @@ export function PositionsTable({
   return (
     <SectionCard
       title="Positions"
-      description={accountView === "all" ? "Aggregated across Invest + ISA — click a row for chart, signals & forecast" : "Selected account — click a row for chart, signals & forecast"}
+      description={accountView === "all" ? "Aggregated across every account — click a row for chart, signals & forecast" : "Selected account — click a row for chart, signals & forecast"}
       noPadding
       action={
         visible.length > 12 ? (
@@ -121,6 +127,7 @@ export function PositionsTable({
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <SortHead sortKey="ticker" label="Symbol" align="left" />
+                {renderOwner ? <TableHead className="text-xs text-muted-foreground">Play</TableHead> : null}
                 <SortHead sortKey="quantity" label="Qty" />
                 <SortHead sortKey="invested" label="Invested" />
                 <SortHead sortKey="value" label="Value" />
@@ -138,14 +145,14 @@ export function PositionsTable({
                 >
                   <TableCell>
                     <div className="flex items-center gap-2">
+                      <AssetIcon symbol={p.display_ticker || p.ticker} crypto={isCryptoAccount(p.account_kind)} size={22} />
                       <span className="font-medium">{p.display_ticker || p.ticker}</span>
-                      <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-muted-foreground">
-                        {accountTag(p.account_kind)}
-                      </Badge>
+                      <AccountChip kind={p.account_kind} />
                     </div>
                   </TableCell>
+                  {renderOwner ? <TableCell className="py-1.5">{renderOwner(p)}</TableCell> : null}
                   <TableCell className="text-right font-mono text-muted-foreground tabular-nums">
-                    {p.quantity.toFixed(2)}
+                    {formatQuantity(p.quantity, p.account_kind)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Money value={costBasis(p)} currency={displayCurrency} />
