@@ -73,3 +73,15 @@ backend/data/recipes/
 # Connection secrets key (encrypts broker/exchange keys at rest) — back it up with the DB, never commit it
 openpf-secrets.key
 *.secrets.key
+
+# Belt and braces for secrets and local data
+.env.*
+!.env.example
+!**/.env.example
+*.db-*
+*.sqlite
+*.pem
+*.key
+.claude/worktrees/
+.claude/runtime/memory/
+.claude/runtime/artifacts/
