@@ -8,7 +8,7 @@
  * Routes handled here:
  *   /plays                 list
  *   /plays?tab=watchlist   watchlist tab
- *   /plays?new=1[&idea=…]  new-play flow (`&job=…` while drafting)
+ *   /plays?new=1[&idea=…|&template=…]  new-play flow (`&job=…` while drafting)
  *   /plays/:id             draft review (status=draft) or detail
  */
 import type { Route } from '@/lib/router'
@@ -21,7 +21,15 @@ export function PlaysPage({ route }: { route: Route }) {
   if (id) return <PlayPage key={id} id={id} />
   if (route.query.get('new')) {
     const job = route.query.get('job')
-    return <NewPlay key={job ?? 'form'} initialIdea={route.query.get('idea') ?? undefined} jobId={job} />
+    const template = route.query.get('template')
+    return (
+      <NewPlay
+        key={job ?? `form:${template ?? ''}`}
+        initialIdea={route.query.get('idea') ?? undefined}
+        templateId={template}
+        jobId={job}
+      />
+    )
   }
   return <PlaysList tab={route.query.get('tab') === 'watchlist' ? 'watchlist' : 'plays'} />
 }
