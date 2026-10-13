@@ -1,18 +1,15 @@
 import type { ApiError } from '@/api/client'
+import { parseApiError as parseApiErrorFull } from '@/lib/api-error'
 import { SCRAMBLE_MONEY_FACTOR } from '@/lib/privacy'
 import type { PortfolioSnapshot, PositionItem } from '@/types'
 
 export type AccountView = 'all' | 'invest' | 'stocks_isa'
 export type DisplayCurrency = 'GBP' | 'USD'
 
+/** Message-only wrapper over the canonical parser in lib/api-error (handles
+ *  envelopes, string details, validation arrays and an unreachable backend). */
 export function parseApiError(error: unknown): string {
-  const detail = (error as ApiError)?.response?.data?.detail as unknown
-  // New endpoints return a typed envelope ({code, message, meta}); older ones a string.
-  if (detail && typeof detail === 'object') {
-    return (detail as { message?: string }).message || 'Request failed'
-  }
-  if (typeof detail === 'string' && detail) return detail
-  return error instanceof Error ? error.message : 'Unexpected error'
+  return parseApiErrorFull(error as ApiError).message
 }
 
 export function aggregatePositionsByTicker(positions: PositionItem[], portfolioTotal: number): PositionItem[] {

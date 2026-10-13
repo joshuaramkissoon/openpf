@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { parseApiError } from '@/lib/api-error'
 import { privacyModeDescription, type PrivacyMode } from '@/lib/privacy'
 
 interface Props {
@@ -28,6 +29,35 @@ interface Props {
 }
 
 export type SettingsSection = 'privacy' | 'broker' | 'risk' | 'credentials' | 'telegram'
+
+const MAX_NOTIONAL = 10_000_000 // mirrors backend schemas/config.py
+
+/** Parse + check the risk form; returns the payload or a user-facing error. */
+function validateRisk(formData: FormData): AppConfig['risk'] | string {
+  const num = (name: string) => {
+    const raw = String(formData.get(name) ?? '').replace(/[£,\s]/g, '')
+    return raw === '' ? NaN : Number(raw)
+  }
+  const single = num('max_single_order_notional')
+  const daily = num('max_daily_notional')
+  const weight = num('max_position_weight')
+  const window = num('duplicate_order_window_seconds')
+  if (!Number.isFinite(single) || single < 0 || single > MAX_NOTIONAL)
+    return `Max single order must be a number between 0 and ${MAX_NOTIONAL.toLocaleString()}.`
+  if (!Number.isFinite(daily) || daily < 0 || daily > MAX_NOTIONAL)
+    return `Max daily notional must be a number between 0 and ${MAX_NOTIONAL.toLocaleString()}.`
+  if (daily < single) return 'Max daily notional should be at least the max single order.'
+  if (!Number.isFinite(weight) || weight < 0 || weight > 1)
+    return 'Max position weight is a fraction between 0 and 1 (e.g. 0.25 for 25%).'
+  if (!Number.isInteger(window) || window < 15 || window > 86_400)
+    return 'Duplicate window must be a whole number of seconds between 15 and 86400.'
+  return {
+    max_single_order_notional: single,
+    max_daily_notional: daily,
+    max_position_weight: weight,
+    duplicate_order_window_seconds: window,
+  }
+}
 
 
 const PRIVACY_MODE_ICON: Record<PrivacyMode, typeof Eye> = {
@@ -87,17 +117,18 @@ export function SettingsPanel({
   )
 
   async function saveRisk(formData: FormData) {
+    const checked = validateRisk(formData)
+    if (typeof checked === 'string') {
+      onError(checked)
+      return
+    }
     setWorking(true)
     try {
-      await updateRisk({
-        max_single_order_notional: Number(formData.get('max_single_order_notional')),
-        max_daily_notional: Number(formData.get('max_daily_notional')),
-        max_position_weight: Number(formData.get('max_position_weight')),
-        duplicate_order_window_seconds: Number(formData.get('duplicate_order_window_seconds')),
-      })
+      await updateRisk(checked)
+      toast.success('Risk rails saved')
       onReload()
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to save risk settings'
+      const msg = parseApiError(error).message || 'Failed to save risk settings'
       onError(msg)
     } finally {
       setWorking(false)
@@ -116,7 +147,7 @@ export function SettingsPanel({
       await setLeveragedAutoExecute(formData.get('auto_execute_enabled') === 'on')
       onReload()
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to save broker settings'
+      const msg = parseApiError(error).message || 'Failed to save broker settings'
       onError(msg)
     } finally {
       setWorking(false)
@@ -151,7 +182,7 @@ export function SettingsPanel({
       setInvestExecSecret('')
       onReload()
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to save Invest credentials'
+      const msg = parseApiError(error).message || 'Failed to save Invest credentials'
       onError(msg)
     } finally {
       setWorking(false)
@@ -186,7 +217,7 @@ export function SettingsPanel({
       setIsaExecSecret('')
       onReload()
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to save ISA credentials'
+      const msg = parseApiError(error).message || 'Failed to save ISA credentials'
       onError(msg)
     } finally {
       setWorking(false)
@@ -210,7 +241,7 @@ export function SettingsPanel({
       }
       onReload()
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Execution key test failed')
+      onError(parseApiError(error).message || 'Execution key test failed')
     } finally {
       setTestingKey(null)
     }
@@ -219,12 +250,21 @@ export function SettingsPanel({
   async function saveTelegram(formData: FormData) {
     setWorking(true)
     try {
-      const ids = telegramUsers
+      const rawIds = telegramUsers
         .split(',')
         .map((x) => x.trim())
         .filter(Boolean)
-        .map((x) => Number(x))
-        .filter((x) => Number.isFinite(x))
+      const bad = rawIds.filter((x) => !/^\d{1,15}$/.test(x))
+      if (bad.length) {
+        onError(`Telegram user ids must be numbers (not usernames): ${bad.join(', ')}`)
+        return
+      }
+      const ids = rawIds.map((x) => Number(x))
+      const threshold = Number(formData.get('telegram_high_conviction_threshold'))
+      if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+        onError('High-conviction threshold must be between 0 and 1.')
+        return
+      }
 
       await updateTelegram({
         enabled: formData.get('telegram_enabled') === 'on',
@@ -238,7 +278,7 @@ export function SettingsPanel({
       setTelegramToken('')
       onReload()
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to save Telegram settings'
+      const msg = parseApiError(error).message || 'Failed to save Telegram settings'
       onError(msg)
     } finally {
       setWorking(false)
@@ -251,7 +291,7 @@ export function SettingsPanel({
       await testTelegram('OpenPF test ping: Telegram integration is active.')
       onReload()
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to send Telegram test message'
+      const msg = parseApiError(error).message || 'Failed to send Telegram test message'
       onError(msg)
     } finally {
       setWorking(false)
@@ -379,7 +419,7 @@ export function SettingsPanel({
             }}
           >
             <div className="space-y-1.5">
-              <Label htmlFor="max_single_order_notional">Max single order ($)</Label>
+              <Label htmlFor="max_single_order_notional">Max single order (£)</Label>
               <Input
                 id="max_single_order_notional"
                 name="max_single_order_notional"
@@ -388,7 +428,7 @@ export function SettingsPanel({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="max_daily_notional">Max daily notional ($)</Label>
+              <Label htmlFor="max_daily_notional">Max daily notional (£)</Label>
               <Input
                 id="max_daily_notional"
                 name="max_daily_notional"
