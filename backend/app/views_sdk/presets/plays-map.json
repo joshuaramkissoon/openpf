@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "title": "Theme map",
+  "description": "Your book organised by play — what each theme owns, how it's doing today, and what's unsorted",
+  "icon": "layout-grid",
+  "data": {"pf": {"source": "portfolio"}, "plays": {"source": "plays"}},
+  "blocks": [
+    {
+      "type": "kpis",
+      "from": "pf.positions",
+      "items": [
+        {"label": "In plays", "value": {"agg": "sum", "field": "value", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "!=", "value": "Unsorted"}}], "per": {"agg": "sum", "field": "value"}}, "format": "pct", "hint": "of invested money"},
+        {"label": "Plays", "value": {"from": "plays.plays", "agg": "count", "transform": [{"filter": {"field": "status", "op": "in", "value": ["active", "paused", "draft"]}}]}, "format": "int", "hint": "active, paused or draft"},
+        {"label": "Unsorted", "value": {"agg": "count", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "=", "value": "Unsorted"}}]}, "format": "int", "hint": "holdings with no play"}
+      ]
+    },
+    {
+      "type": "treemap",
+      "title": "Book by theme",
+      "subtitle": "Holdings grouped by the play that owns them; colour is today's move. Click a theme to drill in.",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["play"]}],
+      "label": "ticker",
+      "size": "value",
+      "color": "day_change_pct",
+      "group": "play"
+    },
+    {
+      "type": "bars",
+      "title": "Exposure per play",
+      "subtitle": "Current value of the holdings each play owns",
+      "from": "plays.plays",
+      "transform": [{"sort": {"by": "exposure"}}],
+      "label": "title",
+      "value": "exposure",
+      "format": "money",
+      "empty": "No plays yet — a play is a theme bet with a thesis, a basket and kill criteria. Create one from Plays.",
+      "width": "half"
+    },
+    {
+      "type": "table",
+      "title": "Plays",
+      "from": "plays.plays",
+      "columns": [
+        {"field": "title", "label": "Play", "format": "text"},
+        {"field": "status", "label": "Status", "format": "text"},
+        {"field": "owned_count", "label": "Owned", "format": "int"},
+        {"field": "bench_count", "label": "Bench", "format": "int"},
+        {"field": "exposure", "label": "Exposure", "format": "money"}
+      ],
+      "empty": "No plays yet.",
+      "width": "half"
+    }
+  ]
+}

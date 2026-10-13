@@ -1,7 +1,20 @@
 """The Views builder: turns "show me my dividend income by month" into a page.
 
-Each build is a short, dedicated Claude Agent SDK session that can do exactly
-three things:
+Every request is triaged first (``views_triage``: empty, nonsense, trading,
+unavailable data, injection → a clear decline with the closest presets). Then:
+
+* **spec engine (default)** — ``views_spec_builder`` asks a fast model for a
+  declarative viz spec (no code), validated + one repair pass, in seconds. With
+  no model configured, a new view falls back to the closest preset.
+* **code engine (fallback)** — for requests the spec can't express ("needs
+  custom code") and for editing legacy code views: the original guarded
+  code-writing session below.
+
+Every job ends ``done`` or ``error`` with a message; the outcome is also
+persisted on the view (``views_store.set_build``) so a restart or another
+process never leaves the UI waiting on a build that no longer exists.
+
+The code session can do exactly three things:
 
 * read the SDK doc / starter examples and the view's own draft file,
 * write or edit that ONE draft file (enforced by a PreToolUse hook + a deny-all
@@ -33,7 +46,9 @@ from app.views_sdk import SDK_DIR, sdk_doc, starter
 logger = logging.getLogger(__name__)
 
 JobKind = Literal["create", "edit", "fix"]
+Engine = Literal["spec", "code"]
 BUILD_TIMEOUT_S = 300
+SPEC_TIMEOUT_S = 120
 MAX_FIX_ROUNDS = 2
 
 _FRIENDLY_SOURCE = {
@@ -64,6 +79,8 @@ class Job:
     finished_at: float | None = None
     cost_usd: float | None = None
     created_view: bool = False
+    engine: Engine = "spec"
+    suggestions: list[dict[str, Any]] = field(default_factory=list)
 
     def say(self, text: str) -> None:
         if self.progress and self.progress[-1]["text"] == text:
@@ -82,6 +99,8 @@ class Job:
             "version": self.version,
             "elapsed_s": round((self.finished_at or time.time()) - self.started_at, 1),
             "cost_usd": self.cost_usd,
+            "engine": self.engine,
+            "suggestions": self.suggestions,
         }
 
 
@@ -93,6 +112,26 @@ class BuildConflict(RuntimeError):
     pass
 
 
+class ViewDeclined(ValueError):
+    """The request can't become a view; carries the explanation + suggestions."""
+
+    def __init__(self, decline: Any):
+        super().__init__(decline.message)
+        self.decline = decline
+
+
+def _engine_for(view_id: str, kind: str) -> Engine:
+    if kind == "create":
+        return "spec"
+    try:
+        meta = store.get_view(view_id)
+    except store.ViewNotFound:
+        return "spec"
+    if not meta.get("current_version"):
+        return "spec"
+    return "spec" if meta.get("kind") == "spec" else "code"
+
+
 def get_job(job_id: str) -> Job | None:
     return _jobs.get(job_id)
 
@@ -102,20 +141,25 @@ def active_job(view_id: str) -> Job | None:
 
 
 def prepare_job(prompt: str, *, view_id: str | None = None, kind: JobKind | None = None) -> Job:
-    """Validate the request, create the view shell if new, and register a job."""
+    """Triage the request, create the view shell if new, and register a job."""
+    from app.services.views_triage import triage
+
     prompt = (prompt or "").strip()
-    if not prompt:
-        raise ValueError("prompt is required")
-    if len(prompt) > 4000:
-        raise ValueError("prompt is too long (4000 characters max)")
+    if view_id:
+        store.get_view(view_id)  # raises ViewNotFound before anything else
+    if kind != "fix":  # runtime error reports are machine-written, not user requests
+        declined = triage(prompt)
+        if declined:
+            raise ViewDeclined(declined)
     created = False
     if view_id:
-        store.get_view(view_id)  # raises ViewNotFound
+        meta = store.get_view(view_id)
         if active_job(view_id):
             raise BuildConflict("this view is already being built")
-        kind = kind if kind in ("edit", "fix") else "edit"
+        # A shell with no versions yet (a failed create) is rebuilt from scratch.
+        kind = "create" if not meta.get("current_version") else (kind if kind in ("edit", "fix") else "edit")
     else:
-        meta = store.create_view(title="New view", prompt=prompt, slug=store.prompt_slug(prompt))
+        meta = store.create_view(title=store.prompt_title(prompt), prompt=prompt, slug=store.prompt_slug(prompt))
         view_id = meta["id"]
         kind = "create"
         created = True
@@ -125,8 +169,9 @@ def prepare_job(prompt: str, *, view_id: str | None = None, kind: JobKind | None
     if len(_jobs) > 200:
         for jid in [j.id for j in _jobs.values() if j.status in ("done", "error")][:100]:
             _jobs.pop(jid, None)
-    job = Job(id=uuid.uuid4().hex[:12], view_id=view_id, kind=kind, prompt=prompt, created_view=created)
+    job = Job(id=uuid.uuid4().hex[:12], view_id=view_id, kind=kind, prompt=prompt, created_view=created, engine=_engine_for(view_id, kind))
     _jobs[job.id] = job
+    store.set_build(view_id, "queued", prompt=prompt, job_id=job.id)
     return job
 
 
@@ -151,19 +196,23 @@ def _queue_dir() -> Path:
 
 
 def enqueue(prompt: str, *, view_id: str | None = None) -> dict[str, Any]:
-    """Queue a build from another process. Returns the target view id/path."""
+    """Queue a build from another process. Returns the target view id/path.
+
+    Raises ``ViewDeclined`` (a ValueError) for requests that can't be views."""
+    from app.services.views_triage import triage
+
     prompt = (prompt or "").strip()
-    if not prompt:
-        raise ValueError("prompt is required")
-    if len(prompt) > 4000:
-        raise ValueError("prompt is too long (4000 characters max)")
+    declined = triage(prompt)
+    if declined:
+        raise ViewDeclined(declined)
     if view_id:
         store.get_view(view_id)  # raises ViewNotFound
         kind = "edit"
     else:
-        meta = store.create_view(title="New view", prompt=prompt, slug=store.prompt_slug(prompt))
+        meta = store.create_view(title=store.prompt_title(prompt), prompt=prompt, slug=store.prompt_slug(prompt))
         view_id = meta["id"]
         kind = "create"
+    store.set_build(view_id, "queued", prompt=prompt)
     req = {"prompt": prompt, "view_id": view_id, "kind": kind, "queued_at": time.time()}
     tmp = _queue_dir() / f".{uuid.uuid4().hex}.tmp"
     tmp.write_text(json.dumps(req))
@@ -175,6 +224,7 @@ def _job_for_request(req: dict[str, Any]) -> Job:
     if req.get("kind") == "create":
         job = Job(id=uuid.uuid4().hex[:12], view_id=req["view_id"], kind="create", prompt=req["prompt"], created_view=True)
         _jobs[job.id] = job
+        store.set_build(job.view_id, "queued", prompt=job.prompt, job_id=job.id)
         return job
     return prepare_job(req["prompt"], view_id=req["view_id"])
 
@@ -190,8 +240,10 @@ async def queue_worker(poll_seconds: float = 2.0) -> None:
                     path.unlink(missing_ok=True)
                 try:
                     start_job(_job_for_request(req))
-                except Exception:  # noqa: BLE001 — a bad request must not kill the worker
+                except Exception as exc:  # noqa: BLE001 — a bad request must not kill the worker
                     logger.warning("queued view build failed to start", exc_info=True)
+                    if req.get("view_id"):
+                        store.set_build(str(req["view_id"]), "error", error=f"The build couldn't start: {str(exc)[:200]}", prompt=req.get("prompt"))
         except Exception:  # noqa: BLE001
             logger.warning("view queue poll failed", exc_info=True)
         await asyncio.sleep(poll_seconds)
@@ -321,14 +373,20 @@ def _describe_tool(name: str, tool_input: dict[str, Any], draft: Path) -> str | 
 
 # ── run ─────────────────────────────────────────────────────────────────
 async def run_job(job: Job) -> Job:
+    store.set_build(job.view_id, "running", prompt=job.prompt, job_id=job.id)
     try:
-        await asyncio.wait_for(_run(job), timeout=BUILD_TIMEOUT_S)
+        if job.engine == "spec":
+            await asyncio.wait_for(_run_spec(job), timeout=SPEC_TIMEOUT_S)
+        else:
+            await asyncio.wait_for(_run(job), timeout=BUILD_TIMEOUT_S)
     except asyncio.TimeoutError:
-        _fail(job, "The build took too long and was stopped. Try a simpler request.")
+        _fail(job, "The build took too long and was stopped. Try a simpler request, or start from a preset.")
     except Exception as exc:  # noqa: BLE001
         logger.exception("view build %s failed", job.id)
         _fail(job, f"The builder failed: {str(exc)[:300]}")
     finally:
+        if job.status not in ("done", "error"):  # belt and braces: never leave a job hanging
+            _fail(job, "The build stopped unexpectedly. Retry, or start from a preset.")
         job.finished_at = job.finished_at or time.time()
         try:
             store.draft_path(job.view_id).unlink(missing_ok=True)
@@ -337,16 +395,82 @@ async def run_job(job: Job) -> Job:
     return job
 
 
-def _fail(job: Job, message: str) -> None:
+def _fail(job: Job, message: str, *, suggest: bool = True) -> None:
+    """End a job as failed. The view shell of a failed create is kept (marked
+    failed) so the user sees why and can Retry or dismiss it."""
+    from app.services.views_presets import closest_presets
+
+    if suggest and not job.suggestions:
+        job.suggestions = [{"slug": p["slug"], "title": p["title"], "why": p.get("why")} for p in closest_presets(job.prompt, 3)]
     job.status = "error"
     job.error = message
     job.finished_at = time.time()
     job.say(message)
-    if job.created_view:
-        try:
-            store.delete_view(job.view_id)
-        except store.ViewNotFound:
-            pass
+    store.set_build(job.view_id, "error", error=message, prompt=job.prompt, suggestions=job.suggestions, job_id=job.id)
+
+
+def _done(job: Job, version: int, line: str) -> None:
+    job.version = version
+    job.status = "done"
+    job.finished_at = time.time()
+    job.say(line)
+
+
+async def _run_spec(job: Job) -> None:
+    """Spec engine: fast model → validated spec. Falls back to the code engine
+    for "needs custom code", and to the closest preset when no model exists."""
+    from app.services import views_spec_builder as sb
+    from app.services.views_presets import best_match, closest_presets
+    from app.views_sdk import preset_specs
+
+    job.status = "running"
+    current = None
+    if job.kind != "create":
+        n, kind, content = store.read_document(job.view_id)
+        if kind == "spec":
+            current = json.loads(content)
+    job.say("Designing the view…" if job.kind == "create" else "Applying your change…")
+    try:
+        result = await sb.build_spec(job.prompt, current)
+    except sb.NoSpecProvider:
+        if job.kind != "create":
+            _fail(job, "No AI model is configured to edit views. Add a TOGETHER_API_KEY (or sign in to Claude) and try again.")
+            return
+        pick = best_match(job.prompt) or closest_presets(job.prompt, 1)[0]
+        spec = preset_specs()[pick["slug"]]
+        job.say(f"No AI model is configured — using the closest preset: {pick['title']}.")
+        saved = store.save_version(job.view_id, json.dumps(spec, indent=1), note=f"Closest preset (no model): {pick['title']}", title=spec["title"], description=spec.get("description"), icon=spec.get("icon"), kind="spec")
+        _done(job, saved["current_version"], "Done — built from a preset. Add a TOGETHER_API_KEY to build custom views.")
+        return
+    except sb.SpecBuildError as exc:
+        logger.warning("spec build failed for %s: %s", job.view_id, exc)
+        _fail(job, "The builder couldn't turn that into a view. Try rephrasing it as a chart of your portfolio, or start from a preset.")
+        return
+
+    if result.kind == "decline":
+        _fail(job, result.reason or "That isn't something a view can show.")
+        return
+    if result.kind == "needs_code":
+        job.say("This needs custom code — building it the slower way…")
+        job.engine = "code"
+        if current is not None:
+            job.kind = "create"
+            job.prompt = f"{job.prompt}\n\n(Context: this replaces a chart view titled '{current.get('title', '')}'.)"
+        await _run(job)
+        return
+
+    spec = result.spec or {}
+    job.say("Checking it renders safely…")
+    saved = store.save_version(
+        job.view_id,
+        json.dumps(spec, indent=1),
+        note=job.prompt[:200],
+        title=spec.get("title"),
+        description=spec.get("description"),
+        icon=spec.get("icon"),
+        kind="spec",
+    )
+    _done(job, saved["current_version"], f"Done — version {saved['current_version']} saved.")
 
 
 async def _run(job: Job) -> None:
@@ -373,7 +497,7 @@ async def _run(job: Job) -> None:
     if job.kind != "create":
         meta = store.get_view(job.view_id)
         version = meta["current_version"] or None
-        draft.write_text(store.read_version(job.view_id, version) if version else "", encoding="utf-8")
+        draft.write_text(store.read_version(job.view_id, version) if version and meta.get("kind") == "code" else "", encoding="utf-8")
     else:
         draft.unlink(missing_ok=True)
 
@@ -445,7 +569,4 @@ async def _run(job: Job) -> None:
         description=meta.get("description"),
         icon=meta.get("icon"),
     )
-    job.version = saved["current_version"]
-    job.status = "done"
-    job.finished_at = time.time()
-    job.say(f"Done — version {job.version} saved.")
+    _done(job, saved["current_version"], f"Done — version {saved['current_version']} saved.")

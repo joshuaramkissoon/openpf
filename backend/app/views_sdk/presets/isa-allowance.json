@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "title": "ISA allowance",
+  "description": "How much of this tax year's £20,000 Stocks ISA allowance you've used, and the days left",
+  "icon": "piggy-bank",
+  "data": {"cf": {"source": "cashflows"}},
+  "blocks": [
+    {
+      "type": "meter",
+      "label": "Allowance used this tax year",
+      "from": "cf.tax_year",
+      "value": {"field": "isa_used"},
+      "max": {"field": "isa_allowance"},
+      "mark": {"field": "year_elapsed_pct"},
+      "markLabel": "Share of the tax year gone",
+      "format": "money",
+      "caption": "Tax year 6 April to 5 April. Withdrawals from your flexible Trading 212 ISA can be paid back this tax year without using allowance."
+    },
+    {
+      "type": "kpis",
+      "from": "cf.tax_year",
+      "items": [
+        {"label": "Left to use", "value": {"field": "isa_remaining"}, "format": "money", "hint": "before 5 April"},
+        {"label": "Days left", "value": {"field": "days_left"}, "format": "int", "hint": "in this tax year"},
+        {"label": "To max it", "value": {"field": "monthly_to_max"}, "format": "money", "hint": "per month from now"},
+        {"label": "Withdrawn", "value": {"field": "isa_withdrawn"}, "format": "money", "hint": "can be replaced"}
+      ]
+    },
+    {
+      "type": "bars",
+      "title": "ISA deposits by month",
+      "subtitle": "This tax year",
+      "from": "cf.items",
+      "transform": [{"filter": {"field": "account", "op": "=", "value": "stocks_isa"}}, {"filter": {"field": "type", "op": "=", "value": "DEPOSIT"}}, {"filter": {"field": "date", "op": ">=", "value": "$tax_year_start"}}, {"month": {"field": "date", "sum": "amount", "last": 12}}],
+      "label": "label",
+      "value": "amount",
+      "orientation": "vertical",
+      "format": "money",
+      "width": "two-thirds"
+    },
+    {
+      "type": "table",
+      "title": "Recent ISA cash movements",
+      "from": "cf.items",
+      "transform": [{"filter": {"field": "account", "op": "=", "value": "stocks_isa"}}],
+      "columns": [
+        {"field": "date", "label": "Date", "format": "date"},
+        {"field": "type", "label": "Type", "format": "text"},
+        {"field": "amount", "label": "Amount", "format": "signedMoney"}
+      ],
+      "limit": 8,
+      "empty": "No ISA deposits or withdrawals found.",
+      "width": "third"
+    }
+  ]
+}

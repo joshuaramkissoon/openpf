@@ -119,6 +119,8 @@ def _portfolio(db: Session, params: dict[str, Any]) -> dict[str, Any]:
                 "accounts": [p.get("account_kind")],
                 "yf": p.get("yfinance_ticker") or ticker,
                 "instrument_currency": p.get("instrument_currency"),
+                # Listing currency with pence folded into pounds (GBX → GBP).
+                "exposure_currency": {"GBX": "GBP", "GBP_PENCE": "GBP", "GBp": "GBP"}.get(str(p.get("instrument_currency") or ""), p.get("instrument_currency") or "GBP"),
                 "quantity": float(p.get("quantity") or 0.0),
                 "price": _r(p.get("current_price"), 4),
                 "avg_price": _r(p.get("average_price"), 4),
@@ -399,20 +401,252 @@ def _proposals(db: Session, params: dict[str, Any]) -> dict[str, Any]:
     return {"proposals": items}
 
 
+def play_rings(play: dict[str, Any], positions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Owned / related / bench groups for one serialized play, valued from the live book.
+
+    ADAPTER — the one place that knows the play "rings" shape. When plays carry
+    explicit ring fields (``owned`` / ``related`` / ``bench`` lists of tickers or
+    ``{ticker}`` dicts, top-level or under ``rings``), those win. Otherwise it
+    falls back to today's shape: legs held in the book are *owned*,
+    ``meta.overlap`` names held outside the legs are *related*, and legs not yet
+    bought are the *bench*. Values always come from ``positions`` (display
+    currency), never from price x quantity, so views stay inside the money rule.
+    """
+    by_ticker = {str(p.get("ticker") or "").upper(): p for p in positions}
+
+    def keys(item: Any) -> set[str]:
+        if isinstance(item, str):
+            raw = [item]
+        elif isinstance(item, dict):
+            raw = [item.get("ticker"), item.get("instrument_code"), item.get("symbol")]
+        else:
+            raw = []
+        out: set[str] = set()
+        for r in raw:
+            if r:
+                out.add(str(r).upper())
+                out.add(_strip_code(str(r)).upper())
+        return out
+
+    def held(item: Any) -> dict[str, Any] | None:
+        return next((by_ticker[k] for k in sorted(keys(item)) if k in by_ticker), None)
+
+    def entry(item: Any, role: str | None = None) -> dict[str, Any]:
+        pos = held(item)
+        d = item if isinstance(item, dict) else {}
+        ticker = (pos or {}).get("ticker") or (_strip_code(str(d.get("ticker") or item)) if (d.get("ticker") or isinstance(item, str)) else "")
+        return {
+            "ticker": ticker,
+            "name": d.get("name") or (pos or {}).get("name") or ticker,
+            "role": role or d.get("role"),
+            "target_weight": _r(d.get("target_weight"), 4),
+            "held": pos is not None,
+            "value": (pos or {}).get("value"),
+            "ppl": (pos or {}).get("ppl"),
+            "day_change": (pos or {}).get("day_change"),
+            "weight": (pos or {}).get("weight"),
+        }
+
+    rings = play.get("rings") if isinstance(play.get("rings"), dict) else play
+    explicit = any(isinstance(rings.get(k), list) for k in ("owned", "related", "bench"))
+    if explicit:
+        owned = [entry(x, "owned") for x in rings.get("owned") or []]
+        related = [entry(x, "related") for x in rings.get("related") or []]
+        bench = [entry(x, "bench") for x in rings.get("bench") or []]
+    else:
+        legs = [leg for leg in play.get("legs") or [] if isinstance(leg, dict)]
+        owned = [entry(leg) for leg in legs if held(leg)]
+        bench = [entry(leg) for leg in legs if not held(leg)]
+        leg_keys: set[str] = set().union(*(keys(leg) for leg in legs)) if legs else set()
+        meta = play.get("meta") if isinstance(play.get("meta"), dict) else {}
+        related = [entry(o, "related") for o in meta.get("overlap") or [] if isinstance(o, dict) and not (keys(o) & leg_keys) and held(o)]
+    exposure = rings.get("effective_exposure", play.get("effective_exposure"))
+    if not isinstance(exposure, (int, float)):
+        exposure = sum(e["value"] or 0.0 for e in owned)
+    return {"owned": owned, "related": related, "bench": bench, "exposure": _r(exposure), "explicit": explicit}
+
+
 def _plays(db: Session, params: dict[str, Any]) -> dict[str, Any]:
-    """Theme bets (thesis, basket legs, sizing, review verdict)."""
+    """Theme bets (thesis, basket legs, sizing, review verdict) plus their live
+    owned / related / bench groups and which play owns each holding."""
     try:
         from app.services.plays_service import list_plays, serialize_play
     except ImportError:
-        return {"available": False, "plays": []}
+        return {"available": False, "plays": [], "owners": []}
     status = params.get("status")
     if status is not None and status not in ("draft", "active", "paused", "closed"):
         raise DataSourceError("status must be draft | active | paused | closed")
+    rows = list_plays(db, status=status)
+    positions: list[dict[str, Any]] = []
+    if rows:
+        try:
+            positions = _portfolio(db, {"currency": params.get("currency")})["positions"]
+        except Exception:  # noqa: BLE001 — plays still render without live values
+            logger.warning("plays source: portfolio unavailable for rings", exc_info=True)
     plays = []
-    for p in list_plays(db, status=status):
+    owner: dict[str, str] = {}
+    for p in rows:
         s = serialize_play(p)
-        plays.append({k: s.get(k) for k in ("id", "title", "thesis", "status", "conviction", "horizon_months", "account_kind", "budget_gbp", "legs", "kill_criteria", "review", "created_at", "activated_at")})
-    return {"available": True, "plays": plays}
+        out = {k: s.get(k) for k in ("id", "title", "thesis", "status", "conviction", "horizon_months", "account_kind", "budget_gbp", "legs", "kill_criteria", "review", "created_at", "activated_at")}
+        meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
+        out["benchmark"] = meta.get("benchmark")
+        out["key_risks"] = meta.get("key_risks") or []
+        rings = play_rings(s, positions)
+        out["rings"] = rings
+        out["exposure"] = rings["exposure"]
+        out["owned_count"] = len(rings["owned"])
+        out["bench_count"] = len(rings["bench"])
+        plays.append(out)
+        if s.get("status") in ("active", "paused", "draft"):
+            for e in rings["owned"]:
+                owner.setdefault(e["ticker"], s.get("id"))
+    owners = [{"ticker": pos["ticker"], "play_id": owner.get(pos["ticker"]), "value": pos.get("value")} for pos in positions]
+    return {"available": True, "plays": plays, "owners": owners}
+
+
+def _ticker_list(params: dict[str, Any], cap: int) -> list[str]:
+    tickers = params.get("tickers") or []
+    if isinstance(tickers, str):
+        tickers = [t for t in tickers.split(",") if t.strip()]
+    if not isinstance(tickers, list) or not tickers:
+        raise DataSourceError("tickers must be a non-empty list")
+    if len(tickers) > cap:
+        raise DataSourceError(f"at most {cap} tickers per call")
+    return [_ticker(t) for t in tickers]
+
+
+def _profiles(db: Session, params: dict[str, Any]) -> dict[str, Any]:
+    """Classification + dividend facts for many tickers at once (parallel, cached)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.fundamentals_service import get_fundamentals_snapshot
+
+    syms = _ticker_list(params, 40)
+    fields = ("long_name", "sector", "industry", "country", "quote_type", "currency", "dividend_yield", "dividend_rate", "ex_dividend_date", "beta")
+
+    def one(sym: str) -> dict[str, Any]:
+        try:
+            data = _cached(("profile", sym), 6 * 3600, lambda: get_fundamentals_snapshot(sym))
+        except Exception:  # noqa: BLE001
+            data = {}
+        row = {"ticker": sym} | {k: data.get(k) for k in fields}
+        if row.get("dividend_yield") is not None:
+            row["dividend_yield"] = _r(float(row["dividend_yield"]) / 100.0, 5)
+        return row
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {"profiles": list(pool.map(one, syms))}
+
+
+def _fx(db: Session, params: dict[str, Any]) -> dict[str, Any]:
+    """Spot FX from the display currency: ``rates.USD`` = USD per 1 unit of base."""
+    from app.services.fx import get_fx_rate
+
+    base = _currency(params)
+    rates: dict[str, float | None] = {}
+    for quote in ("GBP", "USD", "EUR"):
+        try:
+            rates[quote] = _r(_cached(("fx", base, quote), 3600, lambda q=quote: get_fx_rate(base, q)), 6)
+        except Exception:  # noqa: BLE001
+            rates[quote] = None
+    return {"base": base, "rates": rates}
+
+
+def uk_tax_year(today: date | None = None) -> tuple[date, date]:
+    """UK tax year containing ``today``: 6 April to 5 April."""
+    today = today or date.today()
+    start_year = today.year if (today.month, today.day) >= (4, 6) else today.year - 1
+    return date(start_year, 4, 6), date(start_year + 1, 4, 5)
+
+
+ISA_ALLOWANCE_GBP = 20_000.0
+
+
+def _tax_year_summary(start: date, end: date, deposits: dict[str, float], items: list[dict[str, Any]]) -> dict[str, Any]:
+    """This UK tax year's ISA subscriptions. Trading 212's ISA is flexible, so
+    money withdrawn this tax year can be paid back in without using allowance:
+    used = deposits − withdrawals (never below 0)."""
+    today = date.today()
+    withdrawn = sum(
+        abs(float(i["amount"] or 0.0))
+        for i in items
+        if i["account"] == "stocks_isa" and i["type"] in ("WITHDRAW", "WITHDRAWAL") and i["date"] and start.isoformat() <= i["date"] <= end.isoformat()
+    )
+    deposited = deposits.get("stocks_isa", 0.0)
+    used = max(0.0, deposited - withdrawn)
+    days_left = max(0, (end - today).days + 1)
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "deposits": {k: _r(v) for k, v in deposits.items()},
+        "isa_allowance": ISA_ALLOWANCE_GBP,
+        "isa_deposited": _r(deposited),
+        "isa_withdrawn": _r(withdrawn),
+        "isa_used": _r(used),
+        "isa_remaining": _r(max(0.0, ISA_ALLOWANCE_GBP - used)),
+        "isa_used_pct": _r(used / ISA_ALLOWANCE_GBP, 4),
+        "days_left": days_left,
+        "year_elapsed_pct": _r(1 - days_left / max(1, (end - start).days + 1), 4),
+        "monthly_to_max": _r(max(0.0, ISA_ALLOWANCE_GBP - used) / max(1.0, days_left / 30.44)),
+    }
+
+
+def _cashflows(db: Session, params: dict[str, Any]) -> dict[str, Any]:
+    """Deposits / withdrawals per account (from the broker's transactions feed)."""
+    from app.services.cashflow_service import get_cashflows, maybe_sync_all
+
+    account = _account(params)
+    try:
+        _cached(("cashflow-sync",), 1800, lambda: maybe_sync_all(db) or True)
+    except Exception:  # noqa: BLE001 — serve what's stored
+        logger.warning("cashflow sync failed", exc_info=True)
+    start, end = uk_tax_year()
+    items = []
+    tax_year: dict[str, float] = defaultdict(float)
+    for ev in get_cashflows(db, account_kind=account):
+        when = ev.occurred_at.date() if ev.occurred_at else None
+        items.append({"account": ev.account_kind, "type": ev.type, "amount": _r(ev.amount), "currency": ev.currency, "date": when.isoformat() if when else None})
+        if when and start <= when <= end and ev.type == "DEPOSIT":
+            tax_year[ev.account_kind] += float(ev.amount or 0.0)
+    items.sort(key=lambda r: r["date"] or "", reverse=True)
+    return {
+        "items": items[:500],
+        "tax_year": _tax_year_summary(start, end, tax_year, items),
+    }
+
+
+def _news(db: Session, params: dict[str, Any]) -> dict[str, Any]:
+    """Recent headlines for a few tickers (text only — views cannot open links)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.intel_service import get_company_news
+
+    if params.get("movers"):
+        # Headlines for today's biggest movers in the book (by |day_change_pct|).
+        n = max(1, min(int(params.get("movers") or 5), 8))
+        positions = _portfolio(db, {"currency": params.get("currency")})["positions"]
+        ranked = sorted((p for p in positions if p.get("day_change_pct") is not None), key=lambda p: -abs(p["day_change_pct"]))
+        params = {**params, "tickers": [p.get("yf") or p["ticker"] for p in ranked[:n]]}
+        if not params["tickers"]:
+            return {"items": []}
+    syms = _ticker_list(params, 10)
+    days = max(1, min(int(params.get("days") or 2), 7))
+    limit = max(1, min(int(params.get("limit") or 3), 5))
+
+    def one(sym: str) -> list[dict[str, Any]]:
+        try:
+            raw = get_company_news(sym, since_days=days, limit=limit)
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            {"ticker": sym, "title": (n.get("headline") or "")[:240], "source": n.get("source") or "", "published_at": n.get("datetime"), "summary": (n.get("summary") or "")[:400]}
+            for n in raw[:limit]
+            if n.get("headline")
+        ]
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        items = [item for chunk in pool.map(one, syms) for item in chunk]
+    return {"items": items}
 
 
 SOURCES: dict[str, Callable[[Session, dict[str, Any]], dict[str, Any]]] = {
@@ -426,6 +660,10 @@ SOURCES: dict[str, Callable[[Session, dict[str, Any]], dict[str, Any]]] = {
     "watchlist": _watchlist,
     "proposals": _proposals,
     "plays": _plays,
+    "profiles": _profiles,
+    "fx": _fx,
+    "cashflows": _cashflows,
+    "news": _news,
 }
 
 

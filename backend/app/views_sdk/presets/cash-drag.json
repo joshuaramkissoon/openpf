@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "title": "Cash drag",
+  "description": "Idle cash in each account, its share of your book, and what it may be costing you",
+  "icon": "wallet",
+  "data": {"pf": {"source": "portfolio"}, "hist": {"source": "history", "params": {"range": "1y"}}},
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "Idle cash",
+      "from": "pf.account",
+      "value": {"field": "free_cash"},
+      "format": "money",
+      "delta": {"from": "pf.metrics", "field": "cash_ratio"},
+      "deltaFormat": "pct",
+      "caption": "Share of your portfolio sitting uninvested",
+      "trend": {"from": "hist.points", "field": "free_cash"},
+      "width": "half"
+    },
+    {
+      "type": "kpis",
+      "from": "pf.account",
+      "width": "half",
+      "items": [
+        {"label": "Cost per year at 7%", "value": {"field": "drag", "transform": [{"compute": {"as": "drag", "op": "scale", "field": "free_cash", "by": 0.07}}]}, "format": "money", "hint": "if it earned a typical market return"},
+        {"label": "Per month", "value": {"field": "drag", "transform": [{"compute": {"as": "drag", "op": "scale", "field": "free_cash", "by": 0.005833}}]}, "format": "money", "hint": "the same, monthly"}
+      ]
+    },
+    {
+      "type": "bars",
+      "title": "Cash by account",
+      "from": "pf.accounts",
+      "transform": [{"compute": {"as": "cash_share", "op": "ratio", "a": "free_cash", "b": "total"}}],
+      "label": "account",
+      "value": "free_cash",
+      "format": "money",
+      "secondary": "cash_share",
+      "secondaryFormat": "pct",
+      "width": "half"
+    },
+    {
+      "type": "timeseries",
+      "title": "Cash over the last year",
+      "from": "hist.points",
+      "series": [{"field": "free_cash", "label": "Cash"}],
+      "style": "area",
+      "format": "moneyCompact",
+      "width": "half"
+    },
+    {
+      "type": "note",
+      "text": "Some cash is healthy — for opportunities or upcoming needs. The 7% figure is an illustrative long-run equity return, not a forecast; if your cash earns interest, the real cost is lower."
+    }
+  ]
+}

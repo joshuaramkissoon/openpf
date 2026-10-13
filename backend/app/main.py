@@ -119,8 +119,12 @@ async def lifespan(app: FastAPI):
     # Builds Archie queues for agent-built Views (see views_builder.enqueue).
     import asyncio
 
-    from app.services import views_builder
+    from app.services import views_builder, views_store
 
+    try:
+        views_store.fail_stale_builds()  # builds that died with the previous process
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("views: stale build cleanup failed", exc_info=True)
     views_queue = asyncio.create_task(views_builder.queue_worker())
     yield
     views_queue.cancel()

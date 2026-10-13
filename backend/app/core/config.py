@@ -149,6 +149,14 @@ class Settings(BaseSettings):
 
     # Views — agent-built, sandboxed pages. The builder favours speed (Sonnet).
     views_model: str = Field(default="claude-sonnet-4-6", alias="VIEWS_MODEL")
+    # Spec builder (prompt → declarative viz spec, no code). Fast by design:
+    # Together AI (JSON-schema constrained) first, Claude as the fallback, the
+    # closest preset when neither is available. TOGETHER_API_KEY comes from the
+    # env or Settings → data providers (config key data_providers.together_api_key).
+    views_spec_provider: str = Field(default="together", alias="VIEWS_SPEC_PROVIDER")  # together | anthropic
+    views_spec_model: str = Field(default="deepseek-ai/DeepSeek-V4.1-Flash", alias="VIEWS_SPEC_MODEL")
+    views_spec_claude_model: str = Field(default="claude-haiku-4-5", alias="VIEWS_SPEC_CLAUDE_MODEL")
+    views_spec_timeout_s: float = Field(default=40.0, alias="VIEWS_SPEC_TIMEOUT_S")
     # Where view HTML/versions/state live. Relative paths resolve from backend/.
     views_data_dir: str = Field(default="data/views", alias="VIEWS_DATA_DIR")
 

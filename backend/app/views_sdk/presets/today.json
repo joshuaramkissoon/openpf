@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "title": "What moved today",
+  "description": "Today's move by theme and holding, the biggest contributors, and the headlines behind them",
+  "icon": "activity",
+  "controls": {"account": true},
+  "data": {
+    "pf": {"source": "portfolio"},
+    "news": {"source": "news", "params": {"movers": 6, "days": 2, "limit": 2}}
+  },
+  "blocks": [
+    {
+      "type": "hero",
+      "label": "Today",
+      "from": "pf.positions",
+      "value": {"agg": "sum", "field": "day_change"},
+      "format": "signedMoney",
+      "delta": {"agg": "sum", "field": "day_change", "per": {"from": "pf.account", "field": "invested"}},
+      "deltaFormat": "signedPct",
+      "width": "two-thirds"
+    },
+    {
+      "type": "kpis",
+      "from": "pf.positions",
+      "width": "third",
+      "items": [
+        {"label": "Up today", "value": {"agg": "count", "transform": [{"filter": {"field": "day_change_pct", "op": ">", "value": 0}}]}, "format": "int"},
+        {"label": "Down today", "value": {"agg": "count", "transform": [{"filter": {"field": "day_change_pct", "op": "<", "value": 0}}]}, "format": "int"}
+      ]
+    },
+    {
+      "type": "treemap",
+      "title": "Where the move came from",
+      "subtitle": "Tile size is position value, colour is today's move. Click a theme to drill in, a holding to open it.",
+      "from": "pf.positions",
+      "transform": [{"enrich": ["theme"]}],
+      "label": "ticker",
+      "size": "value",
+      "color": "day_change_pct",
+      "group": "theme",
+      "format": "money",
+      "colorFormat": "signedPct"
+    },
+    {
+      "type": "bars",
+      "title": "Biggest contributors",
+      "subtitle": "Today's change in value, largest moves first",
+      "from": "pf.positions",
+      "transform": [{"compute": {"as": "abs_move", "op": "abs", "field": "day_change"}}, {"sort": {"by": "abs_move", "dir": "desc"}}, {"top": {"n": 10}}, {"sort": {"by": "day_change", "dir": "desc"}}],
+      "label": "ticker",
+      "value": "day_change",
+      "format": "signedMoney",
+      "secondary": "day_change_pct",
+      "secondaryFormat": "signedPct",
+      "width": "half"
+    },
+    {
+      "type": "table",
+      "title": "Why it moved",
+      "subtitle": "Recent headlines for today's biggest movers",
+      "from": "news.items",
+      "columns": [
+        {"field": "ticker", "label": "Holding", "format": "text"},
+        {"field": "title", "label": "Headline", "format": "text"},
+        {"field": "source", "label": "Source", "format": "text"}
+      ],
+      "limit": 12,
+      "empty": "No headlines for today's movers — moves this size are often market-wide.",
+      "width": "half"
+    }
+  ]
+}
