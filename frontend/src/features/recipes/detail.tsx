@@ -53,26 +53,12 @@ import { toastApiError } from '@/lib/api-error'
 import { navigate } from '@/lib/router'
 import { cn } from '@/lib/utils'
 import type { ReportSummary } from '@/types'
-import type { DiffLine, DraftResult, Recipe, RecipeDetail, RecipeRun, RecipeVersion } from '@/types/recipes'
+import type { DiffLine, DraftResult, RecipeDetail, RecipeRun, RecipeVersion } from '@/types/recipes'
 import { RecipeEditor } from './editor'
-import { ago, AUTHOR_LABEL, DiffView, nextRunLabel, RecipeIcon, StatusDot, utc } from './parts'
+import { ago, AUTHOR_LABEL, deliverySentence, DiffView, nextRunLabel, RecipeIcon, StatusDot, utc, whenSentence } from './parts'
 import { humanSteps, outputParts } from './steps'
 import { SuggestionList } from './suggestions'
 import './recipes.css'
-
-/** "Weekdays at 07:00" → "Every weekday at 07:00". */
-export function whenSentence(r: Pick<Recipe, 'trigger' | 'trigger_summary'>): string {
-  if (r.trigger.kind === 'manual') return 'Only when you run it'
-  const s = r.trigger_summary || ''
-  const m = s.match(/^(Weekdays|Daily|Every day|Mondays|Tuesdays|Wednesdays|Thursdays|Fridays|Saturdays|Sundays)\b(.*)$/)
-  if (!m) return s
-  const day = m[1] === 'Weekdays' ? 'weekday' : m[1] === 'Daily' || m[1] === 'Every day' ? 'day' : m[1].slice(0, -1)
-  return `Every ${day}${m[2]}`
-}
-
-export function deliverySentence(r: Pick<Recipe, 'delivery'>): string {
-  return r.delivery.telegram ? 'results on Home and Telegram' : 'results on Home'
-}
 
 /** `/recipes/:slug` */
 export function RecipeDetailPage({ slug }: { slug: string }) {

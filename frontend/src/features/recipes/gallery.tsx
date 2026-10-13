@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { ArrowUp, Bot, ChevronRight, Cog, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowUp, ChevronRight, Cog, Plus, ShieldCheck, Sparkles } from 'lucide-react'
 
 import { listRecipes, setRecipeEnabled } from '@/api/recipes'
 import { ScheduledJobsWorkspace } from '@/components/ScheduledJobsWorkspace'
@@ -12,7 +12,7 @@ import { toastApiError } from '@/lib/api-error'
 import { navigate } from '@/lib/router'
 import { cn } from '@/lib/utils'
 import type { Recipe, RecipeSuggestion } from '@/types/recipes'
-import { Chip, LastRunLine, nextRunLabel, RecipeIcon } from './parts'
+import { Chip, LastRunLine, nextRunLabel, RecipeIcon, whenSentence } from './parts'
 import { SuggestionList } from './suggestions'
 
 export const EXAMPLES = [
@@ -94,7 +94,7 @@ export function AskComposer({ autoFocus = false, initial = '', onSubmit, busy = 
   )
 }
 
-/** `/recipes` — what Archie does on his own, and the gallery to add more. */
+/** `/recipes` — what Archie does for you, then what you could turn on. */
 export function RecipesGallery() {
   const { recipes, suggestions, reload, setRecipes } = useRecipes()
   const [systemOpen, setSystemOpen] = useState(false)
@@ -105,7 +105,7 @@ export function RecipesGallery() {
       const next = await setRecipeEnabled(r.slug, enabled)
       setRecipes((prev) => prev?.map((x) => (x.slug === r.slug ? next : x)) ?? prev)
       toast.success(enabled ? `${r.title} is on` : `${r.title} paused`, {
-        description: enabled ? (r.trigger.kind === 'manual' ? 'Runs when you press Run now.' : r.trigger_summary) : undefined,
+        description: enabled ? whenSentence(next) : undefined,
       })
     } catch (err) {
       toastApiError(err, 'Could not update the recipe')
@@ -113,113 +113,104 @@ export function RecipesGallery() {
     }
   }
 
-  const mine = (recipes ?? []).filter((r) => r.source !== 'builtin')
-  const builtins = (recipes ?? []).filter((r) => r.source === 'builtin')
-  const onCount = (recipes ?? []).filter((r) => r.enabled).length
+  const all = recipes ?? []
+  const on = all.filter((r) => r.enabled)
+  const paused = all.filter((r) => !r.enabled && r.source !== 'builtin')
+  const available = all.filter((r) => !r.enabled && r.source === 'builtin')
 
   return (
-    <div className="space-y-10">
-      <div className="space-y-5">
-        <PageHeader
-          eyebrow="Recipes"
-          title="What Archie does for you"
-          description={
-            <>
-              Routines Archie runs on his own — on a schedule, or when something happens. He can propose trades, never place them.
-              {recipes ? <span className="text-muted-foreground/80"> · {onCount} on</span> : null}
-            </>
-          }
-        />
-        <AskComposer onSubmit={(p) => navigate(`/recipes/new?prompt=${encodeURIComponent(p)}&go=1`)} />
-        <div className="flex flex-wrap gap-1.5">
-          {EXAMPLES.slice(0, 3).map((ex) => (
-            <button
-              key={ex}
-              type="button"
-              onClick={() => navigate(`/recipes/new?prompt=${encodeURIComponent(ex)}&go=1`)}
-              className="rounded-full border border-border bg-card/50 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-12 pb-12">
+      <PageHeader
+        eyebrow="Recipes"
+        title="What Archie does for you"
+        description="Routines he runs on his own, on a schedule or when something happens. He can propose trades, never place them."
+        actions={
+          <Button onClick={() => navigate('/recipes/new')} className="rounded-full">
+            <Plus /> New recipe
+          </Button>
+        }
+      />
 
       <SuggestionList suggestions={suggestions} onResolved={() => void reload()} />
 
-      <section className="space-y-3">
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold tracking-tight">
-              <Bot className="size-3.5 text-muted-foreground" /> Made by Archie
-            </h2>
-            <p className="text-xs text-muted-foreground">Recipes you asked for. Edit any of them with a sentence.</p>
-          </div>
-        </div>
+      <section className="space-y-3" aria-labelledby="running">
+        <SectionTitle id="running" title="Running for you" count={recipes ? on.length : undefined} />
         {!recipes ? (
-          <Skeleton className="h-[72px] rounded-xl" />
-        ) : mine.length ? (
-          <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-card">
-            {mine.map((r) => (
+          <Skeleton className="h-[148px] rounded-2xl" />
+        ) : on.length ? (
+          <div className="divide-y divide-border/60 overflow-hidden rounded-2xl border border-border bg-card">
+            {on.map((r) => (
               <RecipeRow key={r.slug} recipe={r} onToggle={(v) => toggle(r, v)} />
             ))}
           </div>
         ) : (
-          <div className="rounded-xl border border-dashed border-border px-5 py-6 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground">Nothing yet.</p>
-            <p className="mt-1">
-              Ask above, or tell Archie in chat — “every Friday, check my plays and tell me what moved”. He writes the recipe, you approve it,
-              and you can refine it any time (“shorter”, “skip crypto”).
-            </p>
+          <div className="rounded-2xl border border-dashed border-border px-5 py-6 text-sm text-muted-foreground">
+            Nothing is running yet. Turn on a routine below, or describe your own with <span className="text-foreground">New recipe</span>.
           </div>
         )}
       </section>
 
-      <section className="space-y-3">
-        <div>
-          <h2 className="text-sm font-semibold tracking-tight">Built-in</h2>
-          <p className="text-xs text-muted-foreground">Ready-made routines. Turn one on, then make it yours — every edit is versioned.</p>
-        </div>
-        {!recipes ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <Skeleton key={i} className="h-[168px] rounded-xl" />
+      {paused.length ? (
+        <section className="space-y-3" aria-labelledby="paused">
+          <SectionTitle id="paused" title="Paused" count={paused.length} />
+          <div className="divide-y divide-border/60 overflow-hidden rounded-2xl border border-border/70">
+            {paused.map((r) => (
+              <RecipeRow key={r.slug} recipe={r} onToggle={(v) => toggle(r, v)} />
             ))}
           </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {builtins.map((r) => (
-              <RecipeCard key={r.slug} recipe={r} onToggle={(v) => toggle(r, v)} />
-            ))}
-          </div>
-        )}
-      </section>
+        </section>
+      ) : null}
 
-      <section className="space-y-3">
-        <button type="button" onClick={() => setSystemOpen((v) => !v)} className="flex items-center gap-1.5 text-left" aria-expanded={systemOpen}>
-          <ChevronRight className={cn('size-4 text-muted-foreground transition-transform', systemOpen && 'rotate-90')} />
-          <span>
-            <span className="flex items-center gap-1.5 text-sm font-semibold tracking-tight">
-              <Cog className="size-3.5 text-muted-foreground" /> System jobs
-            </span>
-            <span className="block text-xs text-muted-foreground">Deterministic engines (watch cycle, leveraged monitors, alpha loop). Advanced.</span>
-          </span>
+      {!recipes || available.length ? (
+        <section className="space-y-3" aria-labelledby="available">
+          <SectionTitle id="available" title="Ready to turn on" hint="Ready-made routines. Turn one on, then make it yours with a sentence." />
+          {!recipes ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-[132px] rounded-2xl" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {available.map((r) => (
+                <RecipeCard key={r.slug} recipe={r} onToggle={(v) => toggle(r, v)} />
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <footer className="space-y-4 border-t border-border/60 pt-6">
+        <button type="button" onClick={() => setSystemOpen((v) => !v)} className="flex items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground" aria-expanded={systemOpen}>
+          <ChevronRight className={cn('size-3.5 transition-transform', systemOpen && 'rotate-90')} />
+          <Cog className="size-3.5" /> System jobs <span className="text-muted-foreground/70">· watch cycle, leveraged monitors, alpha loop</span>
         </button>
         {systemOpen ? <ScheduledJobsWorkspace onError={() => {}} jobsOnly excludeKinds={SYSTEM_KINDS} /> : null}
-      </section>
+        <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+          <ShieldCheck className="mt-px size-3.5 shrink-0" />
+          Recipes are instructions only: they can’t add tools, change your risk rails or place orders. Changes Archie suggests during unattended runs wait for your approval.
+        </p>
+      </footer>
+    </div>
+  )
+}
 
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <ShieldCheck className="size-3.5" />
-        Recipes are instructions only: they can’t add tools, change your risk rails or place orders. Changes Archie suggests during unattended runs wait for your approval.
-      </p>
+function SectionTitle({ id, title, count, hint }: { id: string; title: string; count?: number; hint?: string }) {
+  return (
+    <div>
+      <h2 id={id} className="flex items-baseline gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        {title}
+        {count != null ? <span className="font-mono tabular-nums text-muted-foreground/70">{count}</span> : null}
+      </h2>
+      {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
     </div>
   )
 }
 
 function RecipeRow({ recipe: r, onToggle }: { recipe: Recipe; onToggle: (v: boolean) => void }) {
   return (
-    <div className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40">
-      <button type="button" onClick={() => navigate(`/recipes/${r.slug}`)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+    <div className="group flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-accent/30 sm:px-5">
+      <button type="button" onClick={() => navigate(`/recipes/${r.slug}`)} className="flex min-w-0 flex-1 items-center gap-3.5 text-left">
         <RecipeIcon icon={r.icon} muted={!r.enabled} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
@@ -227,11 +218,11 @@ function RecipeRow({ recipe: r, onToggle }: { recipe: Recipe; onToggle: (v: bool
             {r.pending_suggestions ? <Chip className="border-primary/30 text-primary">suggestion</Chip> : null}
           </span>
           <span className="block truncate text-xs text-muted-foreground">
-            {r.trigger_summary}
-            {r.enabled && r.next_run_at ? ` · next ${nextRunLabel(r.next_run_at)}` : ''}
+            {whenSentence(r)}
+            {r.enabled && r.next_run_at ? <span className="text-muted-foreground/70"> · next {nextRunLabel(r.next_run_at)}</span> : null}
           </span>
-          <LastRunLine run={r.last_run} running={r.running} className="mt-0.5 hidden sm:flex" />
         </span>
+        <LastRunLine run={r.last_run} running={r.running} className="hidden w-64 shrink-0 md:flex" />
       </button>
       <Switch checked={r.enabled} onCheckedChange={onToggle} aria-label={r.enabled ? `Pause ${r.title}` : `Turn on ${r.title}`} />
     </div>
@@ -240,32 +231,18 @@ function RecipeRow({ recipe: r, onToggle }: { recipe: Recipe; onToggle: (v: bool
 
 function RecipeCard({ recipe: r, onToggle }: { recipe: Recipe; onToggle: (v: boolean) => void }) {
   return (
-    <div
-      className={cn(
-        'group relative flex min-h-[168px] min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 transition-colors',
-        r.enabled ? 'border-border' : 'border-border/70 bg-card/50',
-        'hover:border-foreground/15',
-      )}
-    >
+    <div className="group relative flex min-h-[132px] min-w-0 flex-col gap-3 rounded-2xl border border-border/70 bg-card/40 p-4 transition-colors hover:border-foreground/15 hover:bg-card">
       <div className="flex items-start justify-between gap-3">
-        <RecipeIcon icon={r.icon} muted={!r.enabled} />
+        <RecipeIcon icon={r.icon} muted />
         <span className="relative z-10 flex">
-          <Switch checked={r.enabled} onCheckedChange={onToggle} aria-label={r.enabled ? `Pause ${r.title}` : `Turn on ${r.title}`} />
+          <Switch checked={r.enabled} onCheckedChange={onToggle} aria-label={`Turn on ${r.title}`} />
         </span>
       </div>
       <button type="button" onClick={() => navigate(`/recipes/${r.slug}`)} className="flex min-w-0 flex-1 flex-col text-left after:absolute after:inset-0 after:content-['']">
-        <span className="flex items-center gap-1.5">
-          <span className="text-sm font-semibold">{r.title}</span>
-          {r.modified ? <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">· edited</span> : null}
-        </span>
-        <span className="mt-0.5 text-[11px] font-medium text-muted-foreground/90">{r.trigger_summary}</span>
-        <span className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{r.summary}</span>
+        <span className="text-sm font-semibold">{r.title}</span>
+        <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{r.summary}</span>
+        <span className="mt-auto pt-2 text-[11px] text-muted-foreground/80">{whenSentence(r)}</span>
       </button>
-      {r.enabled ? (
-        <LastRunLine run={r.last_run} running={r.running} />
-      ) : (
-        <p className="text-xs text-muted-foreground/70">Off</p>
-      )}
     </div>
   )
 }

@@ -324,10 +324,11 @@ function Composer({ initialPrompt, autoFocus }: { initialPrompt: string; autoFoc
 }
 
 // ── presets ────────────────────────────────────────────────────────────
-function PresetGallery({ refreshKey }: { refreshKey: number }) {
+function PresetGallery({ refreshKey, quiet }: { refreshKey: number; quiet: boolean }) {
   const { currency } = useDisplayPrefs()
   const [presets, setPresets] = useState<ViewPreset[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -361,6 +362,8 @@ function PresetGallery({ refreshKey }: { refreshKey: number }) {
   if (!presets.length) return null
   const suggested = presets.filter((p) => p.suggested)
   const rest = presets.filter((p) => !p.suggested)
+  // Once you have views of your own, the full catalogue waits behind one link.
+  const restOpen = !quiet || showAll || !suggested.length
 
   const card = (p: ViewPreset, featured: boolean) => (
     <button
@@ -392,16 +395,24 @@ function PresetGallery({ refreshKey }: { refreshKey: number }) {
       {suggested.length ? (
         <div className="space-y-3">
           <div>
-            <h2 className="text-sm font-semibold">Suggested for your portfolio</h2>
-            <p className="text-xs text-muted-foreground">Ready instantly. Customise any of them with a sentence afterwards.</p>
+            <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Suggested for your portfolio</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Ready instantly. Change any of them with a sentence afterwards.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">{suggested.map((p) => card(p, true))}</div>
         </div>
       ) : null}
-      <div className="space-y-3">
-        <h2 className="text-sm font-semibold">{suggested.length ? 'More presets' : 'Presets'}</h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{rest.map((p) => card(p, false))}</div>
-      </div>
+      {rest.length ? (
+        restOpen ? (
+          <div className="space-y-3">
+            <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{suggested.length ? 'More presets' : 'Presets'}</h2>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{rest.map((p) => card(p, false))}</div>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setShowAll(true)} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ChevronRight className="size-3.5" /> Browse all {presets.length} presets
+          </button>
+        )
+      ) : null}
     </section>
   )
 }
@@ -431,7 +442,7 @@ function ViewsHome({ initialPrompt, focus }: { initialPrompt: string; focus: boo
         </div>
       ) : ready.length || pending.length ? (
         <section className="space-y-3">
-          <h2 className="text-sm font-semibold">Your views</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Your views</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {pending.map((v) => (
               <PendingCard key={v.id} view={v} />
@@ -458,7 +469,7 @@ function ViewsHome({ initialPrompt, focus }: { initialPrompt: string; focus: boo
         </section>
       ) : null}
 
-      <PresetGallery refreshKey={views.length} />
+      <PresetGallery refreshKey={views.length} quiet={ready.length > 0} />
     </div>
   )
 }
@@ -489,7 +500,14 @@ function PendingCard({ view }: { view: ViewMeta }) {
   return (
     <div className={cn('flex min-h-[112px] flex-col gap-2 rounded-xl border p-4', failed ? 'border-negative/25 bg-negative/[0.03]' : 'border-dashed border-border')}>
       <div className="flex items-center gap-2 text-sm font-semibold">
-        {failed ? <TriangleAlert className="size-4 text-negative" /> : <LoaderCircle className="size-4 animate-spin text-primary" />}
+        {failed ? (
+          <TriangleAlert className="size-4 text-negative" />
+        ) : (
+          <span className="relative flex size-2 shrink-0">
+            <span className="absolute inset-0 animate-ping rounded-full bg-primary/40 [animation-duration:2s]" />
+            <span className="relative size-2 rounded-full bg-primary" />
+          </span>
+        )}
         <button type="button" onClick={() => navigate(`/views/${view.id}`)} className="truncate hover:underline">
           {failed ? 'Couldn’t build' : 'Building…'} {view.title !== 'New view' ? `“${view.title}”` : ''}
         </button>
