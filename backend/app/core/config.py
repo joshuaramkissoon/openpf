@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_title_model: str = Field(default="gemini-3.1-flash-lite", alias="GEMINI_TITLE_MODEL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    # Data-provider keys may live in backend/.env; intel_service._key reads them here.
+    together_api_key: str = Field(default="", alias="TOGETHER_API_KEY")
+    finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
     claude_model: str = Field(default="claude-sonnet-4-6", alias="CLAUDE_MODEL")
     # Reasoning-heavy runtimes default to Opus 4.8; routine/structured work

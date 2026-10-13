@@ -92,7 +92,12 @@ def together_key() -> str:
 
 
 def anthropic_key() -> str:
-    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    v = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if v:
+        return v
+    from app.core.config import get_settings
+
+    return (get_settings().anthropic_api_key or "").strip()
 
 
 def anthropic_sdk_installed() -> bool:
