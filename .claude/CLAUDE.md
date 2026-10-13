@@ -27,7 +27,8 @@
 - **MCP tool servers**: `marketdata` (price/history/technicals/risk/correlation/compare),
   `fundamentals` (fundamentals/valuation/statements/earnings), `forecast` (Kronos p10/p50/p90),
   `scheduler` (cron tasks), `trading212` (read-only account data), `proposals` (`propose_trade`),
-  `recipes` (Archie-written routines: skills + triggers, versioned; see `recipes_service.py`).
+  `recipes` (Archie-written routines: skills + triggers, versioned; see `recipes_service.py`),
+  `crypto` (read-only, keyless view of the connected crypto exchange + the Starter crypto play draft).
   All servers are declared once in `backend/app/services/mcp_registry.py`.
 - **Subagents**: researcher (Sonnet — web + marketdata + fundamentals), quant (Opus — Bash +
   `app.quant` + marketdata + forecast). There is no execution subagent.
@@ -35,6 +36,10 @@
   `execution_service.execute_intent` is the single path to a live order and re-checks every rail.
   The leveraged engine places orders itself only under its own rails and the user's
   `auto_execute_enabled` flag.
+- **Crypto**: exchange-agnostic via CCXT (`crypto_client.py`, `crypto_service.py`); account_kind
+  `crypto` in snapshots/book/intents. Keys must be trade-only — verified on connect, refused if they
+  can withdraw — and never reach an agent process. `broker_router.py` is the one routing point in
+  `execute_intent`; the crypto cap is a rail in `rail_violations`.
 - **Leveraged engine**: regime-aware 3x ISA ETP scan/monitor/execute under hard daily rails.
   T212 has **no short selling** — downside is via **INVERSE ETPs (ISA-only)**.
 - **Autonomous loop**: scheduled morning cycle, midday/EOD monitors, weekly review, daily alpha goal.
@@ -47,4 +52,4 @@
 ## User Context
 - The owner's name comes from `OPENPF_USER_NAME`; personal facts live in Archie's
   gitignored memory (`.claude/runtime/memory/user-profile.md`), never in tracked files.
-- Accounts: Trading 212 Invest + Stocks ISA
+- Accounts: Trading 212 Invest + Stocks ISA, optionally a crypto exchange (Kraken / Coinbase / Binance)
