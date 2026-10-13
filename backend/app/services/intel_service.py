@@ -55,6 +55,15 @@ def _key(env_name: str, cfg_key: str) -> str:
     v = os.environ.get(env_name, "").strip()
     if v:
         return v
+    # backend/.env is loaded into Settings (not os.environ).
+    try:
+        from app.core.config import get_settings
+
+        v = str(getattr(get_settings(), cfg_key, "") or "").strip()
+        if v:
+            return v
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from app.core.database import SessionLocal
         from app.services.config_store import ConfigStore
