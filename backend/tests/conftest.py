@@ -15,3 +15,5 @@ os.environ["OPENPF_RUNTIME_DIR"] = os.path.join(_TMP, "runtime")
 os.environ.setdefault("RECIPES_DATA_DIR", os.path.join(_TMP, "recipes"))
 os.environ.setdefault("VIEWS_DATA_DIR", os.path.join(_TMP, "views"))
 os.environ["INPROC_SCHEDULER_ENABLED"] = "false"
+# No background permission sweeper / track-record backfill threads in tests.
+os.environ["OPENPF_AUTONOMY_BACKGROUND"] = "0"

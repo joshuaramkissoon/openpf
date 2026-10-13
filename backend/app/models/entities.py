@@ -161,6 +161,9 @@ class TradeIntent(Base):
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Who approved it: "human", or "permission:<id>" for a standing permission
+    # the user granted (permissions_service). NULL on rows from before this column.
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     execution_price: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -505,3 +508,13 @@ class PlayDraftJob(Base):
     # unclear_idea | no_instruments | interrupted | model | failed
     error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     retry_of: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+# Track record + standing permissions live in their own module; importing it
+# here registers their tables wherever entities is imported.
+from app.models.autonomy import (  # noqa: E402,F401
+    PermissionEvent,
+    PermissionSuggestion,
+    ProposalOutcome,
+    StandingPermission,
+)

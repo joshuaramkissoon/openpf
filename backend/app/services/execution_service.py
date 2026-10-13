@@ -208,6 +208,7 @@ def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: 
 
     intent.status = "approved"
     intent.approved_at = datetime.utcnow()
+    intent.approved_by = actor[:64]
     if note:
         metadata = intent.meta or {}
         metadata["approval_note"] = note

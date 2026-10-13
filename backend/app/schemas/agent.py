@@ -54,6 +54,11 @@ class TradeIntentItem(BaseModel):
     owner_label: str | None = None
     owner_inferred: bool = False
     approved_at: datetime | None = None
+    # "human", or "permission:<id>" when a standing permission approved it.
+    approved_by: str | None = None
+    permission_label: str | None = None
+    # deploy_cash | rebalance | play_tranche | news_reaction | trim_derisk | other
+    category: str | None = None
     executed_at: datetime | None = None
     broker_order_id: str | None = None
     execution_price: float | None = None

@@ -321,3 +321,78 @@ def test_agent_policy_patch_cannot_enable_auto_execute_or_loosen_rails():
 def test_telegram_empty_allowlist_denies_everyone():
     assert _is_authorized(12345, {"allowed_user_ids": []}) is False
     assert _is_authorized(12345, {"allowed_user_ids": [12345]}) is True
+
+
+# ── standing permissions: only the user grants them ──────────────────────
+
+
+_PERMISSION_WRITE = re.compile(r"permission|kill_switch|autonomy", re.IGNORECASE)
+_PERMISSION_WRITERS = {
+    "create_permission", "update_permission", "confirm_live", "revoke_permission", "set_kill_switch",
+    "StandingPermission", "try_auto_approve", "process_pending",
+}
+
+
+def test_no_mcp_tool_can_create_or_loosen_permissions():
+    # The only permission-related tool is a suggestion, which grants nothing.
+    for spec in mcp_registry.MCP_SERVERS:
+        tools = [t for t in spec.tools if _PERMISSION_WRITE.search(t)]
+        assert set(tools) <= {"suggest_permission"}, f"{spec.name} exposes {tools}"
+
+
+def test_mcp_servers_never_touch_permission_writers():
+    files = sorted(mcp_registry.MCP_SERVER_DIR.glob("*.py"))
+    assert files
+    for path in files:
+        tree = ast.parse(path.read_text())
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names}
+        bad = names & _PERMISSION_WRITERS
+        assert not bad, f"{path.name} references {bad}"
+
+
+def test_suggesting_a_permission_grants_nothing(db):
+    from app.models.entities import StandingPermission
+    from app.services.permissions_service import record_suggestion
+
+    out = record_suggestion(db, kind="play_tranche", per_trade_cap_gbp=10_000, note="trust me")
+    assert out["ok"] is False  # no record to support it
+    assert db.query(StandingPermission).count() == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl -X POST http://localhost:8000/api/permissions -d '{}'",
+        "curl -X PUT http://127.0.0.1:8010/api/permissions/kill-switch",
+    ],
+)
+def test_bash_hook_blocks_permission_routes(command):
+    assert _denied(_run(claude_sdk_config._bash_guard({"tool_input": {"command": command}}, None, None)))
+
+
+def test_webfetch_hook_blocks_permission_routes():
+    url = "http://localhost:8010/api/permissions"
+    assert _denied(_run(claude_sdk_config._web_fetch_guard({"tool_input": {"url": url}}, None, None)))
+
+
+def test_no_autopilot_path_remains():
+    from app.schemas.agent import AgentRunRequest
+    from app.services.agent_service import run_agent
+    import inspect
+
+    assert "execute_auto" not in AgentRunRequest.model_fields
+    assert "execute_auto" not in inspect.signature(run_agent).parameters
+    src = Path(inspect.getsourcefile(run_agent)).read_text()
+    assert "approve_intent(" not in src and "execute_intent(" not in src
+
+
+def test_old_autopilot_config_loads_as_off(db):
+    from app.models.entities import AppConfig
+
+    db.add(AppConfig(key="broker_config", value={"broker_mode": "paper", "autopilot_enabled": True}))
+    db.commit()
+    broker = ConfigStore(db).get_broker()
+    assert "autopilot_enabled" not in broker
+    assert broker["broker_mode"] == "paper"

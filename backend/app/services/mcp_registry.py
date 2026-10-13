@@ -153,7 +153,7 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
     McpServerSpec(
         name="proposals",
         script="proposals.py",
-        tools=("propose_trade", "list_proposals"),
+        tools=("propose_trade", "list_proposals", "get_track_record", "suggest_permission"),
         contexts=frozenset({CHAT, SCHEDULED}),
     ),
     # Theme bets. Staging a tranche only creates 'proposed' intents.
