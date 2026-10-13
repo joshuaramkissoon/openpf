@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import { approveIntent, executeIntent, getEvents, getIntents, rejectIntent } from '@/api/client'
 import { toastApiError } from '@/lib/api-error'
-import type { ExecutionEvent, TradeIntent } from '@/types'
+import type { AppConfig, ExecutionEvent, PositionItem, TradeIntent } from '@/types'
+import type { BrokerMode } from './use-app-config'
 
 export type ExecAccount = 'invest' | 'stocks_isa'
 
@@ -134,3 +135,22 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
 }
 
 export type ProposalsState = ReturnType<typeof useProposals>
+
+/**
+ * The shell's shared proposals state plus what a proposal card needs to run
+ * the same rail check as Decisions. Provided to surfaces outside Home/Activity
+ * (Archie's inline proposal cards) so approving anywhere updates everywhere.
+ */
+export type DecisionsContextValue = {
+  proposals: ProposalsState
+  config: AppConfig | null
+  brokerMode: BrokerMode | null
+  positions: PositionItem[]
+  total: number
+}
+
+export const DecisionsContext = createContext<DecisionsContextValue | null>(null)
+
+export function useDecisions(): DecisionsContextValue | null {
+  return useContext(DecisionsContext)
+}

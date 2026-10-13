@@ -157,6 +157,12 @@ export async function getIntents() {
   return data
 }
 
+/** Specific intents by id, any age (chat transcripts reference proposals by id). */
+export async function getIntentsByIds(ids: string[]) {
+  const { data } = await api.get<TradeIntent[]>('/agent/intents', { params: { ids: ids.join(',') } })
+  return data
+}
+
 export async function approveIntent(id: string, note?: string) {
   const { data } = await api.post(`/agent/intents/${id}/approve`, { note })
   return data

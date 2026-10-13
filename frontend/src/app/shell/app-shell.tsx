@@ -43,7 +43,7 @@ import { cn } from "@/lib/utils"
 import { brokerModeOf, useAppConfig } from "../hooks/use-app-config"
 import { useChatSessions } from "../hooks/use-chat-sessions"
 import { usePortfolio } from "../hooks/use-portfolio"
-import { useProposals } from "../hooks/use-proposals"
+import { DecisionsContext, useProposals } from "../hooks/use-proposals"
 import { BrokerBadge } from "./broker-badge"
 import { AppSidebar, SidebarBody } from "./sidebar"
 
@@ -282,6 +282,11 @@ function ShellLayout(props: LayoutProps) {
     onCyclePrivacyMode: () => setPrivacyMode((m) => nextPrivacyMode(m)),
   }
   const isArchie = section === "archie"
+  // Inline proposal cards (Archie, report reader) share the shell's proposals state with Home/Activity.
+  const decisions = useMemo(
+    () => ({ proposals, config, brokerMode, positions: portfolio.positions, total: portfolio.snapshot?.account.total ?? 0 }),
+    [proposals, config, brokerMode, portfolio.positions, portfolio.snapshot?.account.total],
+  )
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
@@ -306,6 +311,7 @@ function ShellLayout(props: LayoutProps) {
           </Button>
         </header>
 
+        <DecisionsContext.Provider value={decisions}>
         <main className="relative min-h-0 flex-1">
           {/* Archie stays MOUNTED across navigation (just hidden) so an
               in-flight stream keeps rendering and isn't lost. */}
@@ -338,6 +344,7 @@ function ShellLayout(props: LayoutProps) {
             </div>
           ) : null}
         </main>
+        </DecisionsContext.Provider>
       </div>
     </div>
   )
