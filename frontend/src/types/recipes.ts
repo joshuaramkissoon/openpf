@@ -13,6 +13,10 @@ export type RecipeRun = {
   version: number | null
   trigger_context: string
   telegram: boolean
+  /** The run's report summary (headline, stats…), when it has one. */
+  card?: import('./index').ReportSummary | null
+  /** Started with Run now. */
+  manual?: boolean
 }
 
 export type Recipe = {

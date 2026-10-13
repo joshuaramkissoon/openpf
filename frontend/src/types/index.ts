@@ -514,6 +514,49 @@ export interface ReportSummary {
   action: string | null
   signal: 'none' | 'low' | 'high' | null
   derived?: boolean
+  /** Up to 4 headline numbers, drawn as stat tiles on the result card. */
+  stats?: ReportStat[]
+  /** One small viz spec (components/viz) for a picture that helps. */
+  viz?: unknown
+  /** Per-name cards (earnings prep, plays, watchlist). */
+  holdings?: ReportHolding[]
+  /** Short names of data that wasn't available ("timing", "surprise history"). */
+  gaps?: string[]
+}
+
+export type ReportStatKind = 'money' | 'pct' | 'signedPct' | 'date' | 'count' | 'text'
+
+export interface ReportStat {
+  label: string
+  /** Number for money/pct/signedPct/count (pct as a fraction), YYYY-MM-DD for date, text otherwise. */
+  value: number | string
+  kind: ReportStatKind
+  tone?: 'positive' | 'negative' | 'neutral'
+  /** A short second line (markdown-lite: tickers chip, £ figures blur in privacy mode). */
+  sub?: string
+  tickers?: string[]
+  spark?: number[]
+  bar?: { value: number; max: number }
+  timeline?: { date: string; label: string }[]
+}
+
+export interface ReportHolding {
+  ticker: string
+  name?: string
+  date?: string
+  timing?: string
+  verdict?: 'hold' | 'trim' | 'opportunity'
+  value?: number
+  weight?: number
+  gain_pct?: number
+  forward_pe?: number
+  usual_move?: number
+  watch?: string[]
+  note?: string
+  /** Parsed from a markdown section (older reports): the raw "when" text. */
+  when?: string
+  /** Parsed from a markdown section: bullets that didn't map to a field. */
+  extra?: string[]
 }
 
 export interface ArtifactDetail {

@@ -6,27 +6,19 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import type { ReportSummary } from '@/types'
 import { Blocks, Callout, CLAMP_WEIGHT, Clamp, calloutToneFor } from './blocks'
+import { cardStats, gapsFromNotes, restates, splitHoldingSections, statsFromKeyNumbers } from './card-model'
 import { Inline, RichProvider } from './inline'
-import { blockWeight, buildReport, parseMarkdown, plainText, type KeyNumber, type ReportDoc, type Section } from './parse'
+import { blockWeight, buildReport, parseMarkdown, plainText, type Block, type KeyNumber, type ReportDoc, type Section } from './parse'
 import { ProposalGroupContext, proposalIdsIn } from './proposal'
+import { GapsLine, HoldingCards, ResultCard, StatGrid } from './result-card'
 import './rich.css'
 
 /* ── Pieces ────────────────────────────────────────────────────────────── */
 
+/** Key numbers as stat tiles: short values (long ones split into value + sublabel), no empty cells. */
 export function KeyNumbers({ items }: { items: KeyNumber[] }) {
   if (!items.length) return null
-  return (
-    <dl className={cn('rc-keynums', items.length >= 4 ? 'sm:grid-cols-4' : items.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
-      {items.slice(0, 4).map((k, i) => (
-        <div key={i} className="rc-keynum">
-          <dt>{k.label}</dt>
-          <dd>
-            <Inline text={k.value} />
-          </dd>
-        </div>
-      ))}
-    </dl>
-  )
+  return <StatGrid stats={statsFromKeyNumbers(items)} />
 }
 
 function ReportSection({ section }: { section: Section }) {
@@ -59,60 +51,97 @@ function ReportSection({ section }: { section: Section }) {
   )
 }
 
-/** TL;DR + contents + sections. Use inside any scroll container. */
+/** Machine-readable ```json blocks are data for code — never part of the read. */
+function readable(blocks: Block[]): Block[] {
+  return blocks.filter((b) => !(b.kind === 'code' && /^json$/i.test(b.lang) && /^\s*[[{]/.test(b.body)))
+}
+
+/** Callout bullets that only restate the headline go; an emptied callout goes too. */
+function withoutRepeats(section: Section, headline: string | null): Section | null {
+  if (!headline || !calloutToneFor(section.heading.text)) return section
+  const blocks: Block[] = []
+  for (const b of section.blocks) {
+    if (b.kind === 'list') {
+      const items = b.items.filter((it) => !restates(it.text, headline))
+      if (items.length) blocks.push({ ...b, items })
+    } else if (b.kind === 'paragraph') {
+      if (!restates(b.text, headline)) blocks.push(b)
+    } else blocks.push(b)
+  }
+  return blocks.length ? { ...section, blocks } : null
+}
+
+type Piece = { kind: 'section'; section: Section } | { kind: 'holdings' }
+
+/**
+ * The report under its card: per-name sections become holding cards, a Notes
+ * section about missing data becomes one muted line, callouts drop bullets
+ * that repeat the headline, and machine JSON never renders.
+ */
+function tidy(doc: ReportDoc, summary: ReportSummary | null | undefined) {
+  const headline = summary && !summary.derived ? summary.headline : null
+  let gaps: string[] | null = summary?.gaps?.length ? summary.gaps : null
+  const sections: Section[] = []
+  for (const s of doc.sections) {
+    const fromNotes = gapsFromNotes(s)
+    if (fromNotes) {
+      gaps = gaps ?? fromNotes
+      continue
+    }
+    const clean = withoutRepeats({ ...s, blocks: readable(s.blocks) }, headline)
+    if (clean && clean.blocks.length) sections.push(clean)
+  }
+  const { holdings, rest, at } = splitHoldingSections(sections, summary)
+  const pieces: Piece[] = rest.map((section) => ({ kind: 'section', section }))
+  if (holdings.length) pieces.splice(Math.max(0, Math.min(at, pieces.length)), 0, { kind: 'holdings' })
+  return { pieces, holdings, gaps, preamble: readable(doc.preamble), toc: rest }
+}
+
+/** The card, contents and sections. Use inside any scroll container. */
 export function ReportBody({
   doc,
   markdown,
   summary,
-  showKeyNumbers = false,
+  title = 'Report',
 }: {
   doc: ReportDoc
   markdown: string
-  /** The report's summary block: when present it *is* the TL;DR card. */
+  /** The report's summary block: when present it *is* the lead card. */
   summary?: ReportSummary | null
-  showKeyNumbers?: boolean
+  /** What produced the report (for the card's action prompt). */
+  title?: string
 }) {
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   const group = useMemo(() => proposalIdsIn(markdown), [markdown])
   const fromSummary = Boolean(summary && !summary.derived && summary.headline)
+  const { pieces, holdings, gaps, preamble, toc } = useMemo(() => tidy(doc, summary), [doc, summary])
+  const stats = cardStats(fromSummary ? summary : null, doc.keyNumbers)
   return (
     <RichProvider>
       <ProposalGroupContext.Provider value={group}>
         <div className="rc rc-report">
-          {showKeyNumbers ? <KeyNumbers items={doc.keyNumbers} /> : null}
           {fromSummary && summary ? (
-            <div className={cn('rc-tldr', summary.signal === 'none' && 'is-quiet')}>
-              <p className="rc-tldr-label">TL;DR</p>
-              <p className="rc-tldr-headline">
-                <Inline text={summary.headline} />
-              </p>
-              {summary.points.length ? (
-                <ul className="rc-ul">
-                  {summary.points.map((p, i) => (
-                    <li key={i}>
-                      <Inline text={p} />
-                    </li>
-                  ))}
-                </ul>
+            <ResultCard summary={{ ...summary, gaps: undefined }} stats={stats} title={title} variant="reader" className="mb-6" />
+          ) : (
+            <>
+              {stats.length ? (
+                <div className="mb-5">
+                  <StatGrid stats={stats} />
+                </div>
               ) : null}
-              {summary.action ? (
-                <p className="rc-tldr-action">
-                  <span className="rc-tldr-action-label">Do</span>
-                  <Inline text={summary.action} />
-                </p>
+              {doc.tldr.length ? (
+                <div className="rc-tldr">
+                  <p className="rc-tldr-label">TL;DR</p>
+                  <Blocks blocks={doc.tldr} />
+                </div>
               ) : null}
-            </div>
-          ) : doc.tldr.length ? (
-            <div className="rc-tldr">
-              <p className="rc-tldr-label">TL;DR</p>
-              <Blocks blocks={doc.tldr} />
-            </div>
-          ) : null}
-          {doc.sections.length >= 3 ? (
+            </>
+          )}
+          {toc.length >= 3 ? (
             <nav className="rc-toc" aria-label="Contents">
               <p className="rc-toc-label">Contents</p>
               <ol>
-                {doc.sections.map((s, i) => (
+                {toc.map((s, i) => (
                   <li key={s.heading.id}>
                     <button type="button" onClick={() => scrollTo(s.heading.id)}>
                       <span className="rc-toc-n">{i + 1}</span>
@@ -123,10 +152,15 @@ export function ReportBody({
               </ol>
             </nav>
           ) : null}
-          {doc.preamble.length ? <Blocks blocks={doc.preamble} /> : null}
-          {doc.sections.map((s) => (
-            <ReportSection key={s.heading.id} section={s} />
-          ))}
+          {preamble.length ? <Blocks blocks={preamble} /> : null}
+          {pieces.map((p, i) =>
+            p.kind === 'holdings' ? <HoldingCards key={`holdings-${i}`} holdings={holdings} /> : <ReportSection key={p.section.heading.id} section={p.section} />,
+          )}
+          {gaps ? (
+            <div className="mt-6 border-t border-border/60 pt-3">
+              <GapsLine gaps={gaps} />
+            </div>
+          ) : null}
         </div>
       </ProposalGroupContext.Provider>
     </RichProvider>
@@ -192,15 +226,10 @@ export function ReportReader({
             {titleAdornment}
             <span className="min-w-0">{shownTitle}</span>
           </SheetTitle>
-          {doc && doc.keyNumbers.length ? (
-            <RichProvider>
-              <KeyNumbers items={doc.keyNumbers} />
-            </RichProvider>
-          ) : null}
         </SheetHeader>
 
         <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-7">
-          <div className="mx-auto max-w-[68ch]">
+          <div className="mx-auto max-w-[72ch]">
             {loading ? (
               <div className="space-y-3">
                 <Skeleton className="h-20 w-full rounded-xl" />
@@ -211,7 +240,7 @@ export function ReportReader({
             ) : error ? (
               <p className="text-sm text-negative">{error}</p>
             ) : doc && markdown ? (
-              <ReportBody doc={doc} markdown={markdown} summary={summary} />
+              <ReportBody doc={doc} markdown={markdown} summary={summary} title={title || kind || 'Report'} />
             ) : (
               <div className="text-sm text-muted-foreground">{empty ?? 'Nothing to show.'}</div>
             )}
