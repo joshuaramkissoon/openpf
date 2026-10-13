@@ -96,11 +96,11 @@ function CapabilityPills({ c }: { c: Connection }) {
     <span className="inline-flex items-center gap-1">
       <span className="rounded-full border border-border px-2 py-px text-[10px] font-medium text-muted-foreground">Reads</span>
       {trades ? (
-        <span className="rounded-full border border-positive/30 bg-positive/5 px-2 py-px text-[10px] font-medium text-positive">
+        <span className="whitespace-nowrap rounded-full border border-positive/30 bg-positive/5 px-2 py-px text-[10px] font-medium text-positive">
           Trades on approval
         </span>
       ) : (
-        <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-px text-[10px] font-medium text-muted-foreground">
+        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-border px-2 py-px text-[10px] font-medium text-muted-foreground">
           <Eye className="size-2.5" />
           Read-only
         </span>

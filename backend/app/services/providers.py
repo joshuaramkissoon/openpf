@@ -89,16 +89,17 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "id": "snaptrade", "type": "aggregator", "label": "SnapTrade", "product": "Robinhood, Schwab, Fidelity, Vanguard and more",
         "modes": ["read"],
         "availability": "Brokers in the US, Canada and some of Europe (see SnapTrade's broker list). You use your own "
-                        "SnapTrade developer keys; the free tier covers a handful of personal connections.",
+                        "free SnapTrade Personal key (up to 20 of your own brokerage connections).",
         "summary": "One connection for brokers without a public API — Robinhood, Schwab, Fidelity, Vanguard, "
                    "Webull, E*TRADE and others. Read-only: you log in to your broker on SnapTrade's page, not in OpenPF.",
         "trade_note": "Connected read-only. Place trades in your broker's app.",
         "key_url": "https://dashboard.snaptrade.com/signup",
         "read_steps": [
-            "Sign up at dashboard.snaptrade.com (free) and open API Keys.",
-            "Copy your Client ID and Consumer Key and paste them below.",
-            "OpenPF registers one SnapTrade user for you and opens SnapTrade's connection page.",
-            "Pick your broker there and log in. OpenPF asks for a read-only connection, so it can't place trades.",
+            "Sign up at dashboard.snaptrade.com with a Personal account (free) and verify your email.",
+            "Turn on two-factor authentication, then API Keys → create your Personal API key.",
+            "Copy the Client ID and Consumer Key and paste them below.",
+            "OpenPF opens SnapTrade's connection page. Pick your broker and log in there — OpenPF never sees "
+            "that password, and it asks for a read-only connection, so nothing can be traded.",
             "Come back and press Sync. Each broker account appears as its own account in OpenPF.",
         ],
         "fields": [
@@ -131,12 +132,17 @@ for _ex in EXCHANGES.values():
 # Providers researched but not built (shown in the picker as "not available").
 UNAVAILABLE: list[dict[str, Any]] = [
     {"id": "schwab", "type": "broker", "label": "Charles Schwab",
-     "why": "Schwab's Trader API needs an approved developer app and a weekly re-login; connect Schwab through "
-            "SnapTrade instead."},
+     "why": "Schwab's own API needs a registered developer app and a manual re-login every 7 days. Connect Schwab "
+            "through SnapTrade instead."},
     {"id": "robinhood", "type": "broker", "label": "Robinhood",
-     "why": "Robinhood has no official API for stocks. Connect it read-only through SnapTrade."},
+     "why": "No official API for stocks. Connect it read-only through SnapTrade."},
+    {"id": "tastytrade", "type": "broker", "label": "tastytrade",
+     "why": "Has a personal OAuth API, but it isn't built in yet. SnapTrade covers it read-only today."},
+    {"id": "robinhood_crypto", "type": "crypto", "label": "Robinhood Crypto",
+     "why": "US-only API with read-only keys; not built in yet (planned)."},
     {"id": "plaid", "type": "aggregator", "label": "Plaid Investments",
-     "why": "Plaid's production access is for businesses that pass its review — not something a self-hoster can get."},
+     "why": "A free Trial plan exists for US/Canada developers (10 items), but it needs Plaid Link and webhooks. "
+            "SnapTrade is simpler for one person's own accounts."},
 ]
 
 

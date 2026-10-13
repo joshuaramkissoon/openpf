@@ -432,3 +432,13 @@ def test_snaptrade_signature_is_hmac_of_sorted_compact_json():
     expected = base64.b64encode(hmac.new(b"key", b'{"content":null,"path":"/api/v1/accounts","query":"clientId=c&timestamp=1"}',
                                          hashlib.sha256).digest()).decode()
     assert sig == expected
+
+
+def test_snaptrade_v2_positions_parse_and_skip_derivatives_and_cash_equivalents():
+    p = provider_clients.SnapTradeClient._position
+    stock = p({"instrument": {"kind": "stock", "symbol": "SHOP.TO", "raw_symbol": "SHOP", "description": "Shopify",
+                              "currency": "CAD", "exchange": "XTSE"}, "units": "3", "price": "150.5", "cost_basis": "90",
+               "currency": "CAD"})
+    assert (stock.symbol, stock.quantity, stock.price, stock.currency, stock.yfinance) == ("SHOP", 3.0, 150.5, "CAD", "SHOP.TO")
+    assert p({"instrument": {"kind": "option", "symbol": "AAPL 250117C00150000"}, "units": "1"}) is None
+    assert p({"instrument": {"kind": "mutualfund", "symbol": "SPAXX"}, "units": "100", "cash_equivalent": True}) is None

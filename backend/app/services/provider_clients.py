@@ -118,7 +118,7 @@ IBKR_HOSTS = {"ndcdyn.interactivebrokers.com", "gdcdyn.interactivebrokers.com"}
 IBKR_SEND_URL = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest"
 IBKR_GET_URL = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement"
 # Flex error codes that mean "the token/query is wrong — reconnect", vs "wait".
-IBKR_AUTH_CODES = {"1012", "1013", "1014", "1015", "1016", "1020"}
+IBKR_AUTH_CODES = {"1011", "1012", "1013", "1014", "1015", "1016", "1020"}
 IBKR_WAIT_CODES = {"1001", "1004", "1005", "1006", "1007", "1008", "1009", "1018", "1019", "1021"}
 _IBKR_CLASS = {"STK": "equity", "ETF": "etf", "FUND": "fund", "BOND": "bond", "OPT": "option", "CRYPTO": "crypto",
                "CASH": "other", "FUT": "other", "WAR": "other"}
@@ -295,7 +295,19 @@ def snaptrade_signature(consumer_key: str, path: str, query: str, content: Any) 
     return base64.b64encode(digest).decode()
 
 
+_SNAP_CLASS = {"stock": "equity", "adr": "equity", "etf": "etf", "mutualfund": "fund", "cef": "fund", "crypto": "crypto",
+               "bond": "bond", "option": "option"}
+# MIC → Yahoo suffix for the common non-US listings SnapTrade brokers return.
+_MIC_SUFFIX = {"XLON": ".L", "XTSE": ".TO", "XTSX": ".V", "XETR": ".DE", "XPAR": ".PA", "XAMS": ".AS", "XSWX": ".SW",
+               "XASX": ".AX", "XHKG": ".HK"}
+
+
 class SnapTradeClient(ProviderClient):
+    """SnapTrade with a Personal API key (free, the user's own accounts): no
+    SnapTrade user to register — requests carry only clientId + timestamp and
+    SnapTrade resolves the user from the key. A Commercial key also works: a
+    user is registered once and its userId/userSecret are sent."""
+
     provider = "snaptrade"
 
     def __init__(self, client_id: str, consumer_key: str, user_id: str = "", user_secret: str = ""):
@@ -308,23 +320,25 @@ class SnapTradeClient(ProviderClient):
     def _call(self, method: str, path: str, *, params: dict[str, str] | None = None, body: Any = None,
               user: bool = True) -> Any:
         q: dict[str, str] = {"clientId": self.client_id, "timestamp": str(int(time.time()))}
-        if user:
+        if user and self.user_secret:
             q.update({"userId": self.user_id, "userSecret": self.user_secret})
         q.update(params or {})
         query = urlencode(q)
         full_path = f"/api/v1{path}"
         sig = snaptrade_signature(self.consumer_key, full_path, query, body)
-        r = self._http.request(method, f"{SNAPTRADE_BASE}{full_path}?{query}", headers={"Signature": sig},
-                               content=json.dumps(body, separators=(",", ":")) if body is not None else None)
+        r = self._http.request(method, f"{SNAPTRADE_BASE}{full_path}?{query}",
+                               headers={"Signature": sig, "Content-Type": "application/json"},
+                               content=json.dumps(body, separators=(",", ":"), sort_keys=True) if body is not None else None)
         if r.status_code in {401, 403}:
             raise ProviderAuthError(f"SnapTrade rejected the request ({r.status_code}): {r.text[:200]}")
-        if r.status_code == 429:
-            raise ProviderPending("SnapTrade rate limit — try again shortly")
+        if r.status_code in {429, 503}:
+            raise ProviderPending(f"SnapTrade is busy ({r.status_code}) — try again shortly")
         if r.status_code >= 400:
             raise ProviderError(f"SnapTrade error {r.status_code}: {r.text[:200]}")
         return r.json() if r.content else None
 
     def register_user(self, user_id: str) -> str:
+        """Commercial keys only (a Personal key must NOT register a user)."""
         data = self._call("POST", "/snapTrade/registerUser", body={"userId": user_id}, user=False)
         self.user_id = user_id
         self.user_secret = str((data or {}).get("userSecret") or "")
@@ -333,6 +347,7 @@ class SnapTradeClient(ProviderClient):
         return self.user_secret
 
     def login_link(self, *, custom_redirect: str | None = None) -> str:
+        """The Connection Portal link (expires in 5 minutes). Always read-only."""
         body: dict[str, Any] = {"connectionType": "read"}
         if custom_redirect:
             body["customRedirect"] = custom_redirect
@@ -342,39 +357,41 @@ class SnapTradeClient(ProviderClient):
             raise ProviderError("SnapTrade didn't return a connection link")
         return url
 
+    @staticmethod
+    def _position(p: dict[str, Any]) -> ProviderPosition | None:
+        inst = p.get("instrument") or {}
+        kind = str(inst.get("kind") or "stock").lower()
+        if kind in {"option", "future", "future_option", "cfd", "tokenized_asset"}:
+            return None  # derivatives aren't modelled as holdings
+        ticker = str(inst.get("raw_symbol") or inst.get("symbol") or "").strip().upper()
+        qty = _num(p.get("units"))
+        if not ticker or not qty or p.get("cash_equivalent"):
+            return None
+        ccy = str(p.get("currency") or inst.get("currency") or "USD").upper()
+        if kind == "crypto":
+            yf = f"{ticker}-USD"
+        else:
+            yf = ticker.replace(".", "-") + _MIC_SUFFIX.get(str(inst.get("exchange") or "").upper(), "")
+        return ProviderPosition(symbol=ticker, name=str(inst.get("description") or ticker), quantity=qty,
+                                price=_num(p.get("price")), currency=ccy, avg_cost=_num(p.get("cost_basis")),
+                                asset_class=_SNAP_CLASS.get(kind, "other"), yfinance=yf)
+
     def fetch(self) -> list[ProviderAccount]:
+        from app.services.fx import get_fx_rate
+
         out: list[ProviderAccount] = []
         for a in self._call("GET", "/accounts") or []:
             acct_id = str(a.get("id") or "")
             if not acct_id:
                 continue
-            positions = []
-            for p in self._call("GET", f"/accounts/{acct_id}/positions") or []:
-                sym_outer = p.get("symbol") or {}
-                sym = sym_outer.get("symbol") if isinstance(sym_outer.get("symbol"), dict) else sym_outer
-                ticker = str((sym or {}).get("symbol") or (sym or {}).get("raw_symbol") or "").strip()
-                qty = _num(p.get("units") if p.get("units") is not None else p.get("fractional_units"))
-                if not ticker or not qty:
-                    continue
-                ccy = str(((p.get("currency") or {}).get("code")) or (((sym or {}).get("currency") or {}).get("code")) or "USD").upper()
-                kind = str((((sym or {}).get("type") or {}).get("code")) or "cs").lower()
-                positions.append(ProviderPosition(
-                    symbol=ticker, name=str((sym or {}).get("description") or ticker), quantity=qty, price=_num(p.get("price")),
-                    currency=ccy, avg_cost=_num(p.get("average_purchase_price")),
-                    asset_class={"cs": "equity", "et": "etf", "oef": "fund", "crypto": "crypto", "bnd": "bond"}.get(kind, "equity"),
-                    yfinance=f"{ticker}-USD" if kind == "crypto" else ticker.replace(".", "-"),
-                ))
-            cash = 0.0
+            raw = self._call("GET", f"/accounts/{acct_id}/positions/all") or {}
+            positions = [x for x in (self._position(p) for p in (raw.get("results") or [])) if x is not None]
             base = str(((a.get("balance") or {}).get("total") or {}).get("currency") or "USD").upper()
+            cash = 0.0
             for b in self._call("GET", f"/accounts/{acct_id}/balances") or []:
                 code = str(((b.get("currency") or {}).get("code")) or base).upper()
                 amt = _num(b.get("cash"))
-                if code == base:
-                    cash += amt
-                elif amt:
-                    from app.services.fx import get_fx_rate
-
-                    cash += amt * get_fx_rate(code, base)
+                cash += amt if code == base else amt * get_fx_rate(code, base)
             out.append(ProviderAccount(external_id=acct_id, name=str(a.get("name") or a.get("number") or "Account"),
                                        currency=base, cash=cash, positions=positions,
                                        institution=str(a.get("institution_name") or "") or None))

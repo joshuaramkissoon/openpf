@@ -506,11 +506,16 @@ def _add_snaptrade(db: Session, store: ConfigStore, spec: dict[str, Any], secret
         else:
             client = SnapTradeClient(secret["client_id"], secret["consumer_key"], secret.get("user_id", ""),
                                      secret.get("user_secret", ""))
-            if not secret.get("user_secret"):
-                user_id = f"openpf-{_secrets.token_hex(8)}"
-                client.register_user(user_id)
+            try:
+                # A Personal key (the normal self-hosted case) needs no SnapTrade user.
+                link = client.login_link()
+            except ProviderError:
+                if secret.get("user_secret"):
+                    raise
+                # A Commercial key: register one SnapTrade user for this install.
+                client.register_user(f"openpf-{_secrets.token_hex(8)}")
                 secret = {**secret, "user_id": client.user_id, "user_secret": client.user_secret}
-            link = client.login_link()
+                link = client.login_link()
             try:
                 accounts = client.fetch()
             except ProviderError:
