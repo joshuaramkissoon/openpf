@@ -14,6 +14,8 @@ export type WidgetPreset = {
   sizes: WidgetSize[]
   defaultSize: WidgetSize
   spec: VizSpec
+  /** Optional S-size variant when the main spec doesn't read at a glance that small. */
+  small?: VizSpec
 }
 
 const pf = { pf: { source: 'portfolio' } }
@@ -22,7 +24,7 @@ const hist = { hist: { source: 'history', params: { range: '1y' } } }
 export const WIDGET_PRESETS: WidgetPreset[] = [
   {
     id: 'today',
-    title: 'Today',
+    title: 'Today’s move',
     description: "Today's gain or loss across your holdings",
     sizes: ['S', 'M'],
     defaultSize: 'S',
@@ -54,6 +56,12 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
       title: 'Portfolio value',
       data: hist,
       blocks: [{ type: 'timeseries', title: 'Portfolio value', from: 'hist.points', series: [{ field: 'total', label: 'Value' }], style: 'area', format: 'moneyCompact' }],
+    },
+    small: {
+      version: 1,
+      title: 'Portfolio value',
+      data: { ...pf, ...hist },
+      blocks: [{ type: 'hero', label: 'Portfolio value', from: 'pf.account', value: { field: 'total' }, format: 'money', trend: { from: 'hist.points', field: 'total' } }],
     },
   },
   {

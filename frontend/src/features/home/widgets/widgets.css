@@ -1,0 +1,25 @@
+/* Edit Home: tiles wiggle gently (smaller tiles a touch more), like iOS. */
+@keyframes home-wiggle {
+  0% { transform: rotate(calc(var(--wiggle, 0.4deg) * -1)); }
+  50% { transform: rotate(var(--wiggle, 0.4deg)); }
+  100% { transform: rotate(calc(var(--wiggle, 0.4deg) * -1)); }
+}
+
+.home-wiggle {
+  animation: home-wiggle 0.44s ease-in-out infinite;
+  transform-origin: 50% 50%;
+}
+.home-wiggle[data-size='S'] { --wiggle: 0.7deg; animation-duration: 0.38s; }
+.home-wiggle[data-size='M'] { --wiggle: 0.4deg; }
+.home-wiggle[data-size='L'] { --wiggle: 0.14deg; animation-duration: 0.5s; }
+.home-wiggle[data-alt] { animation-delay: -0.2s; }
+
+@keyframes home-pop {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.home-pop { animation: home-pop 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .home-wiggle, .home-pop { animation: none; }
+}
