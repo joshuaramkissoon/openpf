@@ -6,7 +6,10 @@ Decisions are fixed and never appear here; everything else is a widget:
 * ``builtin`` — one of the native Home cards (``ref`` in ``BUILTINS``)
 * ``preset``  — a starter viz widget from the frontend's ``WIDGET_PRESETS`` (``ref`` = its id)
 * ``view``    — one block of a saved spec view (``ref`` = view id, ``block`` = block index)
-* ``spec``    — a viz spec added straight from chat (``spec`` stored inline, validated)
+* ``spec``    — a viz spec stored inline (legacy). "Add to Home" from chat now saves the
+  spec as a view and stores a ``view`` widget, so every widget deep-links to a page;
+  inline specs left in older layouts are migrated the same way on read
+  (``migrate_inline_specs``).
 
 Sizes follow Apple widgets: S (1 column), M (2 columns), L (full row).
 """
@@ -158,10 +161,52 @@ def reset_layout(db: Session) -> dict[str, Any]:
     return save_layout(db, deepcopy(DEFAULT_LAYOUT))
 
 
+def headline_block(spec: dict[str, Any]) -> int:
+    """The block a view contributes to Home: its first one that isn't prose."""
+    for i, b in enumerate(spec.get("blocks") or []):
+        if b.get("type") != "note":
+            return i
+    return 0
+
+
+def _as_view(item: dict[str, Any], note: str) -> dict[str, Any]:
+    """An inline-spec widget saved as a view, so it has a page to link to."""
+    from app.services import views_store
+
+    spec = deepcopy(item["spec"])
+    if item.get("title"):
+        spec["title"] = item["title"]
+    meta = views_store.create_spec_view(spec, note=note)
+    return {"id": item["id"], "kind": "view", "ref": meta["id"], "block": headline_block(spec), "size": item["size"]}
+
+
+def migrate_inline_specs(db: Session) -> dict[str, Any]:
+    """The layout with any legacy inline ``spec`` widgets saved as views (persisted
+    once). A widget that can't be saved stays inline rather than disappearing."""
+    layout = get_layout(db)
+    if not any(w["kind"] == "spec" for w in layout["widgets"]):
+        return layout
+    widgets = []
+    for w in layout["widgets"]:
+        if w["kind"] == "spec":
+            try:
+                w = _as_view(w, "Added to Home from chat")
+            except Exception:  # noqa: BLE001 — keep the inline widget; try again next read
+                pass
+        widgets.append(w)
+    return save_layout(db, {"widgets": widgets})
+
+
 def add_widget(db: Session, raw: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Append one widget (deduped). Returns ``(layout, the widget as stored)``."""
+    """Append one widget (deduped). Returns ``(layout, the widget as stored)``.
+    A chart from chat (``kind: spec``) is saved as a view first and added as a
+    ``view`` widget, so the tile links to its page."""
     layout = get_layout(db)
     item = _widget(raw, len(layout["widgets"]))
+    if item["kind"] == "spec":
+        if len(layout["widgets"]) >= MAX_WIDGETS:
+            raise LayoutError(f"Home holds at most {MAX_WIDGETS} widgets — remove one first")
+        item = _as_view(item, "Added to Home from chat")
     ident = _identity(item)
     for w in layout["widgets"]:
         if ident and _identity(w) == ident:

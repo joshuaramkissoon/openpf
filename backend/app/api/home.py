@@ -21,7 +21,7 @@ router = APIRouter(prefix="/home", tags=["home"])
 
 @router.get("/layout")
 def get_layout(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return home_layout.get_layout(db)
+    return home_layout.migrate_inline_specs(db)
 
 
 @router.put("/layout")
