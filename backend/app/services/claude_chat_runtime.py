@@ -86,11 +86,57 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__quant__deploy_cash": "Planning where the cash goes",
     "mcp__quant__placement": "Choosing ISA vs Invest",
     "ToolSearch": "Looking up a tool",
+    "TodoWrite": "Planning the steps",
+    # Plays
+    "mcp__plays__list_plays": "Reading your plays",
+    "mcp__plays__get_play": "Reading a play",
+    "mcp__plays__draft_play": "Drafting a play",
+    "mcp__plays__update_play": "Updating a play",
+    "mcp__plays__stage_play_tranche": "Staging the next buys",
+    "mcp__plays__get_book_by_play": "Reading your book by play",
+    "mcp__plays__assign_owner": "Moving a holding",
+    "mcp__plays__suggest_plays": "Grouping your holdings",
+    # Views
+    "mcp__views__list_views": "Checking your views",
+    "mcp__views__create_view": "Building the view",
+    "mcp__views__update_view": "Updating the view",
+    # Recipes
+    "mcp__recipes__list_recipes": "Checking your recipes",
+    "mcp__recipes__get_recipe": "Reading a recipe",
+    "mcp__recipes__create_recipe": "Setting up the recipe",
+    "mcp__recipes__update_recipe": "Updating the recipe",
+    "mcp__recipes__set_recipe_enabled": "Switching a recipe on or off",
+    # News / macro
+    "mcp__intel__get_company_news": "Reading company news",
+    "mcp__intel__get_market_news": "Reading market news",
+    "mcp__intel__get_macro_snapshot": "Checking the macro picture",
+    "mcp__intel__get_earnings": "Checking earnings",
+    # Smart money, crypto, track record
+    "mcp__smart_money__get_smart_money": "Checking insider and fund activity",
+    "mcp__smart_money__get_disclosure_trends": "Looking for disclosure trends",
+    "mcp__proposals__get_track_record": "Checking Archie's track record",
+    "mcp__proposals__suggest_permission": "Suggesting a standing permission",
 }
+
+# Verbs for tools without a hand-written label (new servers, user recipes):
+# "mcp__views__create_view" -> "Creating view", never the raw id.
+_VERBS = {"get": "Checking", "list": "Listing", "create": "Creating", "update": "Updating", "delete": "Removing",
+          "add": "Adding", "remove": "Removing", "set": "Setting", "run": "Running", "search": "Searching",
+          "draft": "Drafting", "suggest": "Suggesting", "analyse": "Analysing", "analyze": "Analysing"}
 
 
 def _friendly_tool_name(raw: str) -> str:
-    return _TOOL_LABELS.get(raw, raw)
+    if raw in _TOOL_LABELS:
+        return _TOOL_LABELS[raw]
+    name = raw.split("__")[-1] if raw.startswith("mcp__") else raw
+    if ":" in name:  # skills such as "recipes:morning-brief"
+        name = name.split(":", 1)[1]
+    words = [w for w in name.replace("-", "_").split("_") if w]
+    if not words:
+        return "Working"
+    verb = _VERBS.get(words[0].lower())
+    text = " ".join([verb, *words[1:]]) if verb and len(words) > 1 else " ".join(words)
+    return text[:1].upper() + text[1:]
 
 
 def _extract_text_from_sdk_message(message: Any) -> str:

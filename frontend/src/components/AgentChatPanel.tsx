@@ -454,6 +454,24 @@ export function AgentChatPanel({
                   ? 'tool_result'
                   : 'thinking'
             const prev = s.streamSegments[s.streamSegments.length - 1]
+            if (kind === 'tool_result') {
+              // "Building the view — done" completes the matching step in place
+              // instead of adding a second row for the same tool.
+              const base = next.replace(/ — (done|hit a snag)$/, '')
+              const snag = next.endsWith('hit a snag')
+              const idx = [...s.streamSegments].reverse().findIndex((seg) => seg.kind === 'tool_start' && seg.text === base)
+              if (idx !== -1) {
+                const at = s.streamSegments.length - 1 - idx
+                s.streamSegments = s.streamSegments.map((seg, i) =>
+                  i === at ? { ...seg, kind: 'tool_result', text: snag ? `${base} — hit a snag` : base } : seg)
+                return
+              }
+            }
+            if (kind === 'thinking' && prev?.kind === 'thinking') {
+              // One live "what I'm doing" line, not a growing list of status pings.
+              s.streamSegments = [...s.streamSegments.slice(0, -1), { ...prev, text: next }]
+              return
+            }
             if (!prev || prev.kind !== kind || prev.text !== next) {
               s.streamSegments = [...s.streamSegments, {
                 id: `seg-${Date.now()}-${Math.random()}`,
