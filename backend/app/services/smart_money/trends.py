@@ -215,11 +215,14 @@ def detect(rows: list[dict[str, Any]], ctx: Context) -> list[dict[str, Any]]:
             ))
 
     # ── 5. Different groups converging on one name (90d; 13F within ~6 months) ──
-    recent = [r for r in rows if r.get("side") == "buy" and (_in_window(r, today, 90) or (r["source"] == "13f" and _in_window(r, today, 200)))]
+    in_win = [r for r in rows if _in_window(r, today, 90) or (r["source"] == "13f" and _in_window(r, today, 200))]
+    sellers_by_ticker = {tk: {_actor_key(r) for r in g if r.get("side") == "sell"} for tk, g in _by_ticker(in_win).items()}
+    recent = [r for r in in_win if r.get("side") == "buy"]
     for tk, grp in _by_ticker(recent).items():
         groups = {r["actor_type"] for r in grp}
         actors = len({_actor_key(r) for r in grp})
-        if len(groups) < 2 or actors < 3:
+        sellers = len(sellers_by_ticker.get(tk, set()))
+        if len(groups) < 2 or actors < 3 or sellers >= actors:
             continue
         names = {"insider": "insiders", "fund": "funds", "congress": "Congress"}
         caveats = []
@@ -231,7 +234,8 @@ def detect(rows: list[dict[str, Any]], ctx: Context) -> list[dict[str, Any]]:
             "cross_group_buying", ctx=ctx, ticker=tk, window=90, actors=actors, rows=grp, caveats=caveats or [CAVEAT_FORM4],
             score=min(80, (45 if len(groups) == 2 else 65) + 3 * max(0, actors - 3)),
             title=f"{tk}: {' + '.join(names[g] for g in sorted(groups))} buying",
-            detail=f"{actors} separate buyers across {len(groups)} disclosure types in the last 90 days.",
+            detail=f"{actors} separate buyers across {len(groups)} disclosure types in the last 90 days"
+                   + (f"; {sellers} sold in the same window." if sellers else "."),
         ))
 
     # ── 6. Sector flows ──

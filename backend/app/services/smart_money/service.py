@@ -263,6 +263,7 @@ def _refresh(db: Session, *, raise_alerts_too: bool, tickers: list[str] | None) 
 
         report["added"] = fixtures.load(db)
         report["sandbox"] = True
+        _map_instruments(db)
     else:
         ctx = user_context(db)
         universe = tickers or _universe(db, ctx, cfg)
@@ -358,6 +359,7 @@ def ensure_loaded(db: Session) -> None:
 
         fixtures.load(db)
         db.commit()
+        _map_instruments(db)
 
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
@@ -454,7 +456,8 @@ def ticker_summary(db: Session, ticker: str) -> dict[str, Any]:
         provider = congress.provider_from_config(cfg)
     except net.SourceUnavailable:
         pass
-    summary["attribution"] = getattr(provider, "attribution", None) if summary["congress"]["buys_90d"] or summary["congress"]["sells_90d"] else None
+    has_congress = summary["congress"]["buys_90d"] or summary["congress"]["sells_90d"]
+    summary["attribution"] = getattr(provider, "attribution", None) if has_congress and not is_sandbox() else None
     summary["sandbox"] = is_sandbox()
     summary["instrument_code"] = next((r.get("instrument_code") for r in rows if r.get("instrument_code")), None)
     last = net.cache_get(db, f"smart_money:ticker_fetch:{ticker.upper()}")
