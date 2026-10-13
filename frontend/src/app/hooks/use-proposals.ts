@@ -114,7 +114,7 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
 
   /** The one-tap path from Home: execute with `approve: true` — one audited call. */
   const approveAndExecute = useCallback(
-    async (intent: TradeIntent, account: ExecAccount) => {
+    async (intent: TradeIntent, account: ExecAccount): Promise<boolean> => {
       setWorking(intent.id)
       try {
         await executeIntent(intent.id, false, account)
@@ -122,8 +122,10 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
           description: `${intent.side.toUpperCase()} ${intent.symbol} · ${accountName(account)}`,
         })
         onExecuted?.()
+        return true
       } catch (err) {
         toastApiError(err, 'Could not place the order')
+        return false
       } finally {
         setWorking(null)
         await reload()

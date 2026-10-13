@@ -47,6 +47,10 @@ class TradeIntentItem(BaseModel):
     source: str | None = None
     play_id: str | None = None
     play_title: str | None = None
+    # Play tranches: which tranche staged this order, so the UI can group a tranche's legs.
+    tranche_index: int | None = None
+    tranche_label: str | None = None
+    instrument_name: str | None = None
     # "For which play?" — 'play' | 'core' | None (not part of any play). Inferred
     # from the holding's owner when the proposal didn't say.
     owner_kind: str | None = None

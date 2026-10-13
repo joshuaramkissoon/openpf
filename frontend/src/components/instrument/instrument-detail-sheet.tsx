@@ -3,6 +3,7 @@ import { ArrowLeftRight, Loader2, MessageSquareText, Sparkles, Star, Telescope }
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { AssetIcon } from "@/components/kit"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -221,6 +222,7 @@ function Hero({
   return (
     <header className="flex flex-col gap-3 px-5 pt-6 pb-6 sm:px-7">
       <div className="flex items-start gap-3 pr-10">
+        <AssetIcon symbol={display} crypto={Boolean(data?.position?.accounts?.includes("crypto") || data?.instrument_code?.includes("/"))} size={44} className="mt-0.5" />
         <div className="min-w-0 flex-1">
           <SheetTitle className="truncate text-xl font-semibold tracking-tight">{name || display}</SheetTitle>
           <SheetDescription className="text-sm text-muted-foreground">

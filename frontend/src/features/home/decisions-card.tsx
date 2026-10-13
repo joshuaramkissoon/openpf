@@ -1,6 +1,7 @@
 import { Check } from "lucide-react"
 
 import { SectionLink } from "@/components/kit"
+import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAppActions } from "@/lib/app-actions"
 import type { AppConfig, PositionItem } from "@/types"
@@ -9,7 +10,8 @@ import type { BrokerMode } from "@/app/hooks/use-app-config"
 
 import { PermissionSuggestionRow, usePermissionSuggestions } from "@/features/autonomy/home"
 
-import { ProposalRow, SignalRow, railCheck } from "./decision-rows"
+import { SignalRow } from "./decision-rows"
+import { ProposalReceipt, ProposalTiles, useRecentlyResolved } from "./proposal-tiles"
 import { signalPrompt, type useSignals } from "./use-signals"
 
 const MAX_ITEMS = 5
@@ -53,12 +55,13 @@ export function DecisionsCard({
   const shownSuggestions = suggestions.slice(0, 1)
   const pending = proposals.pending
   const shownProposals = pending.slice(0, MAX_ITEMS)
+  const resolved = useRecentlyResolved(proposals).slice(0, 3)
   const signalSlots = Math.max(0, Math.min(3, MAX_ITEMS - shownProposals.length))
   const shownSignals = signals.groups.slice(0, signalSlots)
   const hiddenSignals = signals.groups.length - shownSignals.length
   const hiddenProposals = pending.length - shownProposals.length
   const loading = !proposals.loaded || signals.loading
-  const empty = !loading && pending.length === 0 && signals.groups.length === 0 && shownSuggestions.length === 0
+  const empty = !loading && pending.length === 0 && signals.groups.length === 0 && shownSuggestions.length === 0 && resolved.length === 0
   const count = pending.length + signals.groups.length + shownSuggestions.length
   if (hideWhenEmpty && (empty || loading)) return null
 
@@ -93,40 +96,50 @@ export function DecisionsCard({
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-border/70">
-            {shownSuggestions.map((s) => (
-              <PermissionSuggestionRow key={s.id} s={s} onDismiss={() => void dismiss(s.id)} />
-            ))}
-            {shownProposals.map((intent) => (
-              <ProposalRow
-                key={intent.id}
-                intent={intent}
-                rail={railCheck(intent, config, positions, total)}
-                brokerMode={brokerMode}
-                working={proposals.working === intent.id}
-                onPlace={(acct) => void proposals.approveAndExecute(intent, acct)}
-                onReject={() => void proposals.reject(intent.id)}
-                onAsk={() => askArchie(proposalPrompt(intent))}
+          <div className="space-y-4">
+            {shownSuggestions.length ? (
+              <div className="divide-y divide-border/70">
+                {shownSuggestions.map((s) => (
+                  <PermissionSuggestionRow key={s.id} s={s} onDismiss={() => void dismiss(s.id)} />
+                ))}
+              </div>
+            ) : null}
+            {shownProposals.length ? (
+              <ProposalTiles
+                intents={shownProposals}
+                ctx={{ proposals, config, brokerMode, positions, total }}
+                onAsk={(i) => askArchie(proposalPrompt(i))}
                 onViewTicker={openTicker}
               />
-            ))}
-            {shownSignals.map((g) => (
-              <SignalRow
-                key={g.key}
-                group={g}
-                onAsk={(a) => askArchie(signalPrompt(a))}
-                onViewTicker={openTicker}
-                onDismiss={() => void signals.dismiss(g)}
-              />
-            ))}
-            {hiddenSignals > 0 && shownSignals.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => navigate("/home/signals")}
-                className="w-full pt-3 text-left text-xs text-muted-foreground hover:text-foreground"
-              >
-                {hiddenSignals} more signal{hiddenSignals === 1 ? "" : "s"} →
-              </button>
+            ) : null}
+            {resolved.length ? (
+              <div className="divide-y divide-border/50 rounded-lg border border-border/60 px-3 py-0.5">
+                {resolved.map((i) => (
+                  <ProposalReceipt key={i.id} intent={i} onViewTicker={openTicker} onDetails={() => navigate("/activity/proposals")} />
+                ))}
+              </div>
+            ) : null}
+            {shownSignals.length ? (
+              <div className={cn("divide-y divide-border/70", (shownProposals.length > 0 || resolved.length > 0) && "border-t border-border/70 pt-4")}>
+                {shownSignals.map((g) => (
+                  <SignalRow
+                    key={g.key}
+                    group={g}
+                    onAsk={(a) => askArchie(signalPrompt(a))}
+                    onViewTicker={openTicker}
+                    onDismiss={() => void signals.dismiss(g)}
+                  />
+                ))}
+                {hiddenSignals > 0 && shownSignals.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate("/home/signals")}
+                    className="w-full pt-3 text-left text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {hiddenSignals} more signal{hiddenSignals === 1 ? "" : "s"} →
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
         )}

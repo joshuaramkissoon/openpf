@@ -312,6 +312,10 @@ export interface TradeIntent {
   source?: string | null
   play_id?: string | null
   play_title?: string | null
+  /** Play tranches: which tranche staged this order (groups a tranche's legs). */
+  tranche_index?: number | null
+  tranche_label?: string | null
+  instrument_name?: string | null
   /** "For which play?" — 'play' | 'core' | null (not part of any play). */
   owner_kind?: 'play' | 'core' | null
   owner_play_id?: string | null

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Ban, Check, CheckCheck, Clock, FileQuestion, Hourglass, Loader2, ShieldCheck, X } from 'lucide-react'
+import { Check, FileQuestion, Loader2, ShieldCheck } from 'lucide-react'
 
 import { getIntentsByIds } from '@/api/client'
 import { useDecisions } from '@/app/hooks/use-proposals'
@@ -15,10 +15,10 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { ProposalRow, ago, railCheck } from '@/features/home/decision-rows'
+import { railCheck } from '@/features/home/decision-rows'
+import { ProposalReceipt, ProposalTiles, isSingleTranche } from '@/features/home/proposal-tiles'
 import { proposalPrompt } from '@/features/home/decisions-card'
 import { useAppActions } from '@/lib/app-actions'
-import { privacyBlurClass, usePrivacyMode } from '@/lib/privacy'
 import { cn } from '@/lib/utils'
 import { accountLabel, formatMoney } from '@/utils/format'
 import type { TradeIntent } from '@/types'
@@ -95,57 +95,6 @@ function accountName(kind?: string | null) {
   return kind === 'stocks_isa' ? 'ISA' : kind === 'invest' ? 'Invest' : kind === 'crypto' ? accountLabel('crypto') : null
 }
 
-const RECEIPT: Record<string, { label: (i: TradeIntent) => string; icon: typeof Check; tone: string }> = {
-  executed: {
-    label: (i) => (i.side === 'buy' ? 'Bought' : 'Sold'),
-    icon: CheckCheck,
-    tone: 'text-positive',
-  },
-  rejected: { label: () => 'Rejected', icon: X, tone: 'text-muted-foreground' },
-  expired: { label: () => 'Expired', icon: Hourglass, tone: 'text-muted-foreground' },
-  superseded: { label: () => 'Superseded', icon: Clock, tone: 'text-muted-foreground' },
-  failed: { label: () => 'Failed', icon: Ban, tone: 'text-negative' },
-}
-
-/** One-line receipt for a resolved proposal. */
-function Receipt({ intent }: { intent: TradeIntent }) {
-  const { navigate, openTicker } = useAppActions()
-  const blur = privacyBlurClass(usePrivacyMode())
-  const meta = RECEIPT[intent.status] ?? { label: () => intent.status, icon: Clock, tone: 'text-muted-foreground' }
-  const Icon = meta.icon
-  const executed = intent.status === 'executed'
-  return (
-    <div className="rc-receipt">
-      <Icon className={cn('size-3.5 shrink-0', meta.tone)} />
-      <span className={cn('font-medium', executed ? 'text-foreground' : 'text-muted-foreground')}>
-        {executed ? meta.label(intent) : `${meta.label(intent)} ·`}
-      </span>
-      {!executed ? <span className="uppercase text-[11px] tracking-wide text-muted-foreground">{intent.side}</span> : null}
-      <button type="button" className="rc-ticker" onClick={() => openTicker(intent.symbol)}>
-        {intent.symbol}
-      </button>
-      <span className={cn('rc-fig', blur)}>{formatMoney(intent.estimated_notional, 'GBP', 0)}</span>
-      {accountName(intent.account_kind) ? <span className="text-muted-foreground">· {accountName(intent.account_kind)}</span> : null}
-      {executed && intent.execution_price ? (
-        <span className="hidden text-muted-foreground sm:inline">
-          · filled at <span className={cn('rc-fig', blur)}>{intent.execution_price.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
-        </span>
-      ) : null}
-      {intent.status === 'failed' && intent.failure_reason ? (
-        <span className="min-w-0 truncate text-muted-foreground" title={intent.failure_reason}>
-          · {intent.failure_reason}
-        </span>
-      ) : null}
-      <span className="ml-auto hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-        {ago(intent.executed_at || intent.approved_at || intent.created_at)} ago
-      </span>
-      <button type="button" className="ml-auto shrink-0 text-[11px] text-muted-foreground hover:text-foreground sm:ml-0" onClick={() => navigate('/activity/proposals')}>
-        Details
-      </button>
-    </div>
-  )
-}
-
 function Unavailable({ id, loading }: { id: string; loading: boolean }) {
   const { navigate } = useAppActions()
   return (
@@ -203,7 +152,7 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
             {pending.length === 1 ? 'Archie proposes a trade' : `Archie proposes ${pending.length} trades`}
           </span>
           <span className="hidden text-muted-foreground sm:inline">· nothing happens until you approve</span>
-          {decisions && approvable.length > 1 ? (
+          {decisions && approvable.length > 1 && !isSingleTranche(pending) ? (
             <Button
               size="sm"
               variant="outline"
@@ -220,21 +169,16 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
 
       {pending.length > 0 ? (
         <div className="rc-proposals-rows">
-          {pending.map((intent) =>
-            decisions ? (
-              <ProposalRow
-                key={intent.id}
-                intent={intent}
-                rail={rails.get(intent.id)!}
-                brokerMode={decisions.brokerMode}
-                working={decisions.proposals.working === intent.id || bulkWorking}
-                onPlace={(acct) => void decisions.proposals.approveAndExecute(intent, acct)}
-                onReject={() => void decisions.proposals.reject(intent.id)}
-                onAsk={() => askArchie(proposalPrompt(intent))}
-                onViewTicker={openTicker}
-                askLabel="Ask why"
-              />
-            ) : (
+          {decisions ? (
+            <ProposalTiles
+              intents={pending}
+              ctx={decisions}
+              onAsk={(i) => askArchie(proposalPrompt(i))}
+              onViewTicker={openTicker}
+              askLabel="Ask why"
+            />
+          ) : (
+            pending.map((intent) => (
               <div key={intent.id} className="flex items-center gap-2 py-2 text-sm">
                 <span className="text-xs font-semibold uppercase">{intent.side}</span>
                 <span className="font-medium">{intent.symbol}</span>
@@ -243,7 +187,7 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
                   Review in Decisions →
                 </button>
               </div>
-            ),
+            ))
           )}
         </div>
       ) : null}
@@ -251,7 +195,13 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
       {resolved.length > 0 || unknown.length > 0 ? (
         <div className={cn('rc-receipts', prominent && 'has-divider')}>
           {resolved.map((i) => (
-            <Receipt key={i.id} intent={i} />
+            <ProposalReceipt
+              key={i.id}
+              intent={i}
+              onViewTicker={openTicker}
+              onDetails={() => navigate('/activity/proposals')}
+              className="px-3.5"
+            />
           ))}
           {unknown.map((id) => (
             <Unavailable key={id} id={id} loading={!missing.has(id)} />
