@@ -310,7 +310,12 @@ function SortableTile({
     <div
       ref={setNodeRef}
       id={`home-widget-${widget.id}`}
-      className={cn('relative min-w-0 transition-opacity has-[[data-slim]]:self-start has-[[data-viz-tile]]:self-start', SPAN[size])}
+      // Viz tiles and slim lines keep their own height; a card with nothing to
+      // render (e.g. no permissions used today) takes no grid cell at all.
+      className={cn(
+        'relative min-w-0 transition-opacity has-[[data-slim]]:self-start has-[[data-viz-tile]]:self-start [&:has(>div>div:empty)]:hidden',
+        SPAN[size],
+      )}
       data-editing={editing ? '' : undefined}
       {...(editing ? pointerListeners : {})}
       {...pressHandlers}

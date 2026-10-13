@@ -6,6 +6,7 @@ import {
   Check,
   History,
   LayoutDashboard,
+  LayoutGrid,
   LoaderCircle,
   Pin,
   PinOff,
@@ -31,6 +32,7 @@ import {
   retryView,
   revertView,
 } from '@/api/views'
+import { addToHome } from '@/api/home'
 import { ViewSpecRenderer, VizBlock, WIDGET_PRESETS } from '@/components/viz'
 import {
   AlertDialog,
@@ -779,6 +781,20 @@ function ViewDetail({ viewId }: { viewId: string }) {
               <Button variant="ghost" size="icon" onClick={togglePin} title={meta.pinned ? 'Unpin from sidebar' : 'Pin to sidebar'} aria-label={meta.pinned ? 'Unpin from sidebar' : 'Pin to sidebar'}>
                 {meta.pinned ? <PinOff className="text-muted-foreground" /> : <Pin className="text-muted-foreground" />}
               </Button>
+              {doc?.kind === 'spec' && doc.spec ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Add to Home"
+                  aria-label="Add to Home"
+                  onClick={() => {
+                    const block = Math.max(0, doc.spec!.blocks.findIndex((b) => b.type !== 'note'))
+                    void addToHome({ kind: 'view', ref: meta.id, block, size: 'M' }, meta.title, navigate)
+                  }}
+                >
+                  <LayoutGrid className="text-muted-foreground" />
+                </Button>
+              ) : null}
             </>
           ) : null}
           <AlertDialog>

@@ -38,7 +38,7 @@ export const SPAN: Record<HomeWidgetSize, string> = {
 
 /** Viz tiles have fixed heights, like Apple widgets (native cards size to their content). */
 export const VIZ_MIN_H: Record<HomeWidgetSize, string> = {
-  S: 'h-[204px]',
+  S: 'h-[164px] md:h-[204px]',
   M: 'h-[204px]',
   L: 'h-[400px]',
 }
