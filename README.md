@@ -69,7 +69,7 @@ Settings → **Connections** puts every account in one book: Trading 212, crypto
 | Kraken / Coinbase / Binance (several at once) | a query-only key; later, a trade-only key | ✓ | ✓ on approval, never withdraw |
 | Interactive Brokers | Flex Web Service token + Flex Query ID | ✓ | place in IBKR |
 | Alpaca | Key ID + secret (live or paper) | ✓ | place in Alpaca |
-| SnapTrade → Robinhood, Schwab, Fidelity, … | your free SnapTrade Personal key, then log in to your broker on SnapTrade's page | ✓ | place in your broker |
+| SnapTrade → Robinhood, Schwab, Fidelity, … | your free SnapTrade Personal key (check current limits), then log in to your broker on SnapTrade's page | ✓ | place in your broker |
 
 Each provider has a step-by-step guide in the app that says exactly which permissions to tick. Keys are encrypted at rest (back up `openpf-secrets.key` next to the database, or set `OPENPF_SECRETS_KEY`), never shown again and never given to Archie. Research, sources and the safety model: [docs/connections.md](docs/connections.md).
 

@@ -89,7 +89,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "id": "snaptrade", "type": "aggregator", "label": "SnapTrade", "product": "Robinhood, Schwab, Fidelity, Vanguard and more",
         "modes": ["read"],
         "availability": "Brokers in the US, Canada and some of Europe (see SnapTrade's broker list). You use your own "
-                        "free SnapTrade Personal key (up to 20 of your own brokerage connections).",
+                        "free SnapTrade Personal key for your own accounts (check SnapTrade for the current connection limit).",
         "summary": "One connection for brokers without a public API — Robinhood, Schwab, Fidelity, Vanguard, "
                    "Webull, E*TRADE and others. Read-only: you log in to your broker on SnapTrade's page, not in OpenPF.",
         "trade_note": "Connected read-only. Place trades in your broker's app.",
