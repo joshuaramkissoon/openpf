@@ -16,12 +16,15 @@ import type { Route } from "@/lib/router"
 import { useTheme, type ThemePreference } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import type { AppConfig } from "@/types"
+import { DataProvidersSection, ModelsSection } from "./models"
 
-type Tab = "general" | "broker" | "risk" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
+type Tab = "general" | "broker" | "providers" | "models" | "risk" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
 
 const TABS: { value: Tab; label: string; description: string }[] = [
   { value: "general", label: "General", description: "Theme and privacy." },
   { value: "broker", label: "Broker & keys", description: "Execution mode, Trading 212 environment and API keys." },
+  { value: "providers", label: "Data providers", description: "API keys for news, macro data and the fast model. Saved keys are never shown again." },
+  { value: "models", label: "Models", description: "Which model does which job. Defaults are tuned for cost and speed." },
   { value: "risk", label: "Risk rails", description: "Hard limits checked on every order." },
   { value: "notifications", label: "Notifications", description: "Telegram alerts and commands." },
   { value: "usage", label: "Usage", description: "Estimated model usage on your Claude account." },
@@ -100,6 +103,8 @@ export function SettingsPage({
               onPrivacyModeChange={onPrivacyModeChange}
             />
           ) : null}
+          {tab === "providers" ? <DataProvidersSection /> : null}
+          {tab === "models" ? <ModelsSection /> : null}
           {tab === "usage" ? <CostsWorkspace onError={onError} /> : null}
           {tab === "diagnostics" ? <RuntimeDiagnosticsPanel onError={onError} /> : null}
           {tab === "labs" ? <LabsSection config={config} onConfigChanged={onConfigChanged} /> : null}

@@ -16,6 +16,7 @@ from app.api import agent, attention, broker, charts, config, costs, health, ins
 from app.core.auth import ApiTokenMiddleware, OriginGuardMiddleware
 
 from app.api import recipes as recipes_api
+from app.api import model_settings
 from app.api import views
 from app.core.config import get_settings
 from app.core.database import init_db
@@ -248,6 +249,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(config.router, prefix=settings.api_prefix)
+app.include_router(model_settings.router, prefix=settings.api_prefix)
 app.include_router(broker.router, prefix=settings.api_prefix)
 app.include_router(portfolio.router, prefix=settings.api_prefix)
 app.include_router(agent.router, prefix=settings.api_prefix)
