@@ -512,6 +512,7 @@ export interface CostBySource {
   chat: number
   scheduled: number
   agent_run: number
+  other?: number
 }
 
 export interface CostSummary {

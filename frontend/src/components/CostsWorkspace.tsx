@@ -39,6 +39,11 @@ function sourceLabel(source: string): string {
     chat: 'Chat',
     scheduled: 'Scheduled',
     agent_run: 'Agent Run',
+    chat_title: 'Chat title',
+    play_suggest: 'Sort holdings',
+    view_spec: 'View builder',
+    memory_extract: 'Memory notes',
+    report_summary: 'Report summary',
   }
   return MAP[source] ?? source
 }
@@ -70,7 +75,7 @@ export function CostsWorkspace({ onError }: Props) {
         <div className="min-w-0">
           <h2 className="text-2xl font-semibold tracking-tight">Usage</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Estimated token cost on your Claude subscription — not billed per call.
+            Estimated cost per run, including quick one-shot calls (Together usage × the price set in Settings → Models).
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
@@ -80,13 +85,14 @@ export function CostsWorkspace({ onError }: Props) {
       </div>
 
       {summary ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="All time" value={<Money value={summary.all_time_usd} currency="USD" />} />
           <StatCard label="This week" value={<Money value={summary.this_week_usd} currency="USD" />} />
           <StatCard label="This month" value={<Money value={summary.this_month_usd} currency="USD" />} />
           <StatCard label="Chat" value={<Money value={summary.by_source.chat} currency="USD" />} />
           <StatCard label="Scheduled" value={<Money value={summary.by_source.scheduled} currency="USD" />} />
           <StatCard label="Agent runs" value={<Money value={summary.by_source.agent_run} currency="USD" />} />
+          <StatCard label="Quick jobs & other" value={<Money value={summary.by_source.other ?? 0} currency="USD" />} />
         </div>
       ) : busy ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
