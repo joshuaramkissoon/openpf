@@ -6,21 +6,13 @@ import { catColor, EmptyNote, Legend, Tooltip, useBlur, useFmt, useTooltip, useV
 import type { Row, TimeseriesBlock } from '../types'
 import { niceTicks } from './Bars'
 import { Sparkline } from './Figures'
+import { isStepSeries } from './step'
 
 function toTime(v: unknown): number | null {
   if (typeof v === 'number') return v
   const s = String(v ?? '')
   const d = new Date(/^\d{4}-\d{2}$/.test(s) ? `${s}-01T00:00:00` : /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00` : s)
   return Number.isNaN(d.getTime()) ? null : d.getTime()
-}
-
-/** A series that mostly holds still between jumps (cash, contributions): ≥ 60% of moves are exactly zero. */
-export function isStepSeries(values: (number | null)[]): boolean {
-  const v = values.filter((x): x is number => x != null)
-  if (v.length < 8) return false
-  let flat = 0
-  for (let i = 1; i < v.length; i++) if (v[i] === v[i - 1]) flat++
-  return flat / (v.length - 1) >= 0.6
 }
 
 export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[] }) {
@@ -49,7 +41,7 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
           <span className={cn('text-xl font-semibold tracking-tight', blur(block.format))}>{fmt(last, block.format === 'moneyCompact' ? 'money' : block.format)}</span>
           <span className={cn('text-xs tabular-nums', (change ?? 0) >= 0 ? 'text-positive' : 'text-negative')}>{fmt(change, 'signedPct')}</span>
         </div>
-        <Sparkline values={vals} height={env.size === 'S' ? 56 : 72} signed />
+        <Sparkline values={vals} height={env.size === 'S' ? 56 : 72} signed zero={block.zero ?? ((!block.format || block.format.includes('oney')) && Math.min(...vals) >= 0)} />
       </div>
     )
   }

@@ -49,7 +49,9 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const [ref, width] = useWidth<HTMLDivElement>()
   const { tip, show, hide, hostRef } = useTooltip()
   const [drill, setDrill] = useState<Row | null>(null)
-  const data = rows.filter((r) => num(r[block.value]) != null).slice(0, block.limit ?? 12)
+  // Vertical bars are time buckets: a limit keeps the latest, not the oldest.
+  const valued = rows.filter((r) => num(r[block.value]) != null)
+  const data = block.orientation === 'vertical' ? valued.slice(-(block.limit ?? 12)) : valued.slice(0, block.limit ?? 12)
   // Label column sized to its content (never a fixed gutter): as wide as the
   // longest label, capped at ~38% of the chart; long names shorten, then wrap.
   const labelKey = data.map((r) => String(r[block.label])).join('|')
@@ -224,11 +226,12 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   // Fixed value columns (sized to content type) so every bar track, the zero
   // line and the column headers line up; headers say what each number is.
   const sec = !!block.secondary && env.size !== 'S'
-  const cols = `${labelCol.px}px minmax(0,1fr) ${env.size === 'S' ? '4.5rem' : '5.75rem'}${sec ? ' 6.25rem' : ''}`
+  const narrow = width > 0 && width < 520
+  const cols = `${labelCol.px}px minmax(0,1fr) ${env.size === 'S' ? '4.5rem' : narrow ? '4.75rem' : '5.75rem'}${sec ? (narrow ? ' 5.5rem' : ' 6.25rem') : ''}`
   const heads = !env.size && (sec || !!block.valueLabel)
   return (
     <div ref={hostRef} className="relative">
-      <div ref={ref} className="space-y-0.5">
+      <div ref={ref} className={env.size ? 'space-y-1' : 'space-y-0.5'}>
         {heads ? (
           <div className="grid items-end gap-3 px-1 pb-1.5" style={{ gridTemplateColumns: cols }} aria-hidden>
             <span />
@@ -251,7 +254,7 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
               onClick={() => click(r)}
               onPointerMove={(e) => show(e, tipFor(r))}
               onPointerLeave={hide}
-              className={cn('grid w-full items-center gap-3 rounded-md px-1 py-1.5 text-left text-sm', drillable && 'hover:bg-muted/50')}
+              className={cn('grid w-full items-center gap-3 rounded-md px-1 text-left text-sm', env.size ? 'py-1' : 'py-1.5', drillable && 'hover:bg-muted/50')}
               style={{ gridTemplateColumns: cols }}
             >
               <span className="line-clamp-2 min-w-0 break-words font-medium leading-tight" title={labelOf(r)}>

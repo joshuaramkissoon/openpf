@@ -3,6 +3,7 @@ import { useId } from 'react'
 import { cn } from '@/lib/utils'
 import { useBlur, useFmt, useVizEnv, useWidth } from '../shared'
 import type { HeroBlock, KpisBlock, MeterBlock, VizFormat } from '../types'
+import { isStepSeries } from './step'
 
 const SIGNED = new Set<VizFormat | undefined>(['signedMoney', 'signedPct'])
 
@@ -12,15 +13,17 @@ function tone(v: number | null, format?: VizFormat) {
 }
 
 /** De-emphasised area sparkline; the end point carries the accent. */
-export function Sparkline({ values, height = 44, signed = false }: { values: number[]; height?: number; signed?: boolean }) {
+export function Sparkline({ values, height = 44, signed = false, zero = false }: { values: number[]; height?: number; signed?: boolean; zero?: boolean }) {
   const gid = useId().replace(/:/g, '')
   const [ref, width] = useWidth<HTMLDivElement>()
   if (values.length < 2) return <div ref={ref} />
-  const lo = Math.min(...values)
+  // Amounts sit on a zero baseline: a small step must not read as a cliff.
+  const lo = zero ? Math.min(0, ...values) : Math.min(...values)
   const hi = Math.max(...values)
   const X = (i: number) => 2 + (i / (values.length - 1)) * (width - 6)
   const Y = (v: number) => height - 3 - ((v - lo) / (hi - lo || 1)) * (height - 8)
-  const d = values.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')
+  const step = isStepSeries(values)
+  const d = values.map((v, i) => (i ? (step ? `H${X(i).toFixed(1)} V${Y(v).toFixed(1)}` : `L${X(i).toFixed(1)},${Y(v).toFixed(1)}`) : `M${X(i).toFixed(1)},${Y(v).toFixed(1)}`)).join(' ')
   const up = values[values.length - 1] >= values[0]
   // Direction colour only where up/down means good/bad; otherwise the accent.
   const color = signed ? (up ? 'var(--viz-gain)' : 'var(--viz-loss)') : 'var(--viz-accent)'
@@ -69,7 +72,7 @@ export function Hero({ block, value, delta, trend, name }: { block: HeroBlock; v
       ) : null}
       {trend && trend.length > 1 ? (
         <div className={small ? 'mt-2' : 'mt-6'}>
-          <Sparkline values={trend} height={env.size === 'L' ? 150 : small ? 40 : 56} />
+          <Sparkline values={trend} height={env.size === 'L' ? 150 : small ? 40 : 56} zero={!block.format || block.format === 'money' || block.format === 'moneyCompact'} />
         </div>
       ) : null}
     </div>
@@ -156,7 +159,12 @@ export function Kpis({ block, values, stacked = false }: { block: KpisBlock; val
     return <div className={cn('grid gap-x-4 gap-y-3', items.length >= 2 ? 'grid-cols-2' : 'grid-cols-1')}>{items.map((it, i) => item(it, i, ''))}</div>
   }
   if (stacked) {
-    return <div className="flex flex-col divide-y divide-border/70">{items.map((it, i) => item(it, i, 'py-4 first:pt-0 last:pb-0'))}</div>
+    // Beside the hero on desktop: a stacked column. Below it on phones: a compact two-up grid.
+    return (
+      <div className="grid grid-cols-2 gap-x-6 gap-y-5 lg:flex lg:flex-col lg:gap-0 lg:divide-y lg:divide-border/70">
+        {items.map((it, i) => item(it, i, 'lg:py-4 lg:first:pt-0 lg:last:pb-0'))}
+      </div>
+    )
   }
   const cols = items.length >= 4 ? 'sm:grid-cols-4' : items.length === 3 ? 'sm:grid-cols-3' : items.length === 2 ? 'sm:grid-cols-2' : ''
   return <div className={cn('grid grid-cols-2 gap-y-6', cols)}>{items.map((it, i) => item(it, i, cn('pr-4', i > 0 && 'sm:border-l sm:border-border/70 sm:pl-6')))}</div>
