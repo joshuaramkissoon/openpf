@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
-import { approveIntent, executeIntent, getEvents, getIntents, rejectIntent } from '@/api/client'
+import { approveIntent, executeIntent, getEvents, getIntents, rejectIntent, stageIntentTomorrow } from '@/api/client'
 import { toastApiError } from '@/lib/api-error'
 import type { AppConfig, ExecutionEvent, PositionItem, TradeIntent } from '@/types'
 import { accountLabel } from '@/utils/format'
@@ -134,7 +134,44 @@ export function useProposals({ paper, onExecuted }: { paper: boolean; onExecuted
     [paper, onExecuted, reload],
   )
 
-  return { intents, events, pending, history, loaded, working, reload, approve, reject, execute, approveAndExecute }
+  /** A held-back ask → a proposal for tomorrow's limit window (same id). */
+  const stageTomorrow = useCallback(
+    async (intent: TradeIntent): Promise<boolean> => {
+      setWorking(intent.id)
+      try {
+        await stageIntentTomorrow(intent.id)
+        toast.success(`${intent.symbol} proposed for tomorrow`, {
+          description: 'It counts against tomorrow\'s daily limit and can be approved from tomorrow.',
+        })
+        return true
+      } catch (err) {
+        toastApiError(err, 'Could not stage it for tomorrow')
+        return false
+      } finally {
+        setWorking(null)
+        await reload()
+      }
+    },
+    [reload],
+  )
+
+  /** Drop a held-back ask (nothing was proposed, so nothing to reject). */
+  const dropHeld = useCallback(
+    async (id: string) => {
+      setWorking(id)
+      try {
+        await rejectIntent(id, 'dropped held-back ask')
+      } catch (err) {
+        toastApiError(err, 'Could not drop it')
+      } finally {
+        setWorking(null)
+        await reload()
+      }
+    },
+    [reload],
+  )
+
+  return { intents, events, pending, history, loaded, working, reload, approve, reject, execute, approveAndExecute, stageTomorrow, dropHeld }
 }
 
 export type ProposalsState = ReturnType<typeof useProposals>

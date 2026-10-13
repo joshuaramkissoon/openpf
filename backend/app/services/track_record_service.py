@@ -277,7 +277,8 @@ def mark_outcomes(
     today = today or date.today()
     cfg = get_config(db)
     benchmark = str(cfg.get("benchmark") or "SPY").upper()
-    q = select(TradeIntent).order_by(TradeIntent.created_at)
+    # Held-back asks were never proposals (a limit stopped them).
+    q = select(TradeIntent).where(TradeIntent.status != "held").order_by(TradeIntent.created_at)
     if not backfill:
         q = q.where(TradeIntent.created_at >= datetime.combine(today - timedelta(days=_TRACK_WINDOW_DAYS), datetime.min.time()))
     intents = list(db.execute(q).scalars().all())

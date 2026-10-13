@@ -42,7 +42,7 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import case, desc, select, update
+from sqlalchemy import case, desc, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.entities import (
@@ -567,7 +567,12 @@ def process_pending(db: Session) -> list[dict[str, Any]]:
         return []
     since = _now() - _MAX_PROPOSAL_AGE
     ids = db.execute(
-        select(TradeIntent.id).where(TradeIntent.status == "proposed", TradeIntent.created_at >= since)
+        select(TradeIntent.id).where(
+            TradeIntent.status == "proposed",
+            TradeIntent.created_at >= since,
+            # Staged for a later day: not placeable yet, so not a candidate yet.
+            or_(TradeIntent.not_before.is_(None), TradeIntent.not_before <= _now().date()),
+        )
         .order_by(TradeIntent.created_at)
     ).scalars().all()
     out = []

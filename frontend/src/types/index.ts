@@ -332,6 +332,30 @@ export interface TradeIntent {
   failure_reason?: string | null
   /** Crypto proposals: exchange + cost estimates shown on the card. */
   crypto?: CryptoEstimate | null
+  /** Staged for a later day's limit window (UTC date): can't be placed before it. */
+  not_before?: string | null
+  /** status "held": the part of an ask a notional limit stopped. Kept (staged: true) once re-proposed. */
+  held?: HeldInfo | null
+}
+
+/** One notional limit that stopped (part of) an ask. */
+export interface LimitBlock {
+  rail: 'max_single_order_notional' | 'max_daily_notional'
+  label: string
+  limit_gbp: number
+  requested_gbp: number
+  used_gbp: number | null
+  remaining_gbp: number
+  for_day?: string
+  message: string
+}
+
+export interface HeldInfo {
+  blocked: LimitBlock[]
+  reason: string
+  requested_gbp: number
+  for_day?: string
+  staged?: boolean
 }
 
 export interface CryptoEstimate {

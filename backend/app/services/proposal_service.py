@@ -9,6 +9,7 @@ broker: a human approves the intent and ``execution_service.execute_intent``
 from __future__ import annotations
 
 import math
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -16,7 +17,12 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import TradeIntent
 from app.services.config_store import ConfigStore
-from app.services.execution_service import _daily_executed_notional, expire_stale_intents, rail_violations
+from app.services.execution_service import (
+    daily_notional_used,
+    expire_stale_intents,
+    rail_violations,
+    utc_today,
+)
 
 _SIDES = {"buy", "sell"}
 _ORDER_TYPES = {"market", "limit", "stop", "stop_limit"}
@@ -24,6 +30,13 @@ _ACCOUNTS = {"invest", "stocks_isa"}
 # Cash can be stale between snapshots, so a shortfall is reported but doesn't
 # block the proposal (execute_intent re-checks it against the latest snapshot).
 _SOFT_VIOLATIONS = ("risk-guard: insufficient available cash",)
+# The two notional limits. An ask over them can be split: the part that fits is
+# proposed and the rest is held back for the user (never loosened by Archie).
+_PER_ORDER = "risk-guard: order exceeds max single-order notional"
+_DAILY = "risk-guard: order exceeds max daily notional"
+_LIMIT_VIOLATIONS = (_PER_ORDER, _DAILY)
+# Below this, the part that fits isn't worth an order of its own: hold it all.
+_MIN_SPLIT_GBP = 10.0
 
 
 class ProposalError(ValueError):
@@ -157,6 +170,64 @@ def _coerce_positive(value: Any, name: str) -> float | None:
     return out
 
 
+def _day_label(day: date) -> str:
+    today = utc_today()
+    if day <= today:
+        return "today's"
+    return "tomorrow's" if day == today + timedelta(days=1) else f"{day:%a %-d %b}'s"
+
+
+def _gbp(v: float) -> str:
+    return f"£{v:,.0f}"
+
+
+def limit_blocks(risk: dict[str, Any], violations: list[str], requested: float, used: float, day: date) -> list[dict[str, Any]]:
+    """Structured form of the notional-limit violations, for the agent and the
+    chat's held-back cards: which limit, its size, what's used, what's left."""
+    out: list[dict[str, Any]] = []
+    single = float(risk["max_single_order_notional"])
+    daily = float(risk["max_daily_notional"])
+    if _PER_ORDER in violations:
+        out.append({
+            "rail": "max_single_order_notional", "label": "per-order limit", "limit_gbp": single,
+            "requested_gbp": round(requested, 2), "used_gbp": None, "remaining_gbp": single,
+            "message": f"{_gbp(requested)} is over your {_gbp(single)} per-order limit",
+        })
+    if _DAILY in violations:
+        remaining = max(0.0, daily - used)
+        out.append({
+            "rail": "max_daily_notional", "label": "daily limit", "limit_gbp": daily,
+            "requested_gbp": round(requested, 2), "used_gbp": round(used, 2), "remaining_gbp": round(remaining, 2),
+            "for_day": day.isoformat(),
+            "message": (f"{_day_label(day)} {_gbp(daily)} limit is used" if remaining < 1
+                        else f"over {_day_label(day)} {_gbp(daily)} limit ({_gbp(remaining)} left)"),
+        })
+    return out
+
+
+def _is_crypto(account_kind: str, symbol: str | None, instrument_code: str | None) -> bool:
+    from app.services import crypto_service
+
+    return account_kind == "crypto" or (not account_kind and crypto_service.is_crypto_symbol(symbol or instrument_code))
+
+
+def _store(db: Session, intent: TradeIntent, into: TradeIntent | None) -> TradeIntent:
+    """Persist a new intent, or (staging a held-back ask) turn the held row into
+    it so the card that showed the held ask now shows the proposal."""
+    if into is None:
+        db.add(intent)
+    else:
+        for col in ("status", "broker_mode", "symbol", "instrument_code", "side", "order_type", "quantity",
+                    "estimated_notional", "limit_price", "stop_price", "rationale", "meta", "not_before"):
+            setattr(into, col, getattr(intent, col))
+        into.created_at = datetime.utcnow()
+        into.failure_reason = None
+        intent = into
+    db.commit()
+    db.refresh(intent)
+    return intent
+
+
 def propose_trade(
     db: Session,
     *,
@@ -173,24 +244,185 @@ def propose_trade(
     play_id: str | None = None,
     source: str = "agent",
     category: str | None = None,
+    not_before: date | None = None,
+    hold_back: bool = False,
 ) -> dict[str, Any]:
     """Validate, size and record a ``proposed`` TradeIntent. Never executes.
 
     Returns ``{"ok": True, "intent": {...}, "warnings": [...], "caps": {...}}`` or
     ``{"ok": False, "error"|"violations": ..., "caps": {...}}`` — hard rail
     violations (single-order / daily notional caps, duplicates) are returned
-    without creating an intent so the agent can resize and retry.
+    without creating an intent so the agent can resize and retry. Notional-limit
+    violations also come back structured under ``blocked``.
+
+    ``not_before``: stage it for a later day's limit window (it can't be placed
+    before then, and counts against that day's daily cap).
+
+    ``hold_back``: when only the notional limits stand in the way, propose the
+    part that fits (counting today's open proposals against the daily cap) and
+    record the rest as a ``held`` ask under ``held_back`` — the chat shows it as
+    a card the user can stage for tomorrow or take to their limits. The limits
+    themselves are never changed.
     """
+    day = not_before or utc_today()
+    used = daily_notional_used(db, day, include_pending=hold_back)
+    args = dict(
+        side=side, account_kind=account_kind, rationale=rationale, symbol=symbol, instrument_code=instrument_code,
+        order_type=order_type, limit_price=limit_price, stop_price=stop_price, play_id=play_id, source=source,
+        category=category, not_before=not_before,
+    )
+    res = _propose_one(db, quantity=quantity, notional_gbp=notional_gbp, daily_used=used, **args)
+    violations = res.get("violations") or []
+    if not hold_back or res.get("ok") or not violations or any(v not in _LIMIT_VIOLATIONS for v in violations):
+        return res
+
+    risk = ConfigStore(db).get_risk()
+    sizing = res["sizing"]
+    requested = float(sizing["estimated_notional_gbp"])
+    room = [float(risk["max_single_order_notional"]), float(risk["max_daily_notional"]) - used]
+    fits = math.floor(max(0.0, min(room)))
+    now: dict[str, Any] | None = None
+    if fits >= _MIN_SPLIT_GBP and fits < requested:
+        now = _propose_one(db, quantity=None, notional_gbp=float(fits), daily_used=used, **args)
+        if not now.get("ok"):
+            return res  # something else stops even the smaller order: report the original
+    proposed_gbp = float(now["intent"]["estimated_notional_gbp"]) if now else 0.0
+    held_gbp = round(requested - proposed_gbp, 2)
+    blocked = res["blocked"]
+    reason = "; ".join(b["message"] for b in blocked)
+    held = _hold(db, args, sizing, held_gbp, requested=requested, blocked=blocked, reason=reason, day=day)
+    held_info = {
+        "id": held.id, "symbol": held.symbol, "side": held.side, "amount_gbp": held_gbp,
+        "reason": reason, "blocked": blocked,
+    }
+    if now:
+        message = (f"{reason}. Proposed {_gbp(proposed_gbp)} now; the other {_gbp(held_gbp)} is held back. "
+                   "The held-back card lets the user stage it for tomorrow or change their limits — "
+                   "say which limit cut it in one line; don't re-propose it or suggest loosening limits.")
+        return {**now, "held_back": held_info, "blocked": blocked,
+                "message": message, "requested_gbp": round(requested, 2)}
+    message = (f"Nothing proposed: {reason}. The {_gbp(held_gbp)} is held back on a card the user can stage for "
+               "tomorrow or take to their limits — say which limit cut it in one line; don't loosen limits.")
+    return {"ok": False, "violations": violations, "blocked": blocked, "sizing": sizing, "caps": res["caps"],
+            "held_back": held_info, "message": message, "requested_gbp": round(requested, 2)}
+
+
+def _hold(
+    db: Session, args: dict[str, Any], sizing: dict[str, Any], amount: float, *, requested: float,
+    blocked: list[dict[str, Any]], reason: str, day: date,
+) -> TradeIntent:
+    """Record the part of an ask a limit stopped as a ``held`` intent. It can't be
+    approved or placed; staging it (``stage_held``) re-proposes it for a later day."""
+    crypto = _is_crypto((args.get("account_kind") or "").strip().lower(), args.get("symbol"), args.get("instrument_code"))
+    account = "crypto" if crypto else (args.get("account_kind") or "").strip().lower()
+    unit = float(sizing["estimated_notional_gbp"]) / float(sizing["quantity"])
+    scale = 1e8 if crypto else 1e6
+    qty = math.floor((amount / unit) * scale) / scale if unit > 0 else 0.0
+    request = {k: v for k, v in args.items() if k not in {"rationale", "not_before"} and v not in (None, "")}
+    meta: dict[str, Any] = {
+        "source": (args.get("source") or "agent")[:64],
+        "account_kind": account,
+        "reference_price": sizing.get("reference_price"),
+        "currency": sizing.get("currency"),
+        "price_gbp": round(unit, 6),
+        "instrument_name": sizing.get("name") or "",
+        "held": {"blocked": blocked, "reason": reason, "requested_gbp": round(requested, 2), "for_day": day.isoformat()},
+        "request": request,
+    }
+    play_id = args.get("play_id")
+    if play_id and str(play_id).strip().lower() == "core":
+        meta["owner"] = "core"
+    elif play_id:
+        from app.models.entities import Play
+
+        play = db.get(Play, str(play_id).strip())
+        if play is not None:
+            meta["play_id"] = play.id
+            meta["play_title"] = play.title
+    intent = TradeIntent(
+        status="held",
+        broker_mode=str(ConfigStore(db).get_broker().get("broker_mode", "paper")),
+        symbol=str(sizing["symbol"])[:32],
+        instrument_code=str(sizing["instrument_code"])[:64],
+        side=(args.get("side") or "").strip().lower(),
+        order_type=(args.get("order_type") or "market").strip().lower(),
+        quantity=qty,
+        estimated_notional=round(amount, 2),
+        limit_price=args.get("limit_price"),
+        stop_price=args.get("stop_price"),
+        rationale=(args.get("rationale") or "")[:8000],
+        meta=meta,
+    )
+    return _store(db, intent, None)
+
+
+def stage_held(db: Session, intent_id: str, day: date | None = None) -> dict[str, Any]:
+    """Re-propose a held-back ask for a later day's limit window (tomorrow by
+    default). The held row becomes the proposal, dated ``not_before`` that day;
+    every rail is checked for that day as usual. Limits are never changed."""
+    intent = db.get(TradeIntent, intent_id)
+    if intent is None:
+        return {"ok": False, "error": "not found"}
+    if intent.status != "held":
+        return {"ok": False, "error": f"this ask is already {intent.status}"}
+    day = day or utc_today() + timedelta(days=1)
+    if day <= utc_today():
+        return {"ok": False, "error": "a held-back ask can only be staged for a later day"}
+    meta = intent.meta or {}
+    request = dict(meta.get("request") or {})
+    request.pop("hold_back", None)
+    res = _propose_one(
+        db,
+        **{**request, "rationale": intent.rationale},
+        quantity=None,
+        notional_gbp=float(intent.estimated_notional),
+        not_before=day,
+        daily_used=daily_notional_used(db, day),
+        into=intent,
+        held_from=meta.get("held"),
+    )
+    if not res.get("ok") and res.get("blocked"):
+        res["error"] = "; ".join(b["message"] for b in res["blocked"])
+    return res
+
+
+def _propose_one(
+    db: Session,
+    *,
+    side: str,
+    account_kind: str,
+    rationale: str,
+    symbol: str | None = None,
+    instrument_code: str | None = None,
+    quantity: float | None = None,
+    notional_gbp: float | None = None,
+    order_type: str = "market",
+    limit_price: float | None = None,
+    stop_price: float | None = None,
+    play_id: str | None = None,
+    source: str = "agent",
+    category: str | None = None,
+    not_before: date | None = None,
+    daily_used: float | None = None,
+    into: TradeIntent | None = None,
+    held_from: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     side = (side or "").strip().lower()
     order_type = (order_type or "market").strip().lower()
     account_kind = (account_kind or "").strip().lower()
     rationale = (rationale or "").strip()
     risk = ConfigStore(db).get_risk()
+    day = not_before or utc_today()
+    if daily_used is None:
+        daily_used = daily_notional_used(db, day)
     caps = {
         "max_single_order_notional_gbp": float(risk["max_single_order_notional"]),
         "max_daily_notional_gbp": float(risk["max_daily_notional"]),
-        "executed_today_gbp": round(_daily_executed_notional(db), 2),
+        "daily_used_gbp": round(daily_used, 2),
+        "for_day": day.isoformat(),
     }
+    if not_before is not None and not_before < utc_today():
+        return {"ok": False, "error": "not_before can't be in the past", "caps": caps}
 
     def _fail(message: str) -> dict[str, Any]:
         return {"ok": False, "error": message, "caps": caps}
@@ -202,7 +434,7 @@ def propose_trade(
     # Crypto routes to the connected exchange (crypto_service); same rails + cap.
     from app.services import crypto_service
 
-    if account_kind == "crypto" or (not account_kind and crypto_service.is_crypto_symbol(symbol or instrument_code)):
+    if _is_crypto(account_kind, symbol, instrument_code):
         if not rationale:
             return _fail("rationale is required — say why, and what would invalidate the idea")
         try:
@@ -214,6 +446,7 @@ def propose_trade(
         return crypto_service.propose_crypto_trade(
             db, side=side, rationale=rationale, symbol=symbol, instrument_code=instrument_code, quantity=qty_c,
             notional_gbp=notional_c, order_type=order_type, play_id=play_id, source=source, caps=caps, risk=risk,
+            not_before=not_before, daily_used=daily_used, into=into, held_from=held_from,
         )
     if account_kind in _ACCOUNTS and (hint := crypto_service.wrong_account_hint(symbol, instrument_code)):
         return _fail(hint)
@@ -286,6 +519,8 @@ def propose_trade(
         risk=risk,
         account_kind=account_kind,
         instrument_code=str(instrument["instrument_code"]),
+        not_before=not_before,
+        daily_used=daily_used,
     )
     hard = [v for v in violations if v not in _SOFT_VIOLATIONS]
     warnings.extend(v for v in violations if v in _SOFT_VIOLATIONS)
@@ -296,9 +531,11 @@ def propose_trade(
         "reference_price": price,
         "currency": currency,
         "estimated_notional_gbp": estimated_notional,
+        "name": instrument.get("name") or "",
     }
     if hard:
-        return {"ok": False, "violations": hard, "sizing": sizing, "caps": caps}
+        return {"ok": False, "violations": hard, "sizing": sizing, "caps": caps,
+                "blocked": limit_blocks(risk, hard, estimated_notional, daily_used, day)}
 
     # "rebalance" is reserved for the deterministic rebalancer (a standing
     # rebalance permission keys off it); proposals can't claim it.
@@ -336,6 +573,8 @@ def propose_trade(
     )
     if warnings:
         meta["warnings"] = warnings
+    if held_from:
+        meta["held"] = {**held_from, "staged": True}
 
     broker = ConfigStore(db).get_broker()
     intent = TradeIntent(
@@ -351,10 +590,9 @@ def propose_trade(
         stop_price=stop,
         rationale=rationale[:8000],
         meta=meta,
+        not_before=not_before,
     )
-    db.add(intent)
-    db.commit()
-    db.refresh(intent)
+    intent = _store(db, intent, into)
     return {
         "ok": True,
         "intent": serialize_intent(intent),
@@ -387,6 +625,8 @@ def serialize_intent(intent: TradeIntent) -> dict[str, Any]:
         "approved_by": getattr(intent, "approved_by", None),
         "rationale": intent.rationale,
         "failure_reason": intent.failure_reason,
+        "not_before": intent.not_before.isoformat() if intent.not_before else None,
+        "held": meta.get("held"),
     }
 
 

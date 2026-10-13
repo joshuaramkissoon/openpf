@@ -309,6 +309,10 @@ def proposal_ids_from_tool_result(tool_name: str, text: str) -> list[str]:
     for created in payload.get("created") or []:
         if isinstance(created, dict) and isinstance(created.get("intent_id"), str):
             ids.append(created["intent_id"])
+    # The part of an ask a limit stopped: shown as a "held back" card beside it.
+    held = payload.get("held_back")
+    if isinstance(held, dict) and isinstance(held.get("id"), str):
+        ids.append(held["id"])
     return ids
 
 
