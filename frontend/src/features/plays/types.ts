@@ -1,6 +1,6 @@
 export type PlayStatus = 'draft' | 'active' | 'paused' | 'closed'
 export type Conviction = 'low' | 'medium' | 'high'
-export type PlayAccount = 'invest' | 'stocks_isa'
+export type PlayAccount = 'invest' | 'stocks_isa' | 'crypto'
 export type LegRole = 'core' | 'satellite' | 'hedge'
 export type Verdict = 'on_track' | 'watch' | 'broken'
 export type KillState = 'intact' | 'near' | 'tripped' | 'unknown' | 'manual'

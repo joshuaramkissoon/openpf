@@ -36,6 +36,7 @@ import { RecipesPage } from "@/features/recipes"
 import { SettingsPage } from "@/features/settings"
 import { ViewsPage } from "@/features/views"
 import { AppActionsProvider, type AppActions } from "@/lib/app-actions"
+import { useCryptoStatus } from "@/lib/crypto-status"
 import { DisplayPrefsProvider } from "@/lib/display-prefs"
 import { PrivacyProvider, loadPrivacyMode, nextPrivacyMode, savePrivacyMode, type PrivacyMode } from "@/lib/privacy"
 import { navigate, useRoute, type Route } from "@/lib/router"
@@ -94,6 +95,7 @@ function useNavCollapsed() {
 
 export function AppShell() {
   const route = useRoute()
+  useCryptoStatus() // loads the crypto exchange name used by account labels/chips
   const section = route.segments[0]
 
   // Normalise unknown / bare routes once so deep links stay canonical.

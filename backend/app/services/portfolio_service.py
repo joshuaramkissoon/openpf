@@ -22,7 +22,7 @@ from app.services.fx import get_fx_rate
 from app.services.leveraged_market import resolve_yfinance_ticker
 from app.services.t212_client import T212AuthError, T212Error, T212RateLimitError, build_t212_client, normalize_instrument_code
 
-AccountViewKind = Literal["all", "invest", "stocks_isa"]
+AccountViewKind = Literal["all", "invest", "stocks_isa", "crypto"]
 settings = get_settings()
 
 _refresh_lock = Lock()
@@ -469,6 +469,19 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
                 )
                 source_parts.append("mock-fallback")
 
+        # Crypto exchange (if a verified trade-only key is connected): same
+        # snapshot timestamp, so totals and the equity curve include it.
+        try:
+            from app.services.crypto_service import snapshot_rows as _crypto_rows
+
+            c_accounts, c_positions, c_source = _crypto_rows(db, config, fetched_at)
+            account_rows.extend(c_accounts)
+            position_rows.extend(c_positions)
+            if c_source:
+                source_parts.append(c_source)
+        except Exception:  # noqa: BLE001 — crypto never breaks the T212 refresh
+            source_parts.append("error:crypto:Unexpected")
+
         db.add_all(account_rows)
         db.add_all(position_rows)
         db.commit()
@@ -740,6 +753,8 @@ def get_portfolio_snapshot(
         for p in sorted(positions, key=lambda row: row.value, reverse=True)[:signal_budget]
         if p.instrument_code
     }
+    # Crypto always gets its volatility: it dominates the book's risk per £.
+    signal_targets |= {p.instrument_code for p in positions if p.account_kind == "crypto" and p.instrument_code}
     signal_cache: dict[str, Any] = {}
     meta_map = _instrument_meta_map(db)
 
@@ -785,7 +800,12 @@ def get_portfolio_snapshot(
         converted_current_price = _to_target(p.current_price, p.currency)
         weight = (converted_value / total_value) if total_value else 0.0
 
-        resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
+        if p.account_kind == "crypto":
+            from app.services.crypto_service import position_meta
+
+            resolved = position_meta(p.ticker, p.instrument_code, p.currency)
+        else:
+            resolved = _resolve_meta(p.instrument_code, p.ticker, p.currency)
 
         # Technicals must run on the resolved yfinance ticker (e.g. NUCG.L),
         # not the raw upper-cased T212 code — otherwise London/Xetra/Euronext
@@ -830,6 +850,7 @@ def get_portfolio_snapshot(
         "top_position_weight": max((row["weight"] for row in enriched), default=0.0),
         "estimated_beta": estimate_portfolio_beta(enriched, max_assets=8),
         "estimated_volatility": estimated_portfolio_volatility(enriched),
+        "crypto_weight": sum(row["weight"] for row in enriched if row["account_kind"] == "crypto"),
     }
 
     # When building LLM context (strip_prices=True), drop price-derived fields:

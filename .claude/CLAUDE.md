@@ -29,6 +29,7 @@
   `scheduler` (cron tasks), `trading212` (read-only account data), `proposals` (`propose_trade`),
   `recipes` (Archie-written routines: skills + triggers, versioned; see `recipes_service.py`),
   `smart_money` (insider Form 4 / 13F / Congress disclosures + trend detector; `app/services/smart_money/`).
+  `crypto` (read-only, keyless view of the connected crypto exchange + the Starter crypto play draft).
   All servers are declared once in `backend/app/services/mcp_registry.py`.
 - **Subagents**: researcher (Sonnet — web + marketdata + fundamentals), quant (Opus — Bash +
   `app.quant` + marketdata + forecast). There is no execution subagent.
@@ -41,6 +42,10 @@
   `auto_execute_enabled` flag.
 - **Track record**: `track_record_service` marks every proposal at 1d/1w/1m/3m/close vs a benchmark
   (`proposal_outcomes`); `/api/track-record`, MCP `get_track_record`.
+- **Crypto**: exchange-agnostic via CCXT (`crypto_client.py`, `crypto_service.py`); account_kind
+  `crypto` in snapshots/book/intents. Keys must be trade-only — verified on connect, refused if they
+  can withdraw — and never reach an agent process. `broker_router.py` is the one routing point in
+  `execute_intent`; the crypto cap is a rail in `rail_violations`.
 - **Leveraged engine**: regime-aware 3x ISA ETP scan/monitor/execute under hard daily rails.
   T212 has **no short selling** — downside is via **INVERSE ETPs (ISA-only)**.
 - **Autonomous loop**: scheduled morning cycle, midday/EOD monitors, weekly review, daily alpha goal.
@@ -53,4 +58,4 @@
 ## User Context
 - The owner's name comes from `OPENPF_USER_NAME`; personal facts live in Archie's
   gitignored memory (`.claude/runtime/memory/user-profile.md`), never in tracked files.
-- Accounts: Trading 212 Invest + Stocks ISA
+- Accounts: Trading 212 Invest + Stocks ISA, optionally a crypto exchange (Kraken / Coinbase / Binance)

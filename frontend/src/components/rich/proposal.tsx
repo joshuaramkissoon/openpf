@@ -20,7 +20,7 @@ import { proposalPrompt } from '@/features/home/decisions-card'
 import { useAppActions } from '@/lib/app-actions'
 import { privacyBlurClass, usePrivacyMode } from '@/lib/privacy'
 import { cn } from '@/lib/utils'
-import { formatMoney } from '@/utils/format'
+import { accountLabel, formatMoney } from '@/utils/format'
 import type { TradeIntent } from '@/types'
 
 /**
@@ -92,7 +92,7 @@ function useIntents(ids: string[]): { byId: Map<string, TradeIntent>; missing: S
 }
 
 function accountName(kind?: string | null) {
-  return kind === 'stocks_isa' ? 'ISA' : kind === 'invest' ? 'Invest' : null
+  return kind === 'stocks_isa' ? 'ISA' : kind === 'invest' ? 'Invest' : kind === 'crypto' ? accountLabel('crypto') : null
 }
 
 const RECEIPT: Record<string, { label: (i: TradeIntent) => string; icon: typeof Check; tone: string }> = {
@@ -177,7 +177,7 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
     pending.map((i) => [i.id, decisions ? railCheck(i, decisions.config, decisions.positions, decisions.total) : { ok: true, label: '' }]),
   )
   const approvable = pending.filter(
-    (i) => i.status !== 'executing' && rails.get(i.id)?.ok && (i.account_kind === 'invest' || i.account_kind === 'stocks_isa'),
+    (i) => i.status !== 'executing' && rails.get(i.id)?.ok && (i.account_kind === 'invest' || i.account_kind === 'stocks_isa' || i.account_kind === 'crypto'),
   )
   const live = decisions?.brokerMode === 'live'
 

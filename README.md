@@ -51,13 +51,52 @@ OpenPF is built so that a confused or prompt-injected agent cannot move your mon
 - **It only acts on its own where you've granted a standing permission.** In Settings → Permissions you can let Archie place, say, the next tranche of a play you already approved, rebalance trades back into your bands, or small idle-cash buys into approved plays. Each permission has a per-trade cap, a daily cap, an optional expiry and an off switch; one switch pauses them all. In live mode a permission only applies once you've confirmed it while live, and editing it asks again. Anything new, outside a play, over a cap or in another category still waits for you. Archie can suggest a permission when his track record earns it, but no agent tool can create or widen one. Every trade placed this way shows in Activity as "auto · <permission>", with a one-tap revoke.
 - **One execution gate, enforced in code.** Orders reach the broker only through `execute_intent`, and only for proposals you approved, by hand or through a standing permission. It re-checks every rail: per-order and daily notional caps, duplicate window and cash.
 - **An honest track record.** Every proposal is tracked forward from its price when proposed, at 1 day, 1 week, 1 month and 3 months against a benchmark (SPY by default), including the ones you rejected or let expire. Activity → Track record shows the hit rate by category with the sample size, and Archie quotes the same numbers.
-- **Execution keys never enter an agent process.** Trading 212 lets you create separate read and trade keys. Only the API server holds the trade key. Agent hooks also block calls to the app's own API and to trading212.com.
+- **Execution keys never enter an agent process.** Trading 212 lets you create separate read and trade keys. Only the API server holds the trade key. Crypto exchange keys must be trade-only (keys that can withdraw are refused on connect) and are never given to any agent process. Agent hooks also block calls to the app's own API, to trading212.com and to the crypto exchanges' APIs.
 - **Safe defaults.**
   - New installs run in paper mode on T212's demo environment.
   - The server binds to localhost.
   - `OPENPF_API_TOKEN` locks the API when you expose it on your LAN or Tailscale.
   - Telegram ignores everyone not on your allowlist.
 - **Leveraged desk (labs, off by default):** an optional regime-aware 3× ETP engine. It only places orders itself if you switch on auto-execute, and always within its own hard daily rails. Agents can tighten those rails, never loosen them.
+
+## Crypto (Kraken, Coinbase Advanced Trade, Binance)
+
+Crypto sits in the same book as your shares: it counts toward the portfolio total, Home's book-by-play, holdings, equity history and risk metrics, all in GBP. Trades go through the same approval gate. OpenPF talks to exchanges through [CCXT](https://github.com/ccxt/ccxt), so the exchange is a setting (Settings → Crypto):
+
+| Exchange | Market orders in | Entry-tier fee (maker / taker) | UK status |
+|---|---|---|---|
+| **Kraken** (Kraken Pro) | GBP | 0.25% / 0.40% | FCA-registered for cryptoasset activities (Payward Ltd) |
+| **Coinbase** Advanced Trade | GBP | 0.60% / 1.20% | FCA-registered (CB Payments Ltd). Buying in the simple Coinbase app adds a spread and a separate fee on top |
+| **Binance** Spot | USDC | 0.10% / 0.10% | Not onboarding new UK customers since October 2023 and not FCA-authorised. Listed for users elsewhere |
+
+Fees fall with volume. Each crypto proposal shows its estimated fee and slippage before you approve it.
+
+**Keys must be trade-only, never withdraw.** A key that can only trade can't move coins off the exchange, even if it leaked. On connect, OpenPF checks the key's permissions with the exchange and **refuses any key that can withdraw or transfer**:
+
+- **Coinbase:** reads the key's permissions (`/api/v3/brokerage/key_permissions`) and refuses `can_transfer`.
+- **Binance:** reads the key's restrictions (`/sapi/v1/account/apiRestrictions`) and refuses withdrawals, internal transfer, universal transfer, margin and futures.
+- **Kraken:** has no "what can this key do" endpoint, so OpenPF calls the withdrawal-*info* endpoint (a read that never moves money) with a made-up address name. Kraken answers "Permission denied" only when the key has no withdraw permission; any other answer means it does, and the key is refused. If the check can't run, the key is refused.
+
+The verified key is stored like the Trading 212 keys: in the app's database, shown back only as its last four characters, never given to Archie or any MCP process. If the key changes (DB or `.env`), it's unused until it's verified again. Archie's `crypto` tools are read-only and keyless: balances come from the app's stored snapshots, prices from public market data. Agent hooks also block the exchanges' API hosts.
+
+**Connect Kraken:**
+
+1. Kraken Pro → Settings → API → Create API key.
+2. Funds permissions: tick **Query**. Leave **Deposit** and **Withdraw** unticked.
+3. Orders and trades: tick **Query open orders & trades**, **Query closed orders & trades** and **Create & modify orders**. Leave **Cancel & close orders**, **Export data**, Earn and WebSocket permissions unticked. **Query ledger entries** is optional (lets OpenPF read deposits so they aren't counted as gains).
+4. Optionally restrict the key to your machine's IP address.
+5. In OpenPF: Settings → Crypto → Kraken, paste the key and the private key (secret) → **Verify & connect**.
+6. Deposit GBP on Kraken. Your crypto cap (Settings → Risk rails, default **5% of the whole book**) limits how much crypto any proposal can add.
+
+**The Starter crypto play** (Plays → New → "Or start from a template", or ask Archie "I want to get into crypto but I'm nervous") drafts a small plan: 1–3% of the book from conviction, never above the cap, bought in equal weekly amounts over 8–12 weeks (Bitcoin, plus Ether at 20% if you want). It comes with kill rules (pause new buys if the sleeve falls 40% from its peak; stop at the cap) and a plain-English explanation of volatility, fees, custody and tax. Each weekly buy is an ordinary play-tranche proposal you approve.
+
+**UK facts** (not advice):
+
+- Crypto held on an exchange is **not protected by the FSCS**. If the exchange fails or is hacked, you may not get it back.
+- Selling, swapping or spending crypto is a **disposal for Capital Gains Tax**. Gains above the annual exempt amount are taxable, and you need records of every buy and sell.
+- UK retail investors can also get crypto exposure through **crypto exchange-traded notes (ETNs)** at a regular broker. That's a different product with its own costs and risks.
+
+In sandbox mode the crypto account is a built-in mock exchange with fake keys and real prices (offline fixtures as a fallback). Real exchange keys are ignored, and the real exchange client refuses to start or send a request.
 
 ## Connect your Trading 212 account
 
@@ -89,6 +128,8 @@ Keep it running on an always-on machine with `./scripts/serve.sh` (see `docs/run
 | `TOGETHER_API_KEY` | Fast view building on Together AI (otherwise views use Claude; with neither, the closest preset) |
 | `VIEWS_SPEC_PROVIDER` / `VIEWS_SPEC_MODEL` | `together` (default) or `anthropic`; Together model id (default `deepseek-ai/DeepSeek-V4.1-Flash`) |
 | `VIEWS_MODEL` / `CLAUDE_PLAYS_MODEL` | Models for the custom-code view fallback and play drafting |
+| `MAX_CRYPTO_PCT_OF_BOOK` | Crypto cap as a fraction of the whole book (default `0.05`); Settings → Risk rails overrides it |
+| `CRYPTO_EXCHANGE` / `CRYPTO_API_KEY` / `CRYPTO_API_SECRET` | Optional. A crypto key from `.env` stays unused until it's verified as trade-only in Settings → Crypto |
 
 ## How it's built
 

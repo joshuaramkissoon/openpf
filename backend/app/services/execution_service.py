@@ -8,6 +8,7 @@ from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.entities import AccountSnapshot, ExecutionEvent, PositionSnapshot, TradeIntent
+from app.services import broker_router
 from app.services.agent_skills_bridge import intent_to_skill_action
 from app.services.config_store import ConfigStore
 from app.services.market_data import MarketDataError, fetch_history
@@ -301,6 +302,11 @@ def rail_violations(
         if held is not None and quantity > held + 1e-6:
             out.append(f"position-guard: selling {quantity:g} but only {held:g} held in {account_kind}")
 
+    if broker_router.is_crypto(account_kind):
+        from app.services.crypto_service import crypto_rail_violations
+
+        out.extend(crypto_rail_violations(db, side=side, estimated_notional=estimated_notional, risk=risk))
+
     return out
 
 
@@ -337,8 +343,8 @@ def execute_intent(
     # the account the intent was proposed for, else invest. No silent invest
     # default once a choice has been made upstream.
     resolved_account = str(account_kind or (intent.meta or {}).get("account_kind") or "invest").strip().lower()
-    if resolved_account not in {"invest", "stocks_isa"}:
-        raise ExecutionError(f"invalid account '{account_kind}': must be 'invest' or 'stocks_isa'")
+    if resolved_account not in broker_router.ACCOUNTS:
+        raise ExecutionError(f"invalid account '{account_kind}': must be 'invest', 'stocks_isa' or 'crypto'")
 
     qty = float(intent.quantity or 0.0)
     notional = float(intent.estimated_notional or 0.0)
@@ -373,7 +379,7 @@ def execute_intent(
 
     from app.core.sandbox import is_sandbox, is_sandbox_url
 
-    if is_sandbox() and mode != "paper":
+    if is_sandbox() and mode != "paper" and not broker_router.is_crypto(resolved_account):
         # Defence in depth: a sandbox instance only ever orders against the mock broker.
         probe = build_t212_client(config, account_kind=resolved_account, purpose="execute")  # type: ignore[arg-type]
         if broker.get("t212_base_env") != "sandbox" or not is_sandbox_url(probe.base_url):
@@ -396,6 +402,8 @@ def execute_intent(
         raise ExecutionError(_status_message(intent, "executed"))
 
     try:
+        if broker_router.is_crypto(resolved_account):
+            return broker_router.execute_crypto(db, intent, mode=mode, log_event=_log_event, error_cls=ExecutionError)
         if mode == "paper":
             fill_price = _paper_fill_price(intent.symbol)
             intent.execution_price = fill_price

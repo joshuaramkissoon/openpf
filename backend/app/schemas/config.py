@@ -17,6 +17,8 @@ class RiskConfig(BaseModel):
     max_daily_notional: float = Field(ge=0, le=_MAX_NOTIONAL)
     max_position_weight: float = Field(ge=0, le=1)
     duplicate_order_window_seconds: int = Field(ge=15, le=86_400)
+    # Max share of the whole book in crypto (0.05 = 5%).
+    max_crypto_pct_of_book: float = Field(default=0.05, ge=0, le=1)
 
 
 class BrokerConfig(BaseModel):

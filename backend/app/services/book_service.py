@@ -70,7 +70,7 @@ def _ticker_matches(pos: dict[str, Any], ticker: str) -> bool:
 
 
 def _account_label(kind: str | None) -> str:
-    return {"stocks_isa": "Stocks ISA", "invest": "Invest"}.get(kind or "", kind or "account")
+    return {"stocks_isa": "Stocks ISA", "invest": "Invest", "crypto": "Crypto"}.get(kind or "", kind or "account")
 
 
 # ── Ownership resolution ─────────────────────────────────────────────────────

@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
-import { formatPercent } from '@/utils/format'
+import { useCryptoStatus } from '@/lib/crypto-status'
+import { formatPercent, accountTag } from '@/utils/format'
 import { ArchieMark, OwnerMenu, Swatch, groupColor, ownerColor, useBook } from './book'
 import { SortHoldingsSheet } from './suggestions'
 import type { Book, BookGroup, Need } from './types'
@@ -203,13 +204,21 @@ function GroupRow({
 
 function HoldingLine({ h }: { h: BookGroup['owned'][number] }) {
   const { openTicker } = useAppActions()
+  useCryptoStatus() // the crypto chip shows the exchange's name once known
   const cost = h.value_gbp - h.ppl_gbp
   return (
     <li className="flex items-center gap-2 rounded-md py-1 pr-2 text-sm">
-      <button type="button" onClick={() => openTicker(h.ticker)} className="w-12 shrink-0 text-left font-mono text-[13px] font-medium hover:underline sm:w-16">
+      <button
+        type="button"
+        onClick={() => openTicker(h.account_kind === 'crypto' ? `${h.ticker}-GBP` : h.ticker)}
+        className="w-12 shrink-0 text-left font-mono text-[13px] font-medium hover:underline sm:w-16"
+      >
         {h.ticker}
       </button>
       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        {h.account_kind === 'crypto' ? (
+          <span className="mr-1.5 rounded border border-border px-1 py-px text-[10px] font-medium tracking-wide">{accountTag('crypto')}</span>
+        ) : null}
         {h.name}
         {h.related_to.length ? <span className="text-muted-foreground/70"> · also {h.related_to.map((r) => r.title).join(', ')}</span> : null}
       </span>

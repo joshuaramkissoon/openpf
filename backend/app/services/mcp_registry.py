@@ -9,6 +9,10 @@ instead of hand-wiring each server, so the safety invariants hold everywhere:
   orders go through the approval-gated ``execution_service.execute_intent``.
 * No subprocess ever receives T212 execution (write) keys or the app's API
   token. Only the ``trading212`` server gets the read-only T212 keys.
+* No subprocess ever receives crypto exchange keys. The ``crypto`` server
+  reads balances from the backend's stored snapshots and prices from public
+  market data; inside any MCP process ``crypto_service`` blanks the stored
+  key and refuses to build a keyed exchange client.
 
 Adding a server is a one-entry change to ``MCP_SERVERS``::
 
@@ -173,6 +177,16 @@ MCP_SERVERS: tuple[McpServerSpec, ...] = (
                "remove_bench", "suggest_plays"),
         contexts=frozenset({CHAT, SCHEDULED}),
     ),
+    # Crypto exchange, read-only and keyless: balances/positions from the
+    # backend's snapshots, public prices, fee schedule, risk. The only write is
+    # drafting the Starter crypto play (a draft — no orders).
+    McpServerSpec(
+        name="crypto",
+        script="crypto.py",
+        tools=("get_crypto_account", "get_crypto_prices", "get_crypto_fees", "get_crypto_risk",
+               "draft_starter_crypto_play"),
+        contexts=frozenset({CHAT, SCHEDULED}),
+    ),
     # Agent-built pages. Generated code runs in a sandboxed iframe and can only
     # read whitelisted data — it can't trade or reach the network.
     McpServerSpec(
@@ -215,16 +229,17 @@ def tool_ids(*names: str) -> list[str]:
 
 # Env vars that must never reach the Claude CLI or any MCP subprocess other than
 # via an explicit per-server injection (read keys → trading212 only): broker
-# keys/secrets (incl. execution keys) and the app's own API/bot tokens, so
-# Bash/WebFetch can't reuse them. Non-secret T212_* settings (T212_BASE_ENV)
-# pass through untouched.
+# keys/secrets (incl. execution keys), crypto exchange keys (never injected
+# anywhere) and the app's own API/bot tokens, so Bash/WebFetch can't reuse
+# them. Non-secret settings (T212_BASE_ENV, CRYPTO_EXCHANGE) pass through.
 _SENSITIVE_NAMES = {"OPENPF_API_TOKEN", "TELEGRAM_BOT_TOKEN"}
+_SENSITIVE_PREFIXES = ("T212_", "ARCHIE_T212_", "CRYPTO_", "KRAKEN_", "COINBASE_", "BINANCE_", "CCXT_")
 
 
 def _is_sensitive(key: str) -> bool:
     if key in _SENSITIVE_NAMES:
         return True
-    return key.startswith(("T212_", "ARCHIE_T212_")) and ("KEY" in key or "SECRET" in key)
+    return key.startswith(_SENSITIVE_PREFIXES) and ("KEY" in key or "SECRET" in key)
 
 
 def _scrubbed_inherited_env() -> dict[str, str]:

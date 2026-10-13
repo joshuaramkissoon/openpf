@@ -6,7 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Money, MoneyDelta, Pct, PctDelta, SectionCard } from "@/components/kit"
-import { accountTag } from "@/utils/format"
+import { useCryptoStatus } from "@/lib/crypto-status"
+import { accountTag, formatQuantity } from "@/utils/format"
 import { cn } from "@/lib/utils"
 import type { PositionItem } from "@/types"
 
@@ -49,12 +50,13 @@ export function PositionsTable({
   renderOwner,
 }: {
   positions: PositionItem[]
-  accountView: "all" | "invest" | "stocks_isa"
+  accountView: "all" | "invest" | "stocks_isa" | "crypto"
   displayCurrency: "GBP" | "USD"
   onSelect: (position: PositionItem) => void
   /** Optional "Play" column — who owns the holding (a play, Core or Unsorted). */
   renderOwner?: (position: PositionItem) => ReactNode
 }) {
+  useCryptoStatus() // re-render once the exchange name for the crypto chip is known
   const [expanded, setExpanded] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>("value")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
@@ -106,7 +108,7 @@ export function PositionsTable({
   return (
     <SectionCard
       title="Positions"
-      description={accountView === "all" ? "Aggregated across Invest + ISA — click a row for chart, signals & forecast" : "Selected account — click a row for chart, signals & forecast"}
+      description={accountView === "all" ? "Aggregated across every account — click a row for chart, signals & forecast" : "Selected account — click a row for chart, signals & forecast"}
       noPadding
       action={
         visible.length > 12 ? (
@@ -150,7 +152,7 @@ export function PositionsTable({
                   </TableCell>
                   {renderOwner ? <TableCell className="py-1.5">{renderOwner(p)}</TableCell> : null}
                   <TableCell className="text-right font-mono text-muted-foreground tabular-nums">
-                    {p.quantity.toFixed(2)}
+                    {formatQuantity(p.quantity, p.account_kind)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Money value={costBasis(p)} currency={displayCurrency} />

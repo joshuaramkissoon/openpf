@@ -78,7 +78,9 @@ def propose_trade(
 
     Args:
         side: 'buy' or 'sell'.
-        account_kind: 'invest' or 'stocks_isa' — required, never assumed.
+        account_kind: 'invest', 'stocks_isa' or 'crypto' — required, never assumed. 'crypto' routes
+            to the connected exchange (symbol 'BTC', 'ETH', …; market orders sized by notional_gbp;
+            the result carries fee + slippage estimates and the crypto cap is enforced).
         rationale: Why, plus what would invalidate the idea.
         symbol: Ticker (e.g. 'AAPL'); or pass instrument_code instead.
         instrument_code: Exact Trading 212 code (e.g. 'AAPL_US_EQ'), preferred when known.

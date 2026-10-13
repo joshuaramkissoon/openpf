@@ -19,7 +19,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import { formatMoney, formatPercent } from "@/utils/format"
+import { accountLabel, formatMoney, formatPercent, formatQuantity } from "@/utils/format"
 import type { AppConfig, PositionItem, TradeIntent } from "@/types"
 import type { ExecAccount } from "@/app/hooks/use-proposals"
 import type { BrokerMode } from "@/app/hooks/use-app-config"
@@ -48,6 +48,12 @@ export function railCheck(
   const { max_single_order_notional: cap, max_position_weight: maxW } = config.risk
   if (cap > 0 && intent.estimated_notional > cap) {
     return { ok: false, label: `Over the ${formatMoney(cap, "GBP", 0)} order cap` }
+  }
+  const cryptoCap = config.risk.max_crypto_pct_of_book
+  if (intent.account_kind === "crypto" && intent.side === "buy" && total > 0 && cryptoCap != null) {
+    const crypto = positions.filter((p) => p.account_kind === "crypto").reduce((s, p) => s + p.value, 0)
+    const after = (crypto + intent.estimated_notional) / total
+    if (after > cryptoCap) return { ok: false, label: `Crypto would be ${formatPercent(after, 1)} of book (cap ${formatPercent(cryptoCap, 0)})` }
   }
   if (intent.side === "buy" && total > 0 && maxW > 0) {
     const held = positions.find((p) => p.ticker.toUpperCase() === intent.symbol.toUpperCase())?.value ?? 0
@@ -85,7 +91,22 @@ export function ProposalOwner({ intent }: { intent: TradeIntent }) {
 }
 
 function accountShort(kind?: string | null) {
-  return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : null
+  return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : kind === "crypto" ? accountLabel("crypto") : null
+}
+
+/** Fee + slippage estimate on a crypto proposal — what the trade costs before it moves. */
+function CryptoCosts({ intent }: { intent: TradeIntent }) {
+  const c = intent.crypto
+  if (!c) return null
+  const pct = (v: number) => `${(v * 100).toFixed(v < 0.001 ? 3 : 2)}%`
+  return (
+    <p className="text-xs text-muted-foreground">
+      <span className="text-foreground/80">{c.label}</span> · {c.market} market order · est. fee{" "}
+      <span className="font-mono tabular-nums text-foreground/80">{formatMoney(c.fee_gbp ?? 0, "GBP", 2)}</span> ({pct(c.fee_rate)})
+      {" + "}slippage ~<span className="font-mono tabular-nums text-foreground/80">{formatMoney(c.slippage_gbp ?? 0, "GBP", 2)}</span> (
+      {pct(c.slippage_pct)})
+    </p>
+  )
 }
 
 export function ProposalRow({
@@ -110,7 +131,11 @@ export function ProposalRow({
   /** Label for the ask button (Archie's inline card says "Ask why"). */
   askLabel?: string
 }) {
-  const preset = intent.account_kind === "stocks_isa" || intent.account_kind === "invest" ? intent.account_kind : null
+  const preset =
+    intent.account_kind === "stocks_isa" || intent.account_kind === "invest" || intent.account_kind === "crypto"
+      ? intent.account_kind
+      : null
+  const crypto = intent.account_kind === "crypto"
   const [account, setAccount] = useState<ExecAccount | null>(preset)
   const [confirm, setConfirm] = useState(false)
   const executing = intent.status === "executing"
@@ -152,10 +177,11 @@ export function ProposalRow({
           {intent.rationale.replace(/^\[play\][^—]*—\s*/, "")}
         </p>
       ) : null}
+      {crypto ? <CryptoCosts intent={intent} /> : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-full font-mono text-[11px] tabular-nums text-muted-foreground sm:mr-auto sm:w-auto">
-          {intent.quantity > 0 ? `${+intent.quantity.toFixed(4)} sh · ` : ""}{intent.confidence > 0 ? `conf ${formatPercent(intent.confidence, 0)} · ` : ""}{ago(intent.created_at)} ago
+          {intent.quantity > 0 ? (crypto ? `${formatQuantity(intent.quantity, "crypto")} ${intent.symbol} · ` : `${+intent.quantity.toFixed(4)} sh · `) : ""}{intent.confidence > 0 ? `conf ${formatPercent(intent.confidence, 0)} · ` : ""}{ago(intent.created_at)} ago
         </span>
         <div className="ml-auto flex items-center gap-1.5">
           {!preset ? (
@@ -190,7 +216,9 @@ export function ProposalRow({
               {buy ? "Buy" : "Sell"} {formatMoney(intent.estimated_notional, "GBP", 0)} of {intent.symbol}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This sends a real order to your Trading 212 {account === "stocks_isa" ? "Stocks ISA" : "Invest"} account.
+              {crypto
+                ? `This sends a real market order to your ${accountLabel("crypto")} account.${intent.crypto?.fee_gbp != null ? ` Estimated fee ${formatMoney(intent.crypto.fee_gbp, "GBP", 2)}.` : ""} Crypto prices can move sharply; coins on an exchange are not FSCS-protected.`
+                : `This sends a real order to your Trading 212 ${account === "stocks_isa" ? "Stocks ISA" : "Invest"} account.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

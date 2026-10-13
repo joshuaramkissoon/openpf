@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Conviction = Literal["low", "medium", "high"]
-AccountKind = Literal["invest", "stocks_isa"]
+AccountKind = Literal["invest", "stocks_isa", "crypto"]
 PlayStatus = Literal["draft", "active", "paused", "closed"]
 LegRole = Literal["core", "satellite", "hedge"]
 RuleType = Literal["price_below", "drawdown_pct", "weight_above", "date_after"]

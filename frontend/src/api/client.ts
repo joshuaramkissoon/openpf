@@ -176,7 +176,7 @@ export async function rejectIntent(id: string, note?: string) {
 export async function executeIntent(
   id: string,
   forceLive = false,
-  accountKind?: 'invest' | 'stocks_isa',
+  accountKind?: 'invest' | 'stocks_isa' | 'crypto',
 ) {
   // The click is the human approval: approve-then-execute in one audited call.
   const { data } = await api.post(`/agent/intents/${id}/execute`, {

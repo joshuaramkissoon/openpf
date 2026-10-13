@@ -20,6 +20,7 @@ RISK_DEFAULT = {
     "max_daily_notional": settings.max_daily_notional,
     "max_position_weight": settings.max_position_weight,
     "duplicate_order_window_seconds": settings.duplicate_order_window_seconds,
+    "max_crypto_pct_of_book": settings.max_crypto_pct_of_book,
 }
 
 BROKER_DEFAULT = {
@@ -113,7 +114,8 @@ class ConfigStore:
         return record.value
 
     def get_risk(self) -> dict[str, Any]:
-        return self.get("risk_config", RISK_DEFAULT)
+        # Merge so keys added later (e.g. the crypto cap) exist on older rows.
+        return {**RISK_DEFAULT, **(self.get("risk_config", RISK_DEFAULT) or {})}
 
     def set_risk(self, value: dict[str, Any]) -> dict[str, Any]:
         merged = {**self.get_risk(), **value}

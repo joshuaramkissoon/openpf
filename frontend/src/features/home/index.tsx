@@ -160,7 +160,7 @@ function HoldingsPage({ portfolio }: { portfolio: PortfolioState }) {
             positions={positions}
             accountView={accountView}
             displayCurrency={currency}
-            onSelect={(p) => openTicker(p.ticker)}
+            onSelect={(p) => openTicker(p.account_kind === "crypto" && p.yfinance_ticker ? p.yfinance_ticker : p.ticker)}
             renderOwner={(p) => {
               const h = byKey.get(holdingKey(p.account_kind, p.display_ticker || p.ticker))
               return h ? (
