@@ -108,3 +108,189 @@ export async function getInstrumentDetail(
   })
   return data
 }
+
+// ── Insight: the stock sheet's aggregated payload ───────────────────────────
+// Every section is optional; `pending` names sections still loading server-side
+// (re-request to pick them up from the cache).
+
+export interface InsightQuote {
+  price: number
+  prev_close: number | null
+  change: number | null
+  change_pct: number | null
+  as_of: string
+  /** Major currency of `price` (GBP for pence-quoted LSE lines). */
+  currency: string
+  price_gbp: number | null
+  fx_to_gbp: number | null
+}
+
+export interface InsightPosition {
+  quantity: number
+  value_gbp: number
+  cost_gbp: number
+  ppl_gbp: number
+  ppl_pct: number | null
+  weight: number
+  /** Average cost in the quote's major currency (same axis as the chart). */
+  avg_cost: number | null
+  avg_cost_gbp: number | null
+  accounts: string[]
+  value_by_account: Record<string, number>
+  last_price?: number
+}
+
+export interface InsightBook {
+  total_gbp: number
+  free_cash_gbp: number
+  free_cash_by_account: Record<string, number>
+  position_cap: number | null
+  max_order_gbp: number | null
+}
+
+export interface InsightRule {
+  text: string
+  state: string | null
+  /** fine | watch | triggered | judgement | unknown (null until evaluated). */
+  status: string | null
+  detail: string | null
+}
+
+export interface InsightPlay {
+  id: string
+  title: string
+  status: string
+  /** owner | bench | related */
+  relation: string
+  role: string | null
+  rationale: string | null
+  leg_target_weight: number | null
+  target_weight_of_book: number | null
+  thesis: string
+  what_would_change_my_mind: string
+  verdict: string | null
+  reviewed_at: string | null
+  review_notes: string | null
+  rules: InsightRule[]
+}
+
+export interface InsightThesis {
+  id: string
+  title: string
+  thesis: string
+  invalidation: string
+  catalysts: string[]
+  confidence: number
+  created_at: string | null
+}
+
+export interface InsightTrade {
+  date: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  account_kind: string
+}
+
+export interface InsightChart {
+  /** [date, open, high, low, close], daily, oldest first, in `currency`. */
+  points: [string, number, number, number, number][]
+  currency: string
+  /** Factor from Yahoo's quoted unit to `currency` (0.01 for pence lines). */
+  unit_multiplier?: number
+  avg_cost: number | null
+  trades: InsightTrade[]
+}
+
+export interface InsightRisk {
+  vol_annual: number
+  typical_daily_move: number
+  market_vol_annual: number | null
+  vol_vs_market: number | null
+  beta: number | null
+  max_drawdown_1y: number | null
+  risk_share: number | null
+  value_share: number | null
+  portfolio_vol_annual: number | null
+  moves_with: { ticker: string; label: string; corr: number }[]
+  holdings_considered: number
+}
+
+export interface InsightEvents {
+  next_earnings?: { date: string; days_away: number }
+  ex_dividend?: { date: string; days_away: number; amount: number | null }
+}
+
+export interface InsightNews {
+  headline: string
+  source: string
+  url: string
+  published_at: string | null
+  summary: string
+}
+
+export interface InsightFundamentals {
+  sector: string | null
+  industry: string | null
+  market_cap: number | null
+  pe_trailing: number | null
+  pe_forward: number | null
+  price_to_sales: number | null
+  peg: number | null
+  revenue_growth: number | null
+  earnings_growth: number | null
+  gross_margin: number | null
+  operating_margin: number | null
+  profit_margin: number | null
+  dividend_yield: number | null
+  summary: string | null
+  pe_history: { now: number; min: number; median: number; max: number; since: string; observations: number; basis: string } | null
+}
+
+export interface InstrumentInsight {
+  ticker: string
+  display_ticker: string
+  name: string | null
+  instrument_code: string | null
+  yfinance_ticker: string
+  quote_currency: string
+  quote: InsightQuote | null
+  why_moved: { text: string; sources?: InsightNews[] } | null
+  held: boolean
+  position: InsightPosition | null
+  book: InsightBook | null
+  plays: InsightPlay[]
+  theses: InsightThesis[]
+  alerts: { id: string; severity: string; title: string; detail: string; consider: string | null }[]
+  watchlist: { id: string; note: string; target_price: number | null } | null
+  chart: InsightChart | null
+  risk: InsightRisk | null
+  events: InsightEvents | null
+  news: InsightNews[]
+  fundamentals: InsightFundamentals | null
+  pending: string[]
+}
+
+export async function getInstrumentInsight(ticker: string, wait?: number): Promise<InstrumentInsight> {
+  const { data } = await api.get<InstrumentInsight>(`/instruments/${encodeURIComponent(ticker)}/insight`, {
+    params: wait != null ? { wait } : undefined,
+  })
+  return data
+}
+
+export interface SheetProposalResult {
+  ok: boolean
+  intent?: { id: string; symbol: string; side: string; quantity: number; estimated_notional: number }
+  warnings?: string[]
+  error?: string
+  violations?: string[]
+  note?: string
+}
+
+export async function proposeFromSheet(
+  ticker: string,
+  body: { side: 'buy' | 'sell'; account_kind: string; notional_gbp: number; rationale?: string },
+): Promise<SheetProposalResult> {
+  const { data } = await api.post<SheetProposalResult>(`/instruments/${encodeURIComponent(ticker)}/propose`, body)
+  return data
+}

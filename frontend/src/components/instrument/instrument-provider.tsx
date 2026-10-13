@@ -40,6 +40,7 @@ export function InstrumentProvider({
   positions,
   currency,
   onAskArchie,
+  onAskArchieSend,
   onDeepAnalysis,
   commands,
   onAskArchiePrompt,
@@ -48,6 +49,8 @@ export function InstrumentProvider({
   positions: PositionItem[]
   currency: "GBP" | "USD"
   onAskArchie?: (ticker: string, name?: string | null) => void
+  /** Start an Archie chat with a contextual prompt and send it (sheet prompt chips). */
+  onAskArchieSend?: (prompt: string) => void
   /** "Deep analysis" in the detail sheet — hand the ticker to Archie for a full workup. */
   onDeepAnalysis?: (ticker: string, name?: string | null) => void
   /** Navigation + actions for the ⌘K palette. */
@@ -122,6 +125,7 @@ export function InstrumentProvider({
         onOpenChange={setDetailOpen}
         hint={hint}
         onAskArchie={onAskArchie}
+        onAskArchieSend={onAskArchieSend}
         onDeepAnalysis={onDeepAnalysis}
         onWatchlistChanged={() => window.dispatchEvent(new Event(WATCHLIST_CHANGED_EVENT))}
       />
