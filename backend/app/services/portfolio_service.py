@@ -512,6 +512,12 @@ def refresh_portfolio(db: Session, force: bool = False) -> dict[str, Any]:
             maybe_sync_all(db)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            from app.services.logo_service import prewarm_holdings_async
+
+            prewarm_holdings_async()
+        except Exception:  # noqa: BLE001 — logos never affect a sync
+            pass
 
     return result
 

@@ -220,6 +220,20 @@
   box-shadow: inset 0 0 0 1px oklch(0.5 0.06 var(--asset-h) / 0.14);
 }
 
+/* Company logos (kit/asset-icon): a light tile so transparent or dark marks
+   stay legible on the dark theme; a hairline keeps white logos from melting
+   into a white card in light mode. */
+.asset-logo {
+  background: oklch(0.97 0 0);
+  box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.08);
+}
+.asset-logo > img {
+  border-radius: inherit;
+}
+.asset-logo-skeleton {
+  background: color-mix(in oklch, var(--muted) 80%, transparent);
+}
+
 /* Proposal tile "placing" bar (features/home/proposal-tiles). */
 .ptile-bar {
   position: absolute;

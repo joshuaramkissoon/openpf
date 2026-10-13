@@ -15,7 +15,9 @@ import {
 } from "lucide-react"
 import { ArchieIcon } from "@/components/kit"
 
+import { LogoCredit } from "@/features/settings/logos-setting"
 import { ViewsNav } from "@/features/views"
+import { useLogosEnabled } from "@/lib/logos"
 import { privacyModeDescription, privacyModeLabel, type PrivacyMode } from "@/lib/privacy"
 import { cn } from "@/lib/utils"
 
@@ -135,6 +137,7 @@ export function SidebarBody({
       </nav>
 
       <div className="flex flex-col gap-0.5">
+        <SidebarLogoCredit collapsed={collapsed} />
         <BrokerBadge mode={brokerMode} collapsed={collapsed} className="mb-2" />
         <SidebarNavItem
           icon={PrivacyIcon}
@@ -158,6 +161,13 @@ export function SidebarBody({
       </div>
     </>
   )
+}
+
+/** The logo service's free tier asks for a visible link wherever logos show. */
+function SidebarLogoCredit({ collapsed }: { collapsed?: boolean }) {
+  const on = useLogosEnabled()
+  if (!on || collapsed) return null
+  return <LogoCredit className="mb-1.5 px-2.5 text-[12px]" />
 }
 
 export function AppSidebar(props: SidebarProps) {

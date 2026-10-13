@@ -20,11 +20,12 @@ import { useTheme, type ThemePreference } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import type { AppConfig } from "@/types"
 import { DataProvidersSection, ModelsSection } from "./models"
+import { LogosSetting } from "./logos-setting"
 
 type Tab = "general" | "connections" | "broker" | "crypto" | "providers" | "models" | "risk" | "permissions" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
 
 const TABS: { value: Tab; label: string; description: string }[] = [
-  { value: "general", label: "General", description: "Theme and privacy." },
+  { value: "general", label: "General", description: "Theme, logos and privacy." },
   { value: "connections", label: "Connections", description: "Brokers, crypto exchanges and aggregators — read-only first, trading only where you add a trade key." },
   { value: "broker", label: "Broker & keys", description: "Execution mode, Trading 212 environment and API keys." },
   { value: "crypto", label: "Crypto", description: "The crypto cap, fees and UK notes. Exchanges are connected under Connections." },
@@ -98,6 +99,11 @@ export function SettingsPage({
           </div>
 
           {tab === "general" ? <AppearanceSection /> : null}
+          {tab === "general" ? (
+            <Section title="Logos">
+              <LogosSetting />
+            </Section>
+          ) : null}
           {tab === "connections" ? <ConnectionsSettings /> : null}
           {tab === "crypto" ? <CryptoSettings /> : null}
           {sections ? (
