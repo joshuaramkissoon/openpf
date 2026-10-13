@@ -17,7 +17,8 @@ import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
 _SCRUB = ("DATABASE_URL", "VIEWS_DATA_DIR", "OPENPF_RUNTIME_DIR", "OPENPF_SANDBOX", "OPENPF_SANDBOX_STATE",
-          "T212_BASE_ENV", "T212_SANDBOX_URL", "CLAUDE_PROJECT_CWD", "AGENT_WORKSPACE", "PROJECT_ROOT")
+          "T212_BASE_ENV", "T212_SANDBOX_URL", "CLAUDE_PROJECT_CWD", "AGENT_WORKSPACE", "PROJECT_ROOT",
+          "CRYPTO_API_KEY", "CRYPTO_API_SECRET", "CRYPTO_EXCHANGE", "OPENPF_MCP_CONTEXT")
 
 
 @pytest.fixture()
@@ -185,3 +186,63 @@ def test_sandbox_mcp_t212_refuses_non_loopback_url(repo):
     """ % str(BACKEND), OPENPF_SANDBOX="1", T212_BASE_ENV="live", T212_SANDBOX_URL="https://live.trading212.com/api/v0",
         MCP_LOG_DIR=str(repo / "logs"))
     assert "refusing" in out["res"]
+
+
+_CRYPTO_PROBE = """
+import json
+from datetime import datetime
+from app.core.config import get_settings
+from app.core.database import SessionLocal, init_db
+from app.core.sandbox import SandboxViolation, verify_isolation
+from app.services import crypto_service, sandbox_broker
+from app.services.config_store import ConfigStore
+from app.services.crypto_client import CcxtCryptoBroker, assert_exchange_host, build_crypto_client
+
+init_db()
+out = {"settings_key": get_settings().crypto_api_key, "settings_exchange": get_settings().crypto_exchange}
+with SessionLocal() as db:
+    store = ConfigStore(db)
+    sandbox_broker.seed_config_if_fresh(db)
+    # Real keys sitting in the DB are ignored.
+    store.set("crypto_config", {"exchange": "binance", "api_key": "REAL-CRYPTO-KEY", "api_secret": "REAL-CRYPTO-SECRET",
+                                "verified": {"can_withdraw": False, "key_fp": "x"}})
+    cfg = crypto_service.get_config(store)
+    out["cfg_key"], out["cfg_exchange"] = cfg["api_key"], cfg["exchange"]
+    client = crypto_service.client_for(store)
+    out["client"] = type(client).__name__
+    out["public"] = crypto_service.public(store)
+    out["build_real"] = type(build_crypto_client("kraken", "REAL", "REAL")).__name__
+    try:
+        CcxtCryptoBroker("kraken", "REAL", "REAL"); out["ccxt"] = "ALLOWED"
+    except SandboxViolation as exc:
+        out["ccxt"] = str(exc)
+    try:
+        assert_exchange_host("https://api.kraken.com/0/private/Balance", {"api.kraken.com"}); out["host"] = "ALLOWED"
+    except SandboxViolation as exc:
+        out["host"] = str(exc)
+    for name, key in (("withdraw_key", "sandbox-crypto-withdraw"), ("real_key", "REAL-CRYPTO-KEY")):
+        try:
+            crypto_service.connect(store, "kraken", key, "sandbox"); out[name] = "CONNECTED"
+        except crypto_service.CryptoConnectError as exc:
+            out[name] = str(exc)
+    acc, pos, src = crypto_service.snapshot_rows(db, store, datetime.utcnow())
+    out["snapshot"] = {"source": src, "positions": sorted(p.ticker for p in pos), "cash": acc[0].free_cash if acc else None}
+    out["verify"] = verify_isolation()
+print(json.dumps(out, default=str))
+"""
+
+
+def test_sandbox_crypto_uses_only_the_mock_exchange(repo):
+    out = _run(repo, _CRYPTO_PROBE, OPENPF_SANDBOX="1", CRYPTO_API_KEY="ENV-REAL-KEY", CRYPTO_API_SECRET="ENV-REAL-SECRET",
+               CRYPTO_EXCHANGE="binance", OPENPF_CRYPTO_OFFLINE="1",
+               OPENPF_SANDBOX_STATE=str(repo / ".demo" / "sandbox_state.json"))
+    assert out["settings_key"] == "" and out["settings_exchange"] == ""  # env keys blanked
+    assert out["cfg_key"] == "sandbox-crypto" and out["cfg_exchange"] == "kraken"
+    assert out["client"] == "SandboxCryptoBroker" and out["build_real"] == "SandboxCryptoBroker"
+    assert "REAL" not in json.dumps(out["public"]) and out["public"]["sandbox"] is True
+    assert "refusing" in out["ccxt"] and "refusing" in out["host"]
+    assert "withdraw" in out["withdraw_key"]  # the demo's can-withdraw key is refused like a real one
+    assert "only accepts the sandbox keys" in out["real_key"]
+    assert out["snapshot"]["source"] == "crypto-sandbox" and "BTC" in out["snapshot"]["positions"]
+    assert any(line.startswith("crypto") for line in out["verify"])
+    assert (repo / ".demo" / "sandbox_state.crypto.json").is_file()
