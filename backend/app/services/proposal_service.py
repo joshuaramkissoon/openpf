@@ -18,9 +18,12 @@ from sqlalchemy.orm import Session
 from app.models.entities import TradeIntent
 from app.services.config_store import ConfigStore
 from app.services.execution_service import (
+    MANUAL_DUPLICATE_WINDOW_SECONDS,
+    MANUAL_SOURCE,
     daily_notional_used,
     expire_stale_intents,
     rail_violations,
+    split_advisory,
     utc_today,
 )
 
@@ -37,6 +40,17 @@ _DAILY = "risk-guard: order exceeds max daily notional"
 _LIMIT_VIOLATIONS = (_PER_ORDER, _DAILY)
 # Below this, the part that fits isn't worth an order of its own: hold it all.
 _MIN_SPLIT_GBP = 10.0
+
+
+def split_rails(violations: list[str], *, manual: bool = False) -> tuple[list[str], list[str]]:
+    """(hard, warnings). Stale-able cash is a warning on a proposal; on the
+    user's own trade the limits are warnings too (``rails_mode="advisory"``)."""
+    hard = [v for v in violations if v not in _SOFT_VIOLATIONS]
+    soft = [v for v in violations if v in _SOFT_VIOLATIONS]
+    if manual:
+        hard, advisory = split_advisory(hard)
+        soft += advisory
+    return hard, soft
 
 
 class ProposalError(ValueError):
@@ -205,6 +219,17 @@ def limit_blocks(risk: dict[str, Any], violations: list[str], requested: float, 
     return out
 
 
+def proposal_source(source: str | None, *, manual: bool = False) -> str:
+    """The ``source`` tag a proposal may carry. "user" marks the user's own trade
+    from the stock sheet (only the manual-trade service passes ``manual``);
+    "rebalance" is the deterministic rebalancer's. Neither can be claimed by a
+    proposal, so an agent can never dress one up as the user's own order."""
+    if manual:
+        return MANUAL_SOURCE
+    out = (source or "agent").strip()[:64] or "agent"
+    return "agent" if out.lower() in {MANUAL_SOURCE, "rebalance"} else out
+
+
 def _is_crypto(account_kind: str, symbol: str | None, instrument_code: str | None) -> bool:
     from app.services import crypto_service
 
@@ -247,6 +272,8 @@ def propose_trade(
     dry_run: bool = False,
     not_before: date | None = None,
     hold_back: bool = False,
+    manual: bool = False,
+    count_open: bool = False,
 ) -> dict[str, Any]:
     """Validate, size and record a ``proposed`` TradeIntent. Never executes.
 
@@ -267,13 +294,20 @@ def propose_trade(
     record the rest as a ``held`` ask under ``held_back`` — the chat shows it as
     a card the user can stage for tomorrow or take to their limits. The limits
     themselves are never changed.
+
+    ``manual``: the user's own trade (``manual_trade`` only — never reachable
+    from an agent tool). The notional and crypto-cap limits come back as
+    warnings instead of violations, and the intent is marked as the user's.
     """
+    source = proposal_source(source, manual=manual)
+    if manual:
+        hold_back = False
     day = not_before or utc_today()
-    used = daily_notional_used(db, day, include_pending=hold_back)
+    used = daily_notional_used(db, day, include_pending=hold_back or count_open)
     args = dict(
         side=side, account_kind=account_kind, rationale=rationale, symbol=symbol, instrument_code=instrument_code,
         order_type=order_type, limit_price=limit_price, stop_price=stop_price, play_id=play_id, source=source,
-        category=category, not_before=not_before,
+        category=category, not_before=not_before, manual=manual,
     )
     if dry_run:
         return _propose_one(db, quantity=quantity, notional_gbp=notional_gbp, daily_used=used, dry_run=True, **args)
@@ -311,6 +345,64 @@ def propose_trade(
                "tomorrow or take to their limits — say which limit cut it in one line; don't loosen limits.")
     return {"ok": False, "violations": violations, "blocked": blocked, "sizing": sizing, "caps": res["caps"],
             "held_back": held_info, "message": message, "requested_gbp": round(requested, 2)}
+
+
+_BATCH_FIELDS = (
+    "side", "account_kind", "rationale", "symbol", "instrument_code", "quantity", "notional_gbp", "order_type",
+    "limit_price", "stop_price", "play_id", "category",
+)
+MAX_BATCH = 12
+
+
+def propose_batch(
+    db: Session,
+    orders: list[dict[str, Any]],
+    *,
+    source: str = "agent",
+    hold_back: bool = True,
+    not_before_by_order: list[date | None] | None = None,
+) -> dict[str, Any]:
+    """Several proposals in one call (a multi-order ask). Each order is checked
+    with the earlier ones in the batch already counted against the daily limit
+    (they're open proposals), and held back per order when over a limit. Returns
+    every result at once, so the chat shows all the cards together."""
+    if not isinstance(orders, list) or not orders:
+        return {"ok": False, "error": "orders must be a non-empty list"}
+    if len(orders) > MAX_BATCH:
+        return {"ok": False, "error": f"at most {MAX_BATCH} orders per batch"}
+    results: list[dict[str, Any]] = []
+    for n, order in enumerate(orders):
+        if not isinstance(order, dict):
+            results.append({"ok": False, "error": "each order must be an object"})
+            continue
+        unknown = sorted(set(order) - set(_BATCH_FIELDS) - {"for_day"})
+        args = {k: order.get(k) for k in _BATCH_FIELDS if order.get(k) not in (None, "", 0, 0.0)}
+        not_before = (not_before_by_order or [None] * len(orders))[n]
+        try:
+            res = propose_trade(
+                db, **{"side": "", "account_kind": "", "rationale": "", **args},
+                source=source, not_before=not_before, hold_back=hold_back, count_open=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad order mustn't sink the rest
+            res = {"ok": False, "error": str(exc)}
+        if unknown:
+            res = {**res, "ignored_fields": unknown}
+        results.append({"order": n + 1, "symbol": order.get("symbol") or order.get("instrument_code"), **res})
+    proposed = [r for r in results if r.get("ok")]
+    held = [r["held_back"] for r in results if isinstance(r.get("held_back"), dict)]
+    failed = [r for r in results if not r.get("ok") and not r.get("held_back")]
+    return {
+        "ok": bool(proposed or held),
+        "results": results,
+        "summary": {
+            "proposed": len(proposed),
+            "proposed_gbp": round(sum(float(r["intent"]["estimated_notional_gbp"]) for r in proposed), 2),
+            "held_back": len(held),
+            "held_back_gbp": round(sum(float(h["amount_gbp"]) for h in held), 2),
+            "failed": len(failed),
+        },
+        "note": "Proposed only — nothing was sent to the broker. The user approves each card in the app.",
+    }
 
 
 def _hold(
@@ -413,7 +505,9 @@ def _propose_one(
     into: TradeIntent | None = None,
     held_from: dict[str, Any] | None = None,
     dry_run: bool = False,
+    manual: bool = False,
 ) -> dict[str, Any]:
+    source = proposal_source(source, manual=manual)
     side = (side or "").strip().lower()
     order_type = (order_type or "market").strip().lower()
     account_kind = (account_kind or "").strip().lower()
@@ -453,7 +547,8 @@ def _propose_one(
         return crypto_service.propose_crypto_trade(
             db, side=side, rationale=rationale, symbol=symbol, instrument_code=instrument_code, quantity=qty_c,
             notional_gbp=notional_c, order_type=order_type, play_id=play_id, source=source, caps=caps, risk=risk,
-            not_before=not_before, daily_used=daily_used, into=into, held_from=held_from,
+            not_before=not_before, daily_used=daily_used, into=into, held_from=held_from, manual=manual,
+            dry_run=dry_run,
         )
     if account_kind in _ACCOUNTS and (hint := crypto_service.wrong_account_hint(symbol, instrument_code)):
         return _fail(hint)
@@ -528,9 +623,10 @@ def _propose_one(
         instrument_code=str(instrument["instrument_code"]),
         not_before=not_before,
         daily_used=daily_used,
+        duplicate_window_seconds=MANUAL_DUPLICATE_WINDOW_SECONDS if manual else None,
     )
-    hard = [v for v in violations if v not in _SOFT_VIOLATIONS]
-    warnings.extend(v for v in violations if v in _SOFT_VIOLATIONS)
+    hard, soft = split_rails(violations, manual=manual)
+    warnings.extend(soft)
     sizing = {
         "symbol": ticker,
         "instrument_code": instrument["instrument_code"],
@@ -546,11 +642,6 @@ def _propose_one(
     if dry_run:
         return {"ok": True, "sizing": {**sizing, "price_gbp": round(price_gbp, 6)}, "warnings": warnings, "caps": caps}
 
-    # "rebalance" is reserved for the deterministic rebalancer (a standing
-    # rebalance permission keys off it); proposals can't claim it.
-    source = (source or "agent")[:64]
-    if source.strip().lower() == "rebalance":
-        source = "agent"
     meta: dict[str, Any] = {
         "source": source,
         "account_kind": account_kind,
@@ -584,6 +675,8 @@ def _propose_one(
         meta["warnings"] = warnings
     if held_from:
         meta["held"] = {**held_from, "staged": True}
+    if manual:
+        meta["manual_trade"] = True
 
     broker = ConfigStore(db).get_broker()
     intent = TradeIntent(

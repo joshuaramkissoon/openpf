@@ -180,3 +180,76 @@ def test_staged_proposals_dont_expire_or_get_superseded_early(db, market):
     execution_service.expire_stale_intents(db)
     execution_service.supersede_open_proposals(db)
     assert db.get(TradeIntent, iid).status == "proposed"
+
+
+# ── propose_trades: a multi-order ask in one call ───────────────────────
+
+
+def _order(symbol, gbp):
+    return {"side": "buy", "account_kind": "invest", "symbol": symbol, "notional_gbp": gbp, "rationale": "asked"}
+
+
+def test_batch_counts_the_daily_limit_across_the_orders(db, market):
+    out = proposal_service.propose_batch(db, [_order("NVDA", 500), _order("PLTR", 1000), _order("MU", 600)])
+    assert out["ok"]
+    nvda, pltr, mu = out["results"]
+    assert nvda["intent"]["estimated_notional_gbp"] == pytest.approx(500)
+    # PLTR: £500 per-order limit → £500 now, £500 held.
+    assert pltr["intent"]["estimated_notional_gbp"] == pytest.approx(500) and pltr["held_back"]["amount_gbp"] == pytest.approx(500)
+    # MU sees NVDA + PLTR (£1,000) against the £1,500 day: £500 fits, £100 held.
+    assert mu["intent"]["estimated_notional_gbp"] == pytest.approx(500) and mu["held_back"]["amount_gbp"] == pytest.approx(100)
+    assert out["summary"] == {"proposed": 3, "proposed_gbp": 1500.0, "held_back": 2, "held_back_gbp": 600.0, "failed": 0}
+
+
+def test_batch_reports_a_bad_order_without_sinking_the_rest(db, market):
+    out = proposal_service.propose_batch(db, [_order("NVDA", 100), {"side": "buy", "symbol": "PLTR", "notional_gbp": 50}])
+    assert out["results"][0]["ok"] and not out["results"][1]["ok"] and out["summary"]["failed"] == 1
+    assert not proposal_service.propose_batch(db, [])["ok"]
+    assert "at most" in proposal_service.propose_batch(db, [_order("A", 1)] * 13)["error"]
+
+
+def test_chat_shows_every_card_from_a_batch_at_once():
+    import json
+
+    payload = {"ok": True, "results": [
+        {"ok": True, "intent": {"id": "a"}},
+        {"ok": True, "intent": {"id": "b"}, "held_back": {"id": "b-held"}},
+        {"ok": False, "error": "nope"},
+        {"ok": False, "held_back": {"id": "c-held"}},
+    ]}
+    ids = claude_chat_runtime.proposal_ids_from_tool_result("mcp__proposals__propose_trades", json.dumps(payload))
+    assert ids == ["a", "b", "b-held", "c-held"]
+
+
+# ── sandbox: fake cash never blocks a demo order ─────────────────────────
+
+
+def test_sandbox_crypto_tops_up_fake_cash(tmp_path, monkeypatch):
+    from app.services import crypto_sandbox
+
+    monkeypatch.setenv("OPENPF_SANDBOX_STATE", str(tmp_path / "sb.json"))
+    monkeypatch.setenv("OPENPF_CRYPTO_OFFLINE", "1")
+    crypto_sandbox.reset()
+    assert crypto_sandbox.balances()["GBP"] >= 2000
+    order = crypto_sandbox.place_market_order("BTC", "buy", 0.1)  # ~£6,200 at the fixture price
+    assert order["filled"] == 0.1
+    assert any(d.get("note") == "demo cash added" for d in crypto_sandbox.deposits())
+    assert crypto_sandbox.top_up(10.0) == 0.0  # already covered
+
+
+def test_sandbox_t212_tops_up_fake_cash(tmp_path, monkeypatch):
+    from app.services import sandbox_broker
+
+    monkeypatch.setenv("OPENPF_SANDBOX_STATE", str(tmp_path / "sb.json"))
+    sandbox_broker.reset()
+    added = sandbox_broker.top_up("invest", 50_000)
+    assert added >= 50_000 - sandbox_broker.SEED_CASH_GBP["invest"]
+    assert sandbox_broker.account_summary("invest")["cash"]["availableToTrade"] >= 50_000
+
+
+def test_sandbox_never_reports_insufficient_cash(db, market, monkeypatch):
+    monkeypatch.setenv("OPENPF_SANDBOX", "1")
+    db.query(AccountSnapshot).delete()
+    db.commit()
+    out = _ask(db, "AMD", 100)
+    assert out["ok"] and not any("cash" in w for w in out["warnings"])
