@@ -277,7 +277,24 @@ class ClaudeChatRuntime:
         self._sessions: dict[str, _RuntimeSession] = {}
         self._sessions_lock = asyncio.Lock()
         self._info: dict[str, Any] = {}
-        self._options = self._build_options()
+        # Built lazily, and rebuilt for every new SDK session, so credentials or
+        # settings changed in the app reach Archie's MCP servers without a
+        # restart — and importing this module never touches the database.
+        self._options_cache: Any = None
+
+    @property
+    def _options(self) -> Any:
+        if self._options_cache is None:
+            self._options_cache = self._build_options()
+        return self._options_cache
+
+    @_options.setter
+    def _options(self, value: Any) -> None:
+        self._options_cache = value
+
+    def _fresh_options(self) -> Any:
+        self._options_cache = self._build_options()
+        return self._options_cache
 
     def _build_options(self) -> Any:
         from claude_agent_sdk import ClaudeAgentOptions
@@ -417,7 +434,7 @@ class ClaudeChatRuntime:
                 return current
             # Per-session options so each client's permission callback can route
             # AskUserQuestion to that session's live UI channel.
-            options = replace(self._options, can_use_tool=self._build_can_use_tool(chat_session_id))
+            options = replace(self._fresh_options(), can_use_tool=self._build_can_use_tool(chat_session_id))
             created = _RuntimeSession(client=ClaudeSDKClient(options=options))
             self._sessions[chat_session_id] = created
             return created
@@ -762,6 +779,8 @@ class ClaudeChatRuntime:
         return True
 
     def runtime_info(self) -> dict[str, Any]:
+        if not self._info:
+            _ = self._options  # populates _info
         return dict(self._info)
 
     async def check_mcp_health(self) -> dict[str, dict[str, str]]:

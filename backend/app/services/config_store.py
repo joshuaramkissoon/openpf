@@ -123,7 +123,12 @@ class ConfigStore:
     def get_broker(self) -> dict[str, Any]:
         # Merge with defaults so newly-added keys (e.g. scheduler_enabled) are
         # always present even for broker_config rows saved before they existed.
-        return {**BROKER_DEFAULT, **(self.get("broker_config", BROKER_DEFAULT) or {})}
+        merged = {**BROKER_DEFAULT, **(self.get("broker_config", BROKER_DEFAULT) or {})}
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox():
+            merged["t212_base_env"] = "sandbox"  # never demo/live from a sandbox instance
+        return merged
 
     def set_broker(self, value: dict[str, Any]) -> dict[str, Any]:
         merged = {**self.get_broker(), **value}
@@ -202,6 +207,23 @@ class ConfigStore:
         return merged
 
     def get_credentials(self) -> dict[str, Any]:
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox():
+            # Sandbox: only the mock broker's fake keys exist. DB-stored (or env)
+            # keys are ignored outright, so a demo pointed at a real DB still
+            # can't authenticate anywhere real.
+            from app.services.sandbox_broker import SANDBOX_CREDENTIALS
+
+            stored = self.get("credentials", CREDENTIALS_DEFAULT) or {}
+            return {
+                kind: {
+                    **SANDBOX_CREDENTIALS[kind],
+                    "enabled": bool((stored.get(kind) or {}).get("enabled", True)),
+                    "exec_enabled": True,
+                }
+                for kind in ACCOUNT_KINDS
+            }
         current = self.get("credentials", CREDENTIALS_DEFAULT)
         normalized = self._normalize_credentials_map(current)
         # If account-specific credentials are provided through environment variables,
@@ -244,6 +266,17 @@ class ConfigStore:
         return self.set("credentials", normalized)
 
     def set_account_credentials(self, account_kind: AccountKind, value: dict[str, Any]) -> dict[str, Any]:
+        from app.core.sandbox import is_sandbox
+
+        if is_sandbox():
+            # Only the enabled toggle is meaningful; keys are fixed to the mock broker.
+            stored = dict(self.get("credentials", CREDENTIALS_DEFAULT) or {})
+            entry = dict(stored.get(account_kind) or {})
+            if "enabled" in value:
+                entry["enabled"] = bool(value["enabled"])
+            stored[account_kind] = entry  # incoming keys are dropped, never stored
+            self.set("credentials", stored)
+            return self.get_credentials()
         all_creds = self.get_credentials()
         entry = all_creds.get(account_kind, {})
         incoming_key = value.get("t212_api_key")

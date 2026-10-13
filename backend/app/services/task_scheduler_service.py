@@ -19,7 +19,7 @@ from app.core.config import get_settings
 from app.models.entities import ScheduledTask, ScheduledTaskLog
 from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth,
-    parse_setting_sources, project_root, resolve_sdk_cwd,
+    artifacts_dir, parse_setting_sources, project_root, resolve_sdk_cwd,
 )
 from app.services import mcp_registry
 from app.services import costs_service
@@ -764,7 +764,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
 
 
 def _cron_log_path(task_name: str, content: str, *, task_kind: str = "", description: str = "") -> str:
-    root = project_root() / ".claude" / "runtime" / "artifacts" / "scheduled" / task_name
+    root = artifacts_dir() / "scheduled" / task_name
     root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
 

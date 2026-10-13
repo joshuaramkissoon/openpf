@@ -79,7 +79,9 @@ Keep it running on an always-on machine with `./scripts/serve.sh` (see `docs/run
 | `ANTHROPIC_API_KEY` | Claude access (optional if you're logged in with the `claude` CLI) |
 | `BROKER_MODE` | `paper` (default) or `live`; Settings → Broker overrides it once saved |
 | `T212_BASE_ENV` | `demo` (default), `live`, or `sandbox` |
-| `OPENPF_SANDBOX` | `1` = use the built-in mock broker; real broker keys are ignored |
+| `OPENPF_SANDBOX` | `1` = use the built-in mock broker; real broker keys are ignored, and the DB, Archie's runtime (artifacts + memory) and views default to `.demo/`. The app refuses to start if pointed at the live instance's data |
+| `OPENPF_RUNTIME_DIR` | Archie's per-instance folder (working dir, `artifacts/`, `memory/`). Default `.claude/runtime` |
+| `CORS_ORIGINS` | Extra origins allowed to call the API. State-changing requests from other sites are refused |
 | `OPENPF_API_TOKEN` | Require a token for the API and chat (set it before exposing beyond localhost) |
 | `OPENPF_USER_NAME` | How Archie addresses you |
 | `VIEWS_MODEL` / `CLAUDE_PLAYS_MODEL` | Models for the view builder and play drafting |

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import plays as plays_api
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
-from app.core.auth import ApiTokenMiddleware
+from app.core.auth import ApiTokenMiddleware, OriginGuardMiddleware
 from app.api import views
 from app.core.config import get_settings
 from app.core.database import init_db
@@ -61,9 +61,24 @@ def _warm_sandbox_history() -> None:
 
 
 def _sandbox_enabled() -> bool:
-    from app.services.sandbox_broker import is_sandbox_enabled_env
+    # Keyed off the process env (OPENPF_SANDBOX=1 or T212_BASE_ENV=sandbox) so
+    # the isolation in core.config/core.sandbox always applies with it.
+    from app.core.sandbox import is_sandbox
 
-    return is_sandbox_enabled_env() or settings.t212_base_env == "sandbox"
+    return is_sandbox()
+
+
+def _start_scheduler_safely() -> bool:
+    """Start the in-process scheduler if enabled. A failure is logged, never
+    fatal — the dashboard must still come up."""
+    if not _scheduler_should_run():
+        return False
+    try:
+        start_scheduler()
+        return True
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).error("Scheduler failed to start; continuing without it", exc_info=True)
+        return False
 
 
 def _bind_host() -> str:
@@ -114,8 +129,29 @@ async def lifespan(app: FastAPI):
                     _warm_sandbox_history()
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).warning("Sandbox seed skipped", exc_info=True)
-    if _scheduler_should_run():
-        start_scheduler()
+        # Fail closed: a sandbox that could reach live data/keys must not start.
+        from app.core.sandbox import SandboxViolation, verify_isolation
+
+        log = logging.getLogger("openpf.sandbox")
+        try:
+            lines = verify_isolation()
+        except SandboxViolation as exc:
+            log.critical("SANDBOX ISOLATION FAILED — refusing to start: %s", exc)
+            raise
+        banner = "=" * 72
+        log.warning("\n%s\n  SANDBOX MODE — mock broker, fake money, isolated data\n%s\n%s", banner,
+                    "\n".join(f"  {line}" for line in lines), banner)
+    # Nothing can be mid-order before we've served a request: anything still
+    # 'executing' was interrupted by a crash/restart — surface it, don't spin.
+    try:
+        from app.core.database import SessionLocal
+        from app.services.execution_service import recover_stuck_executing
+
+        with SessionLocal() as db:
+            recover_stuck_executing(db, older_than_minutes=0)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("Stuck-intent recovery skipped", exc_info=True)
+    _start_scheduler_safely()
     # Builds Archie queues for agent-built Views (see views_builder.enqueue).
     import asyncio
 
@@ -137,7 +173,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request, exc):  # noqa: ANN001
+    """Last-resort 500: log the traceback server-side, return a JSON message the
+    UI can show — never the exception text or a stack trace."""
+    from fastapi.responses import JSONResponse
+
+    logging.getLogger("openpf.api").exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal error — see the OpenPF server log for details."})
+
 # Added before CORS so CORS stays outermost and 401s still carry CORS headers.
+app.add_middleware(
+    OriginGuardMiddleware,
+    allowed_origins=settings.cors_origins_list,
+    allowed_regex=settings.cors_allow_origin_regex or None,
+    api_prefix=settings.api_prefix,
+)
 if settings.openpf_api_token:
     app.add_middleware(ApiTokenMiddleware, token=settings.openpf_api_token, api_prefix=settings.api_prefix)
 

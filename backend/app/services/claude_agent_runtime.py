@@ -370,7 +370,7 @@ def run_research_request(
     Archie orchestrates the researcher + quant subagents over the market-data,
     forecast, and read-only T212 tools to evaluate ``objective``/``hypothesis``,
     returning a structured verdict + a markdown report and writing a persistent
-    artifact under .claude/runtime/artifacts/research/.
+    artifact under artifacts/research/ in the runtime folder.
     """
     objective = (objective or "").strip()
     subject = (subject or "").strip()

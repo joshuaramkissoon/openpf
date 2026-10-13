@@ -56,7 +56,7 @@ class TradeIntentItem(BaseModel):
 
 
 class IntentDecisionRequest(BaseModel):
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class IntentExecuteRequest(BaseModel):

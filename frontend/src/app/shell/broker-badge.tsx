@@ -6,8 +6,8 @@ const META: Record<BrokerMode, { label: string; title: string; dot: string; text
   sandbox: {
     label: "Sandbox",
     title: "Sandbox broker — simulated portfolio, no real money",
-    dot: "bg-chart-2",
-    text: "text-chart-2",
+    dot: "bg-warning",
+    text: "text-warning",
   },
   paper: {
     label: "Paper",
@@ -27,6 +27,28 @@ const META: Record<BrokerMode, { label: string; title: string; dot: string; text
     dot: "bg-positive",
     text: "text-foreground",
   },
+}
+
+/**
+ * Full-width strip pinned above every page in sandbox mode, so the demo can
+ * never be mistaken for the real account (the sidebar badge alone is easy to
+ * miss, and is hidden on mobile).
+ */
+export function SandboxBanner({ mode }: { mode: BrokerMode | null }) {
+  if (mode !== "sandbox") return null
+  return (
+    <div
+      role="status"
+      className="flex shrink-0 items-center justify-center gap-2 border-b border-warning/60 bg-warning px-3 py-1 text-center text-[11px] font-medium text-warning-foreground"
+      style={{
+        backgroundImage:
+          "repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in oklch, var(--warning-foreground) 8%, transparent) 10px 20px)",
+      }}
+    >
+      <span className="font-mono font-bold uppercase tracking-[0.18em]">Sandbox</span>
+      <span className="truncate">Simulated broker and fake money. Nothing here touches your real Trading 212 account.</span>
+    </div>
+  )
 }
 
 /**

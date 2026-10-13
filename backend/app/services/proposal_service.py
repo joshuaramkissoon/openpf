@@ -30,6 +30,20 @@ class ProposalError(ValueError):
     pass
 
 
+class AmbiguousInstrument(ProposalError):
+    """The symbol matches several listings (or none exactly) — the caller must
+    pick one by instrument_code. ``candidates`` lists the options."""
+
+    def __init__(self, message: str, candidates: list[dict[str, Any]]):
+        super().__init__(message)
+        self.candidates = candidates
+
+
+# Upper bound on a single proposal's share count — anything beyond is a unit
+# mistake (e.g. pence vs pounds), not a trade.
+_MAX_QUANTITY = 1_000_000
+
+
 def _resolve_instrument(db: Session, symbol: str | None, instrument_code: str | None) -> dict[str, Any] | None:
     """``{instrument_code, ticker, currency, name, verified}`` or None if unknown.
 
@@ -61,10 +75,39 @@ def _resolve_instrument(db: Session, symbol: str | None, instrument_code: str | 
                 "verified": False,
             }
         return None
-    rows = search_instruments(symbol or "", db, limit=1)
+    from app.services.portfolio_service import _LEVERAGE_NAME_RE
+
+    term = (symbol or "").strip().upper()
+    rows = search_instruments(term, db, limit=25)
     if not rows:
         return None
-    row = rows[0]
+    # Only an EXACT symbol/code match may be traded by symbol: the search also
+    # returns prefix and name matches ('bitcoin' -> some 'Bitcoin ...' ETP),
+    # which must never be silently substituted for what was asked.
+    exact = [
+        r for r in rows
+        if term in {str(r.get("ticker") or "").upper(), str(r.get("display_ticker") or "").upper(),
+                    str(r.get("instrument_code") or "").upper()}
+    ]
+    candidates = [
+        {"instrument_code": r["instrument_code"], "ticker": r.get("display_ticker") or r["ticker"],
+         "name": r.get("name") or "", "currency": r.get("currency")}
+        for r in (exact or rows)[:6]
+    ]
+    if not exact:
+        raise AmbiguousInstrument(
+            f"no instrument with the exact symbol {term!r} — closest matches are listed; "
+            "pass the right one as instrument_code (or tell the user it isn't tradable on Trading 212)",
+            candidates,
+        )
+    # A same-symbol leveraged/ETP wrapper doesn't make a plain stock ambiguous.
+    plain = [r for r in exact if not _LEVERAGE_NAME_RE.search(r.get("name") or "")] or exact
+    if len({r["instrument_code"] for r in plain}) > 1:
+        raise AmbiguousInstrument(
+            f"{term!r} is listed on more than one exchange — pass the intended listing as instrument_code",
+            candidates,
+        )
+    row = plain[0]
     info = meta.get(str(row["instrument_code"]).upper(), {})
     return {
         "instrument_code": info.get("ticker") or row["instrument_code"],
@@ -107,8 +150,10 @@ def _coerce_positive(value: Any, name: str) -> float | None:
         out = float(value)
     except (TypeError, ValueError) as exc:
         raise ProposalError(f"{name} must be a number") from exc
-    if not math.isfinite(out) or out <= 0:
-        return None
+    if out == 0:
+        return None  # 0 means "not passed" (MCP tool defaults)
+    if not math.isfinite(out) or out < 0:
+        raise ProposalError(f"{name} must be a positive number")
     return out
 
 
@@ -173,7 +218,13 @@ def propose_trade(
     if order_type in {"stop", "stop_limit"} and stop is None:
         return _fail(f"{order_type} orders need stop_price")
 
-    instrument = _resolve_instrument(db, symbol, instrument_code)
+    if qty is not None and qty > _MAX_QUANTITY:
+        return _fail(f"quantity {qty:g} is implausibly large — check the units (shares, not pence/cents)")
+
+    try:
+        instrument = _resolve_instrument(db, symbol, instrument_code)
+    except AmbiguousInstrument as exc:
+        return {"ok": False, "error": str(exc), "candidates": exc.candidates, "caps": caps}
     if not instrument:
         return _fail(f"unknown instrument {instrument_code or symbol!r} — search_instruments for the exact code")
 
@@ -202,11 +253,20 @@ def propose_trade(
         qty = math.floor((notional / price_gbp) * 1e6) / 1e6  # type: ignore[operator]
         if qty <= 0:
             return _fail("notional_gbp is too small for one fractional unit")
+    if qty > _MAX_QUANTITY or not math.isfinite(qty):
+        return _fail(f"that sizes to {qty:g} shares — implausibly large; check the amount")
     estimated_notional = round(qty * price_gbp, 2)
 
     ticker = str(instrument["ticker"]).upper()[:32]
     violations = rail_violations(
-        db, symbol=ticker, side=side, quantity=qty, estimated_notional=estimated_notional, risk=risk
+        db,
+        symbol=ticker,
+        side=side,
+        quantity=qty,
+        estimated_notional=estimated_notional,
+        risk=risk,
+        account_kind=account_kind,
+        instrument_code=str(instrument["instrument_code"]),
     )
     hard = [v for v in violations if v not in _SOFT_VIOLATIONS]
     warnings.extend(v for v in violations if v in _SOFT_VIOLATIONS)

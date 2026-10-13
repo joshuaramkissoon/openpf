@@ -17,6 +17,11 @@ export function useAppConfig() {
 
   useEffect(() => {
     void reload()
+    // Backend was down at first load → refetch when it's back (the SANDBOX
+    // strip and broker badge depend on this config).
+    const onOnline = () => void reload()
+    window.addEventListener('openpf:backend-online', onOnline)
+    return () => window.removeEventListener('openpf:backend-online', onOnline)
   }, [reload])
 
   return { config, reload }

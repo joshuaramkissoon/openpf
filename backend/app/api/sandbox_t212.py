@@ -106,7 +106,12 @@ async def place(kind: str, request: Request) -> Any:
         return JSONResponse({"message": "unknown order type"}, status_code=404)
     try:
         account, scope = _auth(request)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            raise sbx.SandboxError(400, "request body must be JSON") from None
+        if not isinstance(body, dict):
+            raise sbx.SandboxError(400, "request body must be a JSON object")
         return sbx.place_order(account, scope, kind, body)
     except sbx.SandboxError as exc:
         return _err(exc)
@@ -123,6 +128,12 @@ def cancel(order_id: str, request: Request) -> Any:
 
 
 @router.post("/reset")
-def reset() -> Any:
+def reset(request: Request) -> Any:
+    # Needs a sandbox key like every other route, so a cross-site page can't
+    # wipe the demo portfolio with a bare POST. (`demo.sh --reset` is the usual way.)
+    try:
+        _auth(request)
+    except sbx.SandboxError as exc:
+        return _err(exc)
     sbx.reset()
     return {"status": "reset"}

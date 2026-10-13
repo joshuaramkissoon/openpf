@@ -1,6 +1,7 @@
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,7 @@ from app.services.chat_service import (
     require_session,
     send_message,
 )
+from app.services.chat_errors import MAX_CHAT_CHARS, friendly_chat_error
 from app.services.chat_title_service import retitle_in_request
 from app.services.claude_chat_runtime import claude_chat_runtime
 from app.services.claude_memory_service import schedule_memory_distillation
@@ -291,9 +293,22 @@ async def chat_stream(session_id: str, websocket: WebSocket):
     await websocket.accept()
     db = SessionLocal()
     try:
-        incoming = await websocket.receive_json()
-        payload = ChatSendRequest.model_validate(incoming)
-        session = require_session(db, session_id)
+        try:
+            incoming = await websocket.receive_json()
+            payload = ChatSendRequest.model_validate(incoming)
+        except (ValidationError, ValueError, KeyError) as exc:
+            too_long = "at most" in str(exc) or "string_too_long" in str(exc)
+            await websocket.send_json({
+                "type": "error",
+                "error": (f"Message is too long — keep it under {MAX_CHAT_CHARS:,} characters."
+                          if too_long else "Message is empty or unreadable."),
+            })
+            return
+        try:
+            session = require_session(db, session_id)
+        except Exception:  # noqa: BLE001
+            await websocket.send_json({"type": "error", "error": "This chat no longer exists — start a new one."})
+            return
         user_row = append_user_message(db, session, payload.content)
 
         await websocket.send_json(
@@ -449,6 +464,15 @@ async def chat_stream(session_id: str, websocket: WebSocket):
             except asyncio.TimeoutError:
                 assistant_text = "".join(streamed_chunks).strip() or "Response timed out."
                 result_subtype = "error_timeout"
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:  # noqa: BLE001 — model unavailable, CLI crash, …
+                # Keep any partial answer; otherwise store a clear, actionable
+                # reason as Archie's reply so the UI (and history) never hangs.
+                partial = "".join(streamed_chunks).strip()
+                reason = friendly_chat_error(exc)
+                assistant_text = f"{partial}\n\n_{reason}_" if partial else reason
+                result_subtype = "error_runtime"
             finally:
                 keepalive_task.cancel()
                 try:
@@ -478,7 +502,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
         pass
     except Exception as exc:
         try:
-            await websocket.send_json({"type": "error", "error": str(exc)})
+            await websocket.send_json({"type": "error", "error": friendly_chat_error(exc)})
         except Exception:
             pass
     finally:

@@ -44,7 +44,8 @@ import { brokerModeOf, useAppConfig } from "../hooks/use-app-config"
 import { useChatSessions } from "../hooks/use-chat-sessions"
 import { usePortfolio } from "../hooks/use-portfolio"
 import { useProposals } from "../hooks/use-proposals"
-import { BrokerBadge } from "./broker-badge"
+import { BrokerBadge, SandboxBanner } from "./broker-badge"
+import { BackendOfflineBanner, RouteErrorBoundary } from "./resilience"
 import { AppSidebar, SidebarBody } from "./sidebar"
 
 const KNOWN = new Set(["home", "archie", "plays", "activity", "views", "settings", "labs"])
@@ -295,6 +296,8 @@ function ShellLayout(props: LayoutProps) {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <SandboxBanner mode={brokerMode} />
+        <BackendOfflineBanner />
         <header className="flex items-center gap-2 border-b border-border px-3 py-2 md:hidden">
           <Button variant="ghost" size="icon" className="size-9" aria-label="Open navigation" onClick={() => setMobileNav(true)}>
             <Menu className="size-5" />
@@ -310,6 +313,7 @@ function ShellLayout(props: LayoutProps) {
           {/* Archie stays MOUNTED across navigation (just hidden) so an
               in-flight stream keeps rendering and isn't lost. */}
           <div className={cn("absolute inset-0", isArchie ? "block" : "hidden")}>
+            <RouteErrorBoundary>
             <ArchiePage
               chat={chat}
               accountView={portfolio.accountView}
@@ -320,6 +324,7 @@ function ShellLayout(props: LayoutProps) {
               onPendingPromptConsumed={props.clearPendingPrompt}
               onError={props.setPageError}
             />
+            </RouteErrorBoundary>
           </div>
 
           {!isArchie ? (
@@ -333,7 +338,9 @@ function ShellLayout(props: LayoutProps) {
                     </button>
                   </div>
                 ) : null}
-                <Page {...props} />
+                <RouteErrorBoundary key={route.path}>
+                  <Page {...props} />
+                </RouteErrorBoundary>
               </div>
             </div>
           ) : null}

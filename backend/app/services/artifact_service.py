@@ -7,19 +7,19 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.services.claude_sdk_config import project_root
+from app.services.claude_sdk_config import artifacts_dir, memory_dir, project_root
 
 
 def _artifacts_root() -> Path:
     """Return the root directory for artifacts, creating it if needed."""
-    root = project_root() / ".claude" / "runtime" / "artifacts"
+    root = artifacts_dir()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
 def _legacy_cron_root() -> Path:
     """Return the legacy cron_logs directory (may not exist)."""
-    return project_root() / ".claude" / "runtime" / "memory" / "cron_logs"
+    return memory_dir() / "cron_logs"
 
 
 def _parse_yaml_value(raw: str) -> Any:
@@ -181,6 +181,8 @@ def get_artifact(relative_path: str) -> dict[str, Any] | None:
 
     Returns None if the file does not exist in either location.
     """
+    if "\x00" in relative_path:
+        return None
     root = _artifacts_root()
     full_path = (root / relative_path).resolve()
 

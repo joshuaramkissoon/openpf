@@ -156,6 +156,13 @@ def _resolve_credentials(account: AccountKind) -> tuple[str, str]:
 
 
 def _base_url() -> str:
+    from app.core.sandbox import assert_sandbox_url, is_sandbox, sandbox_base_url
+
+    if is_sandbox():
+        # Sandbox instance: the mock broker only, whatever T212_BASE_ENV says.
+        url = sandbox_base_url()
+        assert_sandbox_url(url)
+        return url
     env = os.environ.get("T212_BASE_ENV", "live").strip().lower()
     if env == "sandbox":
         # Local mock broker served by the OpenPF backend (no real money).

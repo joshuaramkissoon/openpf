@@ -32,6 +32,9 @@ export default defineConfig({
         target: process.env.API_PROXY_TARGET || 'http://localhost:8000',
         changeOrigin: true,
         ws: true,
+        // Sends X-Forwarded-Host so the backend's CSRF origin check recognises
+        // the page's own origin (e.g. a tailnet hostname) as same-site.
+        xfwd: true,
       },
     },
   },
