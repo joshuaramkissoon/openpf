@@ -1,26 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, FileQuestion, Loader2, ShieldCheck } from 'lucide-react'
+import { FileQuestion, Loader2, ShieldCheck } from 'lucide-react'
 
 import { getIntentsByIds } from '@/api/client'
 import { useDecisions } from '@/app/hooks/use-proposals'
-import type { ExecAccount } from '@/app/hooks/use-proposals'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
-import { railCheck } from '@/features/home/decision-rows'
-import { ProposalReceipt, ProposalTiles, isSingleTranche } from '@/features/home/proposal-tiles'
+import { ProposalCarousel, ProposalPair, useApproveAll } from '@/features/home/proposal-carousel'
+import { ProposalReceipt, isSingleTranche } from '@/features/home/proposal-tiles'
 import { proposalPrompt } from '@/features/home/decisions-card'
 import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
-import { accountLabel, formatMoney } from '@/utils/format'
+import { formatMoney } from '@/utils/format'
 import type { TradeIntent } from '@/types'
 
 /**
@@ -91,10 +79,6 @@ function useIntents(ids: string[]): { byId: Map<string, TradeIntent>; missing: S
   }, [key, listedMap, fetched, notFound])
 }
 
-function accountName(kind?: string | null) {
-  return kind === 'stocks_isa' ? 'ISA' : kind === 'invest' ? 'Invest' : kind === 'crypto' ? accountLabel('crypto') : null
-}
-
 function Unavailable({ id, loading }: { id: string; loading: boolean }) {
   const { navigate } = useAppActions()
   return (
@@ -114,34 +98,20 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
   const decisions = useDecisions()
   const { askArchie, openTicker, navigate } = useAppActions()
   const { byId, missing } = useIntents(ids)
-  const [confirmAll, setConfirmAll] = useState(false)
-  const [bulkWorking, setBulkWorking] = useState(false)
 
   const intents = ids.map((id) => byId.get(id))
   const pending = intents.filter((i): i is TradeIntent => Boolean(i && PENDING.has(i.status)))
-  const resolved = intents.filter((i): i is TradeIntent => Boolean(i && !PENDING.has(i.status)))
+  // The part of an ask a limit stopped: muted cards beside the proposals.
+  const held = intents.filter((i): i is TradeIntent => i?.status === 'held')
+  const resolved = intents.filter((i): i is TradeIntent => Boolean(i && !PENDING.has(i.status) && i.status !== 'held'))
   const unknown = ids.filter((id) => !byId.has(id))
+  const approveAll = useApproveAll(pending, decisions)
 
-  const rails = new Map(
-    pending.map((i) => [i.id, decisions ? railCheck(i, decisions.config, decisions.positions, decisions.total) : { ok: true, label: '' }]),
-  )
-  const approvable = pending.filter(
-    (i) => i.status !== 'executing' && rails.get(i.id)?.ok && (i.account_kind === 'invest' || i.account_kind === 'stocks_isa' || i.account_kind === 'crypto'),
-  )
-  const live = decisions?.brokerMode === 'live'
-
-  async function approveAll() {
-    if (!decisions) return
-    setBulkWorking(true)
-    try {
-      for (const i of approvable) await decisions.proposals.approveAndExecute(i, i.account_kind as ExecAccount)
-    } finally {
-      setBulkWorking(false)
-    }
-  }
-
-  const prominent = pending.length > 0
-  const total = approvable.reduce((a, i) => a + i.estimated_notional, 0)
+  const prominent = pending.length > 0 || held.length > 0
+  const cards = pending.length + held.length
+  const shared = decisions
+    ? { ctx: decisions, onAsk: (i: TradeIntent) => askArchie(proposalPrompt(i)), onViewTicker: openTicker, askLabel: 'Ask why' }
+    : null
 
   return (
     <div className={cn('rc-proposals', prominent ? 'is-pending' : 'is-resolved')}>
@@ -149,38 +119,35 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
         <div className="rc-proposals-head">
           <ShieldCheck className="size-4 text-primary" />
           <span className="font-medium text-foreground">
-            {pending.length === 1 ? 'Archie proposes a trade' : `Archie proposes ${pending.length} trades`}
+            {pending.length === 0
+              ? 'Held back by your limits'
+              : pending.length === 1
+                ? 'Archie proposes a trade'
+                : `Archie proposes ${pending.length} trades`}
           </span>
-          <span className="hidden text-muted-foreground sm:inline">· nothing happens until you approve</span>
-          {decisions && approvable.length > 1 && !isSingleTranche(pending) ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-auto h-7 gap-1.5 px-2.5 text-xs"
-              disabled={bulkWorking || decisions.proposals.working !== null}
-              onClick={() => (live ? setConfirmAll(true) : void approveAll())}
-            >
-              {bulkWorking ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-              Approve all within limits ({approvable.length})
-            </Button>
-          ) : null}
+          {pending.length > 0 && held.length > 0 ? (
+            <span className="text-muted-foreground">· {held.length} held back</span>
+          ) : (
+            <span className="hidden text-muted-foreground sm:inline">
+              {pending.length > 0 ? '· nothing happens until you approve' : '· nothing was proposed'}
+            </span>
+          )}
+          {!isSingleTranche(pending) && approveAll.button ? <span className="ml-auto">{approveAll.button}</span> : null}
         </div>
       ) : null}
 
-      {pending.length > 0 ? (
+      {cards > 0 ? (
         <div className="rc-proposals-rows">
-          {decisions ? (
-            <ProposalTiles
-              intents={pending}
-              ctx={decisions}
-              onAsk={(i) => askArchie(proposalPrompt(i))}
-              onViewTicker={openTicker}
-              askLabel="Ask why"
-            />
+          {shared ? (
+            cards > 2 ? (
+              <ProposalCarousel intents={pending} held={held} {...shared} />
+            ) : (
+              <ProposalPair intents={pending} held={held} {...shared} />
+            )
           ) : (
-            pending.map((intent) => (
+            [...pending, ...held].map((intent) => (
               <div key={intent.id} className="flex items-center gap-2 py-2 text-sm">
-                <span className="text-xs font-semibold uppercase">{intent.side}</span>
+                <span className="text-xs font-semibold uppercase">{intent.status === 'held' ? 'held' : intent.side}</span>
                 <span className="font-medium">{intent.symbol}</span>
                 <span className="rc-fig">{formatMoney(intent.estimated_notional, 'GBP', 0)}</span>
                 <button type="button" className="ml-auto text-xs text-primary hover:underline" onClick={() => navigate('/activity/proposals')}>
@@ -209,31 +176,7 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
         </div>
       ) : null}
 
-      <AlertDialog open={confirmAll} onOpenChange={setConfirmAll}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Place {approvable.length} orders ({formatMoney(total, 'GBP', 0)})?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              These send real orders to Trading 212:{' '}
-              {approvable.map((i) => `${i.side.toUpperCase()} ${i.symbol} ${formatMoney(i.estimated_notional, 'GBP', 0)} (${accountName(i.account_kind)})`).join(', ')}.
-              Proposals outside your limits are left for you to review.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirmAll(false)
-                void approveAll()
-              }}
-            >
-              Place orders
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {approveAll.dialog}
     </div>
   )
 }

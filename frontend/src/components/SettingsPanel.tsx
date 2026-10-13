@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Eye, EyeOff, Loader2, Send, Shield, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -26,6 +26,8 @@ interface Props {
   onPrivacyModeChange?: (mode: PrivacyMode) => void
   /** Render only these sections (the Settings page splits them across tabs). */
   sections?: SettingsSection[]
+  /** Risk fields to spotlight (comma-separated ids), e.g. from a held-back order's "Change limits". */
+  focus?: string | null
 }
 
 export type SettingsSection = 'privacy' | 'broker' | 'risk' | 'credentials' | 'telegram'
@@ -78,8 +80,18 @@ export function SettingsPanel({
   privacyMode = 'off',
   onPrivacyModeChange,
   sections,
+  focus,
 }: Props) {
   const show = (key: SettingsSection) => !sections || sections.includes(key)
+  const spotlit = useMemo(() => new Set((focus ?? '').split(',').filter(Boolean)), [focus])
+  const spot = (id: string) => (spotlit.has(id) ? 'field-spotlight -mx-2 px-2 py-1.5' : '')
+  useEffect(() => {
+    const first = (focus ?? '').split(',').find(Boolean)
+    const el = first ? document.getElementById(first) : null
+    if (!el) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    ;(el as HTMLInputElement).focus({ preventScroll: true })
+  }, [focus, config])
   const [working, setWorking] = useState(false)
   const PrivacyModeIcon = PRIVACY_MODE_ICON[privacyMode]
 
@@ -419,7 +431,7 @@ export function SettingsPanel({
               void saveRisk(new FormData(e.currentTarget))
             }}
           >
-            <div className="space-y-1.5">
+            <div className={`space-y-1.5 ${spot('max_single_order_notional')}`}>
               <Label htmlFor="max_single_order_notional">Max single order (£)</Label>
               <Input
                 id="max_single_order_notional"
@@ -427,8 +439,11 @@ export function SettingsPanel({
                 defaultValue={riskDefaults.max_single_order_notional}
                 className="font-mono tabular-nums"
               />
+              {spotlit.has('max_single_order_notional') ? (
+                <p className="text-xs text-muted-foreground">This limit held back an order. Archie never changes it; only you can.</p>
+              ) : null}
             </div>
-            <div className="space-y-1.5">
+            <div className={`space-y-1.5 ${spot('max_daily_notional')}`}>
               <Label htmlFor="max_daily_notional">Max daily notional (£)</Label>
               <Input
                 id="max_daily_notional"
@@ -436,6 +451,9 @@ export function SettingsPanel({
                 defaultValue={riskDefaults.max_daily_notional}
                 className="font-mono tabular-nums"
               />
+              {spotlit.has('max_daily_notional') ? (
+                <p className="text-xs text-muted-foreground">This limit held back an order. Archie never changes it; only you can.</p>
+              ) : null}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="max_position_weight">Max position weight (0-1)</Label>

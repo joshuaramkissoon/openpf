@@ -168,6 +168,12 @@ export async function approveIntent(id: string, note?: string) {
   return data
 }
 
+/** Re-propose a held-back ask for tomorrow's limit window (changes no limit). */
+export async function stageIntentTomorrow(id: string) {
+  const { data } = await api.post(`/agent/intents/${id}/stage-tomorrow`)
+  return data
+}
+
 export async function rejectIntent(id: string, note?: string) {
   const { data } = await api.post(`/agent/intents/${id}/reject`, { note })
   return data

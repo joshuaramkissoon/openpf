@@ -42,8 +42,10 @@ mcp = FastMCP(
     instructions=(
         "Trade proposals. You cannot place or cancel orders. To suggest a trade, call "
         "propose_trade: it validates the instrument, sizes the order, checks the risk "
-        "rails and queues it for the user to approve. If it returns violations, resize "
-        "within the caps and try again rather than asking the user to loosen them. "
+        "rails and queues it for the user to approve. When an ask is over the per-order or "
+        "daily limit it proposes the part that fits and holds back the rest on a card the "
+        "user can stage for tomorrow or take to their limits — never loosen limits, and "
+        "don't re-propose the held-back part yourself. "
         "get_track_record shows how your past proposals actually did — cite it honestly, "
         "with its sample size. suggest_permission can ASK the user for a standing permission "
         "when a category's record is good; it grants nothing."
@@ -52,6 +54,14 @@ mcp = FastMCP(
 
 
 _RESERVED_SOURCES = {"play", "rebalance"}
+
+
+def _day(for_day: str):
+    from datetime import timedelta
+
+    from app.services.execution_service import utc_today
+
+    return utc_today() + timedelta(days=1) if (for_day or "").strip().lower() == "tomorrow" else None
 
 
 def _fmt(payload: Any) -> str:
@@ -73,6 +83,8 @@ def propose_trade(
     play_id: str = "",
     source: str = "chat",
     category: str = "",
+    for_day: str = "today",
+    hold_back_over_limit: bool = True,
 ) -> str:
     """Queue a trade proposal for the user to approve. Does NOT execute anything.
 
@@ -94,6 +106,14 @@ def propose_trade(
         source: Free-form origin tag (e.g. 'chat', 'scheduled:<task>').
         category: What kind of call this is, for your track record: deploy_cash | rebalance |
             play_tranche | news_reaction | trim_derisk | other. Inferred when omitted.
+        for_day: 'today' (default) or 'tomorrow' — stage it for tomorrow's limit window (only
+            when the user asks for that; it can't be placed before tomorrow and counts against
+            tomorrow's daily limit).
+        hold_back_over_limit: True (default): if the order is over the per-order or daily limit
+            (today's open proposals count toward the daily one), propose the part that fits and
+            hold back the rest — the result's ``held_back`` and ``blocked`` say what and which
+            limit, and the chat shows the held-back part as a card. False: just report the
+            violations so you can resize yourself.
     """
     logger.info("propose_trade side=%s symbol=%s code=%s account=%s", side, symbol, instrument_code, account_kind)
     init_db()
@@ -116,6 +136,8 @@ def propose_trade(
             # staging and rebalancer (standing permissions key off them).
             source="chat" if (source or "").strip().lower() in _RESERVED_SOURCES else source,
             category=category or None,
+            not_before=_day(for_day),
+            hold_back=bool(hold_back_over_limit),
         )
         return _fmt(result)
     except Exception as exc:  # noqa: BLE001 — surface as a tool error payload

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.entities import AccountSnapshot, ExecutionEvent, PositionSnapshot, TradeIntent
@@ -43,8 +43,13 @@ def _log_event(db: Session, intent_id: str, level: str, message: str, payload: d
     db.commit()
 
 
+def utc_today() -> date:
+    """The daily caps run on UTC days (midnight UTC resets them)."""
+    return datetime.utcnow().date()
+
+
 def _daily_executed_notional(db: Session) -> float:
-    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = datetime.combine(utc_today(), time.min)
     total = db.execute(
         select(func.sum(TradeIntent.estimated_notional)).where(
             TradeIntent.status == "executed",
@@ -52,6 +57,38 @@ def _daily_executed_notional(db: Session) -> float:
         )
     ).scalar_one_or_none()
     return float(total or 0.0)
+
+
+# Proposals that still hold a claim on a day's daily notional cap.
+_OPEN_STATUSES = ("proposed", "approved", "executing")
+
+
+def daily_notional_used(
+    db: Session,
+    day: date | None = None,
+    *,
+    include_pending: bool = False,
+    exclude_intent_id: str | None = None,
+) -> float:
+    """GBP already counted against ``day``'s daily notional cap.
+
+    Today: what has been placed, plus (``include_pending``) open proposals
+    that could still be placed today. A later day: the proposals already
+    staged for it (``not_before`` that day) — nothing can be placed yet.
+    """
+    today = utc_today()
+    day = day or today
+    total = _daily_executed_notional(db) if day <= today else 0.0
+    if day > today or include_pending:
+        q = select(func.sum(TradeIntent.estimated_notional)).where(TradeIntent.status.in_(_OPEN_STATUSES))
+        if day > today:
+            q = q.where(TradeIntent.not_before == day)
+        else:
+            q = q.where(or_(TradeIntent.not_before.is_(None), TradeIntent.not_before <= today))
+        if exclude_intent_id:
+            q = q.where(TradeIntent.id != exclude_intent_id)
+        total += float(db.execute(q).scalar_one_or_none() or 0.0)
+    return total
 
 
 def _latest_account_cash(db: Session, account_kind: str | None = None) -> float | None:
@@ -124,6 +161,14 @@ def expire_stale_intents(db: Session, ttl_hours: int = _INTENT_TTL_HOURS) -> int
     # Play tranches are deliberate, staged plans — give them longer to be acted on.
     play_cutoff = datetime.utcnow() - timedelta(hours=_PLAY_INTENT_TTL_HOURS)
     stale = [i for i in stale if not _is_play_intent(i) or i.created_at < play_cutoff]
+    # A proposal staged for a later day only starts its clock on that day.
+    stale = [i for i in stale if not i.not_before or datetime.combine(i.not_before, time.min) < cutoff]
+    # Held-back asks (over a limit, kept for the user to stage or drop) go stale too.
+    stale += (
+        db.execute(select(TradeIntent).where(TradeIntent.status == "held", TradeIntent.created_at < cutoff))
+        .scalars()
+        .all()
+    )
     if not stale:
         return 0
     for intent in stale:
@@ -145,7 +190,8 @@ def supersede_open_proposals(db: Session) -> int:
     )
     # A new analyst run only replaces the previous run's batch — never a play's
     # staged tranche, which the user asked for explicitly.
-    open_proposals = [i for i in open_proposals if not _is_play_intent(i)]
+    # Nor one the user staged for a later day.
+    open_proposals = [i for i in open_proposals if not _is_play_intent(i) and not i.not_before]
     for intent in open_proposals:
         intent.status = "expired"
         if not intent.failure_reason:
@@ -183,7 +229,8 @@ def recover_stuck_executing(db: Session, older_than_minutes: int = _STUCK_EXECUT
 def list_intents(db: Session, limit: int = 100) -> list[TradeIntent]:
     expire_stale_intents(db)
     recover_stuck_executing(db)
-    q = select(TradeIntent).order_by(desc(TradeIntent.created_at)).limit(limit)
+    # Held-back asks only live on the chat card that raised them.
+    q = select(TradeIntent).where(TradeIntent.status != "held").order_by(desc(TradeIntent.created_at)).limit(limit)
     return list(db.execute(q).scalars().all())
 
 
@@ -194,7 +241,17 @@ def list_events(db: Session, limit: int = 300) -> list[ExecutionEvent]:
 
 def _status_message(intent: TradeIntent, action: str) -> str:
     reason = f" ({intent.failure_reason})" if intent.failure_reason and intent.status in {"expired", "failed"} else ""
+    if intent.status == "held":
+        return f"This order was held back by a limit, so it can't be {action} — stage it for tomorrow or change your limits."
     return f"This proposal can't be {action} — it is already {intent.status}{reason}."
+
+
+def _not_yet(intent: TradeIntent) -> str | None:
+    """Why a proposal staged for a later day can't be placed yet, else None."""
+    if intent.not_before and intent.not_before > utc_today():
+        when = "tomorrow" if intent.not_before == utc_today() + timedelta(days=1) else f"{intent.not_before:%a %-d %b}"
+        return f"This proposal is staged for {when} (that day's limits) — it can't be placed before then."
+    return None
 
 
 def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: str = "human") -> TradeIntent:
@@ -206,6 +263,8 @@ def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: 
         raise ExecutionError(f"Intent {intent_id} not found")
     if intent.status not in {"proposed", "approved"}:
         raise ExecutionError(_status_message(intent, "approved"))
+    if reason := _not_yet(intent):
+        raise ExecutionError(reason)
 
     intent.status = "approved"
     intent.approved_at = datetime.utcnow()
@@ -226,7 +285,7 @@ def reject_intent(db: Session, intent_id: str, note: str | None = None) -> Trade
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
-    if intent.status not in {"proposed", "approved"}:
+    if intent.status not in {"proposed", "approved", "held"}:
         # Rejecting an executed/executing intent would rewrite the audit trail.
         raise ExecutionError(_status_message(intent, "rejected"))
 
@@ -263,12 +322,18 @@ def rail_violations(
     risk: dict | None = None,
     account_kind: str | None = None,
     instrument_code: str | None = None,
+    not_before: date | None = None,
+    daily_used: float | None = None,
 ) -> list[str]:
     """Every execution rail an order of this shape would trip right now.
 
     Shared by ``execute_intent`` (which refuses on any violation) and the agent's
     ``propose_trade`` tool (which reports them up front so the agent sizes within
     the caps). Messages are stable ``<guard>: <reason>`` strings.
+
+    ``not_before``: the day the order is for. A later day's daily cap counts
+    what is already staged for that day; ``daily_used`` overrides the figure
+    (``propose_trade`` passes one that also counts today's open proposals).
     """
     risk = risk or ConfigStore(db).get_risk()
     out: list[str] = []
@@ -280,6 +345,8 @@ def rail_violations(
         TradeIntent.side == side,
         TradeIntent.quantity == quantity,
         TradeIntent.status.in_(["proposed", "approved", "executed"]),
+        # The same order for another day is that day's order, not a repeat.
+        TradeIntent.not_before.is_(None) if not_before is None else TradeIntent.not_before == not_before,
     )
     if exclude_intent_id:
         dup_q = dup_q.where(TradeIntent.id != exclude_intent_id)
@@ -289,7 +356,14 @@ def rail_violations(
     if estimated_notional > float(risk["max_single_order_notional"]):
         out.append("risk-guard: order exceeds max single-order notional")
 
-    if _daily_executed_notional(db) + estimated_notional > float(risk["max_daily_notional"]):
+    if daily_used is None:
+        future = not_before is not None and not_before > utc_today()
+        daily_used = (
+            daily_notional_used(db, not_before, exclude_intent_id=exclude_intent_id)
+            if future
+            else _daily_executed_notional(db)
+        )
+    if daily_used + estimated_notional > float(risk["max_daily_notional"]):
         out.append("risk-guard: order exceeds max daily notional")
 
     if side == "buy":
@@ -328,6 +402,9 @@ def execute_intent(
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
+
+    if reason := _not_yet(intent):
+        raise ExecutionError(reason)
 
     if approve and intent.status == "proposed":
         intent = approve_intent(db, intent_id, note=f"human approval via {approved_via}", actor="human")
@@ -369,6 +446,7 @@ def execute_intent(
         risk=risk,
         account_kind=resolved_account,
         instrument_code=intent.instrument_code,
+        not_before=intent.not_before,
     )
     if violations:
         raise ExecutionError(violations[0])

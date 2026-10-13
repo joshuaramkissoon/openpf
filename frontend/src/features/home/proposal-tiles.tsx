@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   Ban,
+  CalendarClock,
   Check,
   CheckCheck,
   Clock,
+  Gauge,
   Hourglass,
   Info,
   Layers,
   Loader2,
+  PauseCircle,
   Sparkles,
   TriangleAlert,
   X,
@@ -31,7 +34,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 import { accountLabel, formatMoney, formatPercent, formatQuantity } from "@/utils/format"
-import type { AppConfig, PositionItem, TradeIntent } from "@/types"
+import type { AppConfig, LimitBlock, PositionItem, TradeIntent } from "@/types"
 import { PENDING_STATUSES, type DecisionsContextValue, type ExecAccount, type ProposalsState } from "@/app/hooks/use-proposals"
 
 import { ago, railCheck } from "./decision-rows"
@@ -95,10 +98,10 @@ export function railChecksInSequence(
   return out
 }
 
-type Group = { key: string; title: string | null; playId: string | null; label: string | null; intents: TradeIntent[] }
+export type Group = { key: string; title: string | null; playId: string | null; label: string | null; intents: TradeIntent[] }
 
 /** Same play + same tranche → one group; everything else stands alone, in order. */
-function groupProposals(intents: TradeIntent[]): (Group | TradeIntent)[] {
+export function groupProposals(intents: TradeIntent[]): (Group | TradeIntent)[] {
   const keyOf = (i: TradeIntent) => {
     const { playId } = ownerOf(i)
     return playId && i.tranche_index != null ? `${playId}#${i.tranche_index}` : null
@@ -133,12 +136,13 @@ function groupProposals(intents: TradeIntent[]): (Group | TradeIntent)[] {
 
 // ── Small parts ─────────────────────────────────────────────────────────
 
-function SidePill({ side }: { side: TradeIntent["side"] }) {
+function SidePill({ side, small = false }: { side: TradeIntent["side"]; small?: boolean }) {
   const buy = side === "buy"
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-full px-2 text-[10px] font-semibold uppercase tracking-[0.08em]",
+        "inline-flex items-center rounded-full font-semibold uppercase tracking-[0.08em]",
+        small ? "h-[18px] px-1.5 text-[9.5px]" : "h-5 px-2 text-[10px]",
         buy ? "bg-positive/12 text-positive" : "bg-negative/12 text-negative",
       )}
     >
@@ -147,7 +151,7 @@ function SidePill({ side }: { side: TradeIntent["side"] }) {
   )
 }
 
-function RailMark({ rail }: { rail: Rail }) {
+function RailMark({ rail, small = false }: { rail: Rail; small?: boolean }) {
   return (
     <Popover>
       <PopoverTrigger
@@ -155,11 +159,12 @@ function RailMark({ rail }: { rail: Rail }) {
         delay={120}
         aria-label={rail.label}
         className={cn(
-          "inline-flex size-6 shrink-0 items-center justify-center rounded-full transition-colors",
+          "inline-flex shrink-0 items-center justify-center rounded-full transition-colors",
+          small ? "size-5 -mr-0.5" : "size-6",
           rail.ok ? "text-positive hover:bg-positive/10" : "bg-warning/12 text-warning hover:bg-warning/20",
         )}
       >
-        {rail.ok ? <Check className="size-3.5" strokeWidth={2.5} /> : <TriangleAlert className="size-3.5" />}
+        {rail.ok ? <Check className={small ? "size-3" : "size-3.5"} strokeWidth={2.5} /> : <TriangleAlert className={small ? "size-3" : "size-3.5"} />}
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-auto max-w-64 gap-1 px-3 py-2 text-xs">
         <p className="font-medium">{rail.ok ? "Within your rails" : "Outside your rails"}</p>
@@ -293,7 +298,7 @@ function DetailsPopover({ intent, rail }: { intent: TradeIntent; rail: Rail }) {
   )
 }
 
-function LiveConfirm({
+export function LiveConfirm({
   open,
   onOpenChange,
   title,
@@ -337,6 +342,43 @@ function liveDescription(intent: TradeIntent, account: ExecAccount | null) {
     : `This sends a real order to your Trading 212 ${account === "stocks_isa" ? "Stocks ISA" : "Invest"} account.`
 }
 
+// ── Later-day proposals ────────────────────────────────────────────────
+
+const utcDay = (offset = 0) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10)
+
+/** The (UTC) day a staged proposal opens, when that's still ahead; else null. */
+export function laterDay(i: TradeIntent): string | null {
+  return i.not_before && i.not_before > utcDay() ? i.not_before : null
+}
+
+export function dayLabel(day: string) {
+  if (day === utcDay(1)) return "Tomorrow"
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })
+}
+
+/** Can be placed right now with one tap: pending, account known, inside the rails, not staged for later. */
+export function approvableNow(i: TradeIntent, rail: Rail | undefined) {
+  return i.status !== "executing" && Boolean(presetAccount(i)) && Boolean(rail?.ok) && !laterDay(i)
+}
+
+function LaterBadge({ day }: { day: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={200}
+        render={<span />}
+        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed border-primary/40 bg-primary/[0.06] px-2.5 text-xs font-medium text-primary"
+      >
+        <CalendarClock className="size-3.5" />
+        {dayLabel(day)}
+      </TooltipTrigger>
+      <TooltipContent className="max-w-60">
+        Staged for {day === utcDay(1) ? "tomorrow" : dayLabel(day)}'s limits. It counts against that day's daily limit and can be approved from then.
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 // ── The tile ────────────────────────────────────────────────────────────
 
 export function ProposalTile({
@@ -348,6 +390,8 @@ export function ProposalTile({
   onViewTicker,
   askLabel = "Ask Archie",
   inGroup = false,
+  compact = false,
+  className,
 }: {
   intent: TradeIntent
   rail: Rail
@@ -359,6 +403,9 @@ export function ProposalTile({
   askLabel?: string
   /** Inside a tranche group: the header carries the play, so the chip is dropped. */
   inGroup?: boolean
+  /** The carousel tile: amount beside the ticker, tighter rhythm (~150px tall). */
+  compact?: boolean
+  className?: string
 }) {
   const preset = presetAccount(intent)
   const crypto = intent.account_kind === "crypto"
@@ -371,6 +418,8 @@ export function ProposalTile({
   const disabled = working || executing || Boolean(busy)
   const name = assetName(intent)
   const rationale = intent.rationale ? cleanRationale(intent.rationale) : ""
+  const later = laterDay(intent)
+  const sub = [name, intent.crypto?.label ?? accountShort(intent.account_kind)].filter(Boolean).join(" · ") || "\u00a0"
 
   function place() {
     if (!account) return
@@ -378,47 +427,73 @@ export function ProposalTile({
     else void ctx.proposals.approveAndExecute(intent, account)
   }
 
+  const identity = (
+    <button
+      type="button"
+      onClick={() => onViewTicker(intent.symbol)}
+      className={cn(
+        "flex min-w-0 flex-1 items-center rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        compact ? "gap-2" : "gap-2.5",
+      )}
+    >
+      <AssetIcon symbol={intent.symbol} crypto={crypto} size={compact ? 30 : 34} />
+      <span className="min-w-0">
+        <span className={cn("flex items-center gap-1.5 font-semibold leading-tight tracking-tight", compact ? "text-[14px]" : "text-[15px]")}>
+          {intent.symbol}
+          {compact ? <SidePill side={intent.side} small /> : null}
+        </span>
+        <span className="block truncate text-[11.5px] leading-snug text-muted-foreground">{sub}</span>
+      </span>
+    </button>
+  )
+
   return (
     <article
-      data-state={placing ? "placing" : "pending"}
+      data-state={placing ? "placing" : later ? "later" : "pending"}
       className={cn(
-        "ptile relative flex min-w-0 flex-col overflow-hidden rounded-xl border border-border/80 bg-card p-3.5 transition-[border-color,box-shadow,opacity]",
+        "ptile relative flex min-w-0 flex-col overflow-hidden rounded-xl border border-border/80 bg-card transition-[border-color,box-shadow,opacity]",
+        compact ? "p-3" : "p-3.5",
         "hover:border-border hover:shadow-[0_1px_0_0_color-mix(in_oklch,var(--foreground)_4%,transparent),0_8px_24px_-12px_color-mix(in_oklch,var(--foreground)_18%,transparent)]",
         !rail.ok && "border-warning/40 hover:border-warning/60",
         placing && "border-primary/40",
+        className,
       )}
     >
       {placing ? <span className="ptile-bar" aria-hidden /> : null}
 
-      <header className="flex items-start gap-2.5">
-        <button
-          type="button"
-          onClick={() => onViewTicker(intent.symbol)}
-          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <AssetIcon symbol={intent.symbol} crypto={crypto} size={34} />
-          <span className="min-w-0">
-            <span className="block text-[15px] font-semibold leading-tight tracking-tight">{intent.symbol}</span>
-            <span className="block truncate text-[11.5px] leading-snug text-muted-foreground">
-              {[name, intent.crypto?.label ?? accountShort(intent.account_kind)].filter(Boolean).join(" · ") || " "}
-            </span>
-          </span>
-        </button>
-        <SidePill side={intent.side} />
-      </header>
-
-      <div className="mt-3.5 flex items-end justify-between gap-2">
-        <Money
-          value={intent.estimated_notional}
-          currency="GBP"
-          decimals={0}
-          className="font-sans text-[1.65rem] font-semibold leading-none tracking-[-0.02em]"
-        />
-        <RailMark rail={rail} />
-      </div>
+      {compact ? (
+        <header className="flex items-start gap-2">
+          {identity}
+          <div className="flex shrink-0 flex-col items-end gap-0.5">
+            <Money
+              value={intent.estimated_notional}
+              currency="GBP"
+              decimals={0}
+              className="font-sans text-[1.2rem] font-semibold leading-none tracking-[-0.02em]"
+            />
+            <RailMark rail={rail} small />
+          </div>
+        </header>
+      ) : (
+        <>
+          <header className="flex items-start gap-2.5">
+            {identity}
+            <SidePill side={intent.side} />
+          </header>
+          <div className="mt-3.5 flex items-end justify-between gap-2">
+            <Money
+              value={intent.estimated_notional}
+              currency="GBP"
+              decimals={0}
+              className="font-sans text-[1.65rem] font-semibold leading-none tracking-[-0.02em]"
+            />
+            <RailMark rail={rail} />
+          </div>
+        </>
+      )}
 
       {!inGroup ? (
-        <div className="mt-2.5 flex min-w-0">
+        <div className={cn("flex min-w-0", compact ? "mt-1.5" : "mt-2.5")}>
           <PlayChip intent={intent} />
         </div>
       ) : null}
@@ -430,7 +505,8 @@ export function ProposalTile({
           aria-expanded={expanded}
           title={expanded ? undefined : rationale}
           className={cn(
-            "mt-2 text-left text-xs leading-relaxed text-muted-foreground transition-colors hover:text-foreground/80",
+            "text-left text-xs leading-relaxed text-muted-foreground transition-colors hover:text-foreground/80",
+            compact ? "mt-1.5" : "mt-2",
             expanded ? "" : "line-clamp-1",
           )}
         >
@@ -438,7 +514,7 @@ export function ProposalTile({
         </button>
       ) : null}
 
-      <footer className="mt-auto flex items-center gap-0.5 pt-3">
+      <footer className={cn("mt-auto flex items-center gap-0.5", compact ? "pt-2" : "pt-3")}>
         <DetailsPopover intent={intent} rail={rail} />
         <IconAction label={askLabel} onClick={() => onAsk(intent)}>
           <Sparkles className="size-3.5" />
@@ -447,27 +523,33 @@ export function ProposalTile({
           <X className="size-3.5" />
         </IconAction>
         <div className="ml-auto flex items-center gap-1.5">
-          {!preset ? (
-            <Select value={account ?? undefined} onValueChange={(v) => setAccount(v as ExecAccount)}>
-              <SelectTrigger size="sm" className="h-7 w-[92px] text-xs">
-                <SelectValue placeholder="Account" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="invest">Invest</SelectItem>
-                <SelectItem value="stocks_isa">Stocks ISA</SelectItem>
-              </SelectContent>
-            </Select>
-          ) : null}
-          <Button
-            size="sm"
-            variant={inGroup ? "outline" : "default"}
-            className="h-7 gap-1.5 px-3 text-xs"
-            onClick={place}
-            disabled={disabled || !account}
-          >
-            {placing ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {placing ? "Placing…" : "Approve"}
-          </Button>
+          {later ? (
+            <LaterBadge day={later} />
+          ) : (
+            <>
+              {!preset ? (
+                <Select value={account ?? undefined} onValueChange={(v) => setAccount(v as ExecAccount)}>
+                  <SelectTrigger size="sm" className="h-7 w-[92px] text-xs">
+                    <SelectValue placeholder="Account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="invest">Invest</SelectItem>
+                    <SelectItem value="stocks_isa">Stocks ISA</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : null}
+              <Button
+                size="sm"
+                variant={inGroup ? "outline" : "default"}
+                className="h-7 gap-1.5 px-3 text-xs"
+                onClick={place}
+                disabled={disabled || !account}
+              >
+                {placing ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                {placing ? "Placing…" : "Approve"}
+              </Button>
+            </>
+          )}
         </div>
       </footer>
 
@@ -485,26 +567,149 @@ export function ProposalTile({
   )
 }
 
+// ── A held-back ask ─────────────────────────────────────────────────────
+
+const RAIL_FIELD: Record<LimitBlock["rail"], string> = {
+  max_single_order_notional: "max_single_order_notional",
+  max_daily_notional: "max_daily_notional",
+}
+
+/** "over your £500 per-order limit" / "over today's £1,500 limit" / "daily limit used". */
+export function blockPhrase(b: LimitBlock) {
+  const limit = formatMoney(b.limit_gbp, "GBP", 0)
+  if (b.rail === "max_single_order_notional") return `over your ${limit} per-order limit`
+  const whose = !b.for_day || b.for_day <= utcDay() ? "today's" : b.for_day === utcDay(1) ? "tomorrow's" : `${dayLabel(b.for_day)}'s`
+  return b.remaining_gbp < 1 ? (whose === "today's" ? "daily limit used" : `${whose} limit used`) : `over ${whose} ${limit} limit`
+}
+
+/**
+ * The part of an ask a limit stopped, as a muted card with the honest options:
+ * stage it for tomorrow's limit window, or go change the limit (the user's call;
+ * Archie never touches it).
+ */
+export function HeldTile({
+  intent,
+  ctx,
+  onViewTicker,
+  compact = false,
+  className,
+}: {
+  intent: TradeIntent
+  ctx: DecisionsContextValue
+  onViewTicker: (ticker: string) => void
+  compact?: boolean
+  className?: string
+}) {
+  const crypto = intent.account_kind === "crypto"
+  const blocks = intent.held?.blocked ?? []
+  const working = ctx.proposals.working === intent.id
+  const risk = ctx.config?.risk
+  const amount = intent.estimated_notional
+  // Tomorrow's window only helps if it fits one order there.
+  const fitsTomorrow = !risk || (amount <= risk.max_single_order_notional && amount <= risk.max_daily_notional)
+  const fields = [...new Set(blocks.map((b) => RAIL_FIELD[b.rail]))]
+  const reason = blocks.length ? blocks.map(blockPhrase).join(" and ") : (intent.held?.reason ?? "over your limits")
+  const name = assetName(intent)
+
+  return (
+    <article
+      data-state="held"
+      className={cn(
+        "relative flex min-w-0 flex-col rounded-xl border border-dashed border-border bg-muted/30 dark:bg-muted/15",
+        compact ? "p-3" : "p-3.5",
+        className,
+      )}
+    >
+      <header className="flex items-start gap-2">
+        <button
+          type="button"
+          onClick={() => onViewTicker(intent.symbol)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <AssetIcon symbol={intent.symbol} crypto={crypto} size={compact ? 30 : 34} className="opacity-55 grayscale" />
+          <span className="min-w-0">
+            <span className="flex items-center gap-1.5 text-[14px] font-semibold leading-tight tracking-tight text-foreground/75">
+              {intent.symbol}
+              <span className="inline-flex h-[18px] items-center gap-1 rounded-full bg-foreground/[0.06] px-1.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                <PauseCircle className="size-2.5" />
+                Held back
+              </span>
+            </span>
+            <span className="block truncate text-[11.5px] leading-snug text-muted-foreground">
+              {[name, accountShort(intent.account_kind)].filter(Boolean).join(" · ") || "\u00a0"}
+            </span>
+          </span>
+        </button>
+        <Money
+          value={amount}
+          currency="GBP"
+          decimals={0}
+          className="shrink-0 font-sans text-[1.2rem] font-semibold leading-none tracking-[-0.02em] text-muted-foreground"
+        />
+      </header>
+
+      <p className="mt-2 flex items-start gap-1.5 text-xs leading-snug text-muted-foreground">
+        <Gauge className="mt-px size-3.5 shrink-0 text-warning/80" />
+        <span>
+          <span className="text-foreground/80">{reason.replace(/^./, (c) => c.toUpperCase())}.</span>
+          {!fitsTomorrow ? " Too big for one order under your limits." : ""}
+        </span>
+      </p>
+
+      <footer className={cn("mt-auto flex items-center gap-1", compact ? "pt-2.5" : "pt-3")}>
+        {fitsTomorrow ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 bg-card px-2.5 text-xs"
+            disabled={working}
+            onClick={() => void ctx.proposals.stageTomorrow(intent)}
+          >
+            {working ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            Propose tomorrow
+          </Button>
+        ) : null}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => navigate(`/settings/risk?focus=${fields.join(",") || "max_daily_notional"}`)}
+        >
+          Change limits
+        </Button>
+        <span className="ml-auto">
+          <IconAction label="Drop it" onClick={() => void ctx.proposals.dropHeld(intent.id)} disabled={working}>
+            <X className="size-3.5" />
+          </IconAction>
+        </span>
+      </footer>
+    </article>
+  )
+}
+
 // ── A tranche group ─────────────────────────────────────────────────────
 
-function TrancheGroup({
+export function TrancheGroup({
   group,
   ctx,
   onAsk,
   onViewTicker,
   askLabel,
+  row = false,
 }: {
   group: Group
   ctx: DecisionsContextValue
   onAsk: (intent: TradeIntent) => void
   onViewTicker: (ticker: string) => void
   askLabel?: string
+  /** Carousel: one card holding its legs side by side (compact tiles), not a grid cell. */
+  row?: boolean
 }) {
   const [confirm, setConfirm] = useState(false)
   const [running, setRunning] = useState(false)
   const rails = railChecksInSequence(group.intents, ctx.config, ctx.positions, ctx.total)
   const total = group.intents.reduce((s, i) => s + i.estimated_notional, 0)
-  const approvable = group.intents.filter((i) => i.status !== "executing" && presetAccount(i) && rails.get(i.id)?.ok)
+  const approvable = group.intents.filter((i) => approvableNow(i, rails.get(i.id)))
   const all = approvable.length === group.intents.length
   const anyWorking = group.intents.some((i) => ctx.proposals.working === i.id || i.status === "executing")
   const n = group.intents.length
@@ -529,16 +734,23 @@ function TrancheGroup({
   return (
     <section
       className={cn(
-        "@container col-span-full rounded-2xl border border-border/70 bg-muted/35 p-2 dark:bg-muted/20",
-        n === 2 && "@4xl:col-span-2",
+        "rounded-2xl border border-border/70 bg-muted/35 p-2 dark:bg-muted/20",
+        row ? "flex shrink-0 snap-start flex-col" : "@container col-span-full",
+        !row && n === 2 && "@4xl:col-span-2",
       )}
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1.5 pb-2 pt-0.5">
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1.5 pb-2 pt-0.5",
+          // Wider than a phone: keep the header (and its "approve both") in view while the legs scroll.
+          row && "sticky left-1 max-w-[calc(100vw-5.5rem)]",
+        )}
+      >
         <Layers className="size-3.5 shrink-0 text-muted-foreground" />
         <button
           type="button"
           onClick={() => group.playId && navigate(`/plays/${group.playId}`)}
-          className="min-w-0 max-w-[60%] truncate text-[13px] font-medium hover:underline"
+          className={cn("min-w-0 truncate text-[13px] font-medium hover:underline", !row && "max-w-[60%]")}
           title={group.title ?? undefined}
         >
           {group.title ?? "Play"}
@@ -559,7 +771,7 @@ function TrancheGroup({
           </Button>
         </span>
       </div>
-      <div className={cn("grid grid-cols-1 gap-2 @lg:grid-cols-2", n > 2 && "@4xl:grid-cols-3")}>
+      <div className={row ? "flex flex-1 gap-2" : cn("grid grid-cols-1 gap-2 @lg:grid-cols-2", n > 2 && "@4xl:grid-cols-3")}>
         {group.intents.map((i) => (
           <ProposalTile
             key={i.id}
@@ -571,6 +783,8 @@ function TrancheGroup({
             onViewTicker={onViewTicker}
             askLabel={askLabel}
             inGroup
+            compact={row}
+            className={row ? "w-[16.5rem] shrink-0 snap-start" : undefined}
           />
         ))}
       </div>
@@ -640,7 +854,7 @@ export function isSingleTranche(intents: TradeIntent[]) {
 
 const RECEIPT: Record<string, { label: (i: TradeIntent) => string; icon: typeof Check; tone: string }> = {
   executed: { label: (i) => (i.side === "buy" ? "Bought" : "Sold"), icon: CheckCheck, tone: "text-positive" },
-  rejected: { label: () => "Rejected", icon: X, tone: "text-muted-foreground" },
+  rejected: { label: (i) => (i.held && !i.held.staged ? "Dropped" : "Rejected"), icon: X, tone: "text-muted-foreground" },
   expired: { label: () => "Expired", icon: Hourglass, tone: "text-muted-foreground" },
   superseded: { label: () => "Superseded", icon: Clock, tone: "text-muted-foreground" },
   failed: { label: () => "Failed", icon: Ban, tone: "text-negative" },

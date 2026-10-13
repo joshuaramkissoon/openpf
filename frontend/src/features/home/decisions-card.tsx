@@ -11,10 +11,14 @@ import type { BrokerMode } from "@/app/hooks/use-app-config"
 import { PermissionSuggestionRow, usePermissionSuggestions } from "@/features/autonomy/home"
 
 import { SignalRow } from "./decision-rows"
-import { ProposalReceipt, ProposalTiles, useRecentlyResolved } from "./proposal-tiles"
+import { ProposalCarousel, useApproveAll } from "./proposal-carousel"
+import { ProposalReceipt, useRecentlyResolved } from "./proposal-tiles"
 import { signalPrompt, type useSignals } from "./use-signals"
 
-const MAX_ITEMS = 5
+// Proposals sit in one sideways row, so more of them fit without the card
+// growing; signals keep a few rows beneath.
+const MAX_PROPOSALS = 12
+const MAX_SIGNALS = 3
 
 export function proposalPrompt(i: { side: string; symbol: string; estimated_notional: number; rationale: string }) {
   return [
@@ -28,9 +32,9 @@ export function proposalPrompt(i: { side: string; symbol: string; estimated_noti
 }
 
 /**
- * The heart of Home: what's waiting on the owner. Pending proposals first
- * (approve & place / reject / ask), then the top deduped signals. Capped at
- * five items; the rest live behind "View all".
+ * The heart of Home: what's waiting on the owner. Pending proposals first, as
+ * one carousel row (approve & place / reject / ask, or all within limits from
+ * the header), then the top deduped signals. The rest live behind "View all".
  */
 export function DecisionsCard({
   proposals,
@@ -54,30 +58,35 @@ export function DecisionsCard({
   const { suggestions, dismiss } = usePermissionSuggestions()
   const shownSuggestions = suggestions.slice(0, 1)
   const pending = proposals.pending
-  const shownProposals = pending.slice(0, MAX_ITEMS)
+  const shownProposals = pending.slice(0, MAX_PROPOSALS)
   const resolved = useRecentlyResolved(proposals).slice(0, 3)
-  const signalSlots = Math.max(0, Math.min(3, MAX_ITEMS - shownProposals.length))
-  const shownSignals = signals.groups.slice(0, signalSlots)
+  const shownSignals = signals.groups.slice(0, shownProposals.length ? MAX_SIGNALS - 1 : MAX_SIGNALS)
   const hiddenSignals = signals.groups.length - shownSignals.length
   const hiddenProposals = pending.length - shownProposals.length
   const loading = !proposals.loaded || signals.loading
   const empty = !loading && pending.length === 0 && signals.groups.length === 0 && shownSuggestions.length === 0 && resolved.length === 0
   const count = pending.length + signals.groups.length + shownSuggestions.length
+  const ctx = { proposals, config, brokerMode, positions, total }
+  const approveAll = useApproveAll(shownProposals, ctx)
   if (hideWhenEmpty && (empty || loading)) return null
 
   return (
     <div className="rounded-xl border border-border bg-card">
-      <div className="flex items-baseline justify-between gap-3 px-5 pb-3 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 pb-3 pt-4">
         <div className="flex items-baseline gap-2">
           <h2 className="text-sm font-semibold tracking-tight">Decisions</h2>
           {count > 0 ? <span className="font-mono text-xs tabular-nums text-muted-foreground">{count}</span> : null}
         </div>
-        {signals.groups.length > 0 || hiddenProposals > 0 ? (
-          <SectionLink onClick={() => navigate(hiddenProposals > 0 ? "/activity/proposals" : "/home/signals")}>
-            View all →
-          </SectionLink>
-        ) : null}
+        <div className="flex items-center gap-3">
+          {!loading ? approveAll.button : null}
+          {signals.groups.length > 0 || hiddenProposals > 0 ? (
+            <SectionLink onClick={() => navigate(hiddenProposals > 0 ? "/activity/proposals" : "/home/signals")}>
+              View all →
+            </SectionLink>
+          ) : null}
+        </div>
       </div>
+      {approveAll.dialog}
 
       <div className="px-5 pb-5">
         {loading ? (
@@ -105,9 +114,9 @@ export function DecisionsCard({
               </div>
             ) : null}
             {shownProposals.length ? (
-              <ProposalTiles
+              <ProposalCarousel
                 intents={shownProposals}
-                ctx={{ proposals, config, brokerMode, positions, total }}
+                ctx={ctx}
                 onAsk={(i) => askArchie(proposalPrompt(i))}
                 onViewTicker={openTicker}
               />
