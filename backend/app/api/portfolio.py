@@ -40,6 +40,22 @@ def snapshot(
     return PortfolioSnapshotResponse(**result)
 
 
+@router.get("/today")
+def today(
+    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    display_currency: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Today's move: per-holding moves since the previous close, summed. The same
+    function feeds the Views data source's ``day_change`` fields."""
+    from app.services.day_move import today_move
+
+    try:
+        return today_move(db, account_kind, display_currency)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Today's move is unavailable right now.") from exc
+
+
 @router.get("/history")
 def history(
     account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),

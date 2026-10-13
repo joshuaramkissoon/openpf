@@ -656,6 +656,24 @@ export async function getPortfolioHistory(accountKind = 'all', currency: 'GBP' |
   return data
 }
 
+/** Today's move — the same per-holding numbers the Views data source shows, summed. */
+export interface TodayMove {
+  day_change: number | null
+  day_change_pct: number | null
+  /** Date of the latest market session priced in (before the open: the previous one). */
+  session: string | null
+  is_today: boolean | null
+  holdings_counted: number
+  holdings_missing: number
+}
+
+export async function getTodayMove(accountKind = 'all', currency: 'GBP' | 'USD' = 'GBP') {
+  const { data } = await api.get<TodayMove>('/portfolio/today', {
+    params: { account_kind: accountKind, display_currency: currency },
+  })
+  return data
+}
+
 export interface Alert {
   id: string
   created_at: string | null
