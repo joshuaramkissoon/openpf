@@ -23,6 +23,7 @@ from app.services.claude_sdk_config import (
 )
 from app.services import mcp_registry
 from app.services import costs_service
+from app.services.artifact_service import extract_summary, summary_frontmatter_line
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import (
     _daily_entry_count,
@@ -231,15 +232,32 @@ def _persist_goal_proposals(
 # How every LLM-written scheduled report is laid out. The app's report reader
 # turns this frame into a TL;DR card, a key-numbers strip and callouts, so the
 # same shape is asked of every scheduled task (including user-created ones).
+SUMMARY_RULES = (
+    "END every report with a fenced block tagged `summary` containing one JSON object — it is what the "
+    "user sees on Home, so it must be high signal, specific to their book, and never filler: "
+    "```summary\n"
+    '{"headline": "...", "points": ["..."], "action": "..." or null, "signal": "none" | "low" | "high"}\n'
+    "``` "
+    "headline: ONE sentence, the single most important takeaway, concrete and about this book "
+    "(e.g. 'NVDA + PLTR are now 55% of your money — up from 48% last week'). "
+    "points: at most 3 short lines, each ONLY if it changes what the user would do (empty list is fine). "
+    "action: what to do now in a few words, with a link where one exists — '[Review the NVDA trim](proposal:<id>)' "
+    "or '[Open the play](#/plays/<id>)' — or null. "
+    "signal: 'high' if the user should act or look today, 'low' if worth a glance, 'none' if nothing needs "
+    "them. Saying nothing is worth their attention is a valid, good answer: use signal 'none' and a plain "
+    "headline like 'Nothing worth your attention today'. "
+    "If the task also asks for a JSON block, put that before the summary block."
+)
+
 REPORT_FORMAT = (
     "REPORT FORMAT (the app renders this richly — follow it exactly): "
-    "Start with '## TL;DR' — two or three plain sentences: what happened and what, if anything, to do. "
-    "Then '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- Week: +2.4%', '- Cash: £5,055'). "
+    "Start with '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- Week: +2.4%', '- Cash: £5,055'). "
     "Then short '##' sections, most important first. Use '## What stands out' for highlights and "
     "'## Risks' for risk notes (both render as callouts). Tables only for genuinely tabular data, with "
     "numbers in their own columns and explicit signs on moves. Bold sparingly — never whole sentences. "
     "No emoji traffic lights. Reference a proposal you created as '[label](proposal:<intent_id>)' on its own line. "
-    "If the task asks for a trailing JSON block, it still goes at the very end."
+    "Do NOT write a TL;DR section: the summary block below becomes the TL;DR. "
+    f"{SUMMARY_RULES}"
 )
 
 
@@ -264,7 +282,6 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "Fed funds) and read the current market regime if available.\n"
             "4. Skim active theses/market_views in memory; flag any news that supports or threatens one.\n\n"
             "Then CURATE hard. Output ONLY, in this order:\n"
-            "- '## TL;DR' — one or two sentences: the single thing that matters most today and whether to act.\n"
             "- '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- 10Y: 4.02%', '- VIX: 15.8', "
             "'- GBP/USD: 1.342').\n"
             "- '## What matters today' — the top 3-5 items, each: one-line what + why it matters to the book + an "
@@ -272,7 +289,8 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "- '## On the radar' — earnings/events in the next 7 days for held names.\n\n"
             "RULES: portfolio-relevant only. Ignore aggregator/SEO filler (e.g. 'most active stocks today', "
             "generic listicles). If nothing is material, say so in one line — do NOT manufacture noise. No raw "
-            "headline dumps. Keep it a genuine 2-minute read."
+            "headline dumps. Keep it a genuine 2-minute read. End with the summary block — signal 'none' on a "
+            "quiet day."
         ),
     },
     {
@@ -400,9 +418,9 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
             "description": "Weekly strategy review and policy suggestions",
         },
         "prompt": (
-            "Produce a weekly strategy review artifact. Open with '## TL;DR' (two or three sentences: how the "
-            "week went and the one thing to do) and '## Key numbers' (3-4 '- Label: value' bullets: value, "
-            "week change, cash, top position), then cover the steps below as sections:\n\n"
+            "Produce a weekly strategy review artifact. Open with '## Key numbers' (3-4 '- Label: value' "
+            "bullets: value, week change, cash, top position), cover the steps below as sections, and end with "
+            "the summary block (headline = the one thing about this week that changes what the user does):\n\n"
             "1. **Portfolio snapshot**: Use T212 MCP tools to pull current ISA positions and account summary "
             "(balances, holdings). For current prices and technicals of held tickers, use marketdata MCP tools. "
             "Summarise total value, cash available, and top holdings.\n\n"
@@ -778,13 +796,24 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
 
     output, cost_info = anyio.run(_run)
     meta: dict[str, Any] = {}
-    parsed = _extract_json_block(output)
+    # The ```summary block feeds Home's digest. JSON extraction must not mistake
+    # it for the task's JSON block; the output itself keeps it so any caller of
+    # _cron_log_path (scheduled tasks, recipes) stores it as frontmatter.
+    summary, without_summary = extract_summary(output)
+    if summary:
+        meta["summary"] = summary
+    parsed = _extract_json_block(without_summary)
     if parsed:
         meta["json"] = parsed
     return output, meta, cost_info
 
 
-def _cron_log_path(task_name: str, content: str, *, task_kind: str = "", description: str = "") -> str:
+def _cron_log_path(
+    task_name: str, content: str, *, task_kind: str = "", description: str = "", summary: dict[str, Any] | None = None
+) -> str:
+    # Parse + strip a trailing ```summary block; it's stored as frontmatter.
+    found, content = extract_summary(content)
+    summary = summary or found
     root = project_root() / ".claude" / "runtime" / "artifacts" / "scheduled" / task_name
     root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -795,7 +824,7 @@ task_name: {task_name}
 task_kind: {task_kind}
 created_at: {datetime.now(tz=timezone.utc).isoformat()}
 title: {description or task_name}
----
+{summary_frontmatter_line(summary)}---
 
 """
     path = root / f"{stamp}.md"
@@ -1219,7 +1248,9 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
 
     goal_context = _build_goal_context(db, task) if kind == "claude_with_goal" else ""
     output, meta, cost_info = _run_claude_prompt(task, goal_context=goal_context)
-    path = _cron_log_path(task.name, output or "(no output)", task_kind=kind, description=description)
+    path = _cron_log_path(
+        task.name, output or "(no output)", task_kind=kind, description=description, summary=meta.get("summary")
+    )
 
     policy_updates = None
     rejected_updates: dict[str, str] = {}

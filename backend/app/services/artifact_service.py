@@ -2,12 +2,116 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
 from typing import Any
 
 from app.services.claude_sdk_config import project_root
+
+
+# ── Report summaries ──────────────────────────────────────────────────────
+# Every LLM-written report ends with a fenced ```summary JSON block:
+#   {"headline": "...", "points": ["..."], "action": "..." | null, "signal": "none"|"low"|"high"}
+# It is parsed and stripped when the artifact is stored (kept in frontmatter as
+# one-line JSON) so Home can show a high-signal digest without reading the body.
+
+_SUMMARY_FENCE = re.compile(r"```summary[ \t]*\n([\s\S]*?)\n?```[ \t]*\n?", re.IGNORECASE)
+_SIGNALS = ("none", "low", "high")
+
+
+def normalise_summary(raw: Any) -> dict[str, Any] | None:
+    """Coerce a parsed summary into the canonical shape; None if unusable."""
+    if not isinstance(raw, dict):
+        return None
+    headline = str(raw.get("headline") or "").strip()
+    signal = str(raw.get("signal") or "low").strip().lower()
+    if signal not in _SIGNALS:
+        signal = "low"
+    points_raw = raw.get("points") or []
+    if isinstance(points_raw, str):
+        points_raw = [points_raw]
+    points = [str(p).strip() for p in points_raw if str(p).strip()][:3] if isinstance(points_raw, list) else []
+    action = raw.get("action")
+    action = str(action).strip() if action not in (None, "", "none", "None") else None
+    if not headline and signal != "none":
+        return None
+    return {"headline": headline, "points": points, "action": action, "signal": signal}
+
+
+def extract_summary(text: str) -> tuple[dict[str, Any] | None, str]:
+    """Pull the last ```summary block out of a report. Returns (summary, text without it)."""
+    if not text:
+        return None, text
+    matches = list(_SUMMARY_FENCE.finditer(text))
+    if not matches:
+        return None, text
+    m = matches[-1]
+    try:
+        summary = normalise_summary(json.loads(m.group(1)))
+    except (json.JSONDecodeError, TypeError):
+        summary = None
+    stripped = (text[: m.start()] + text[m.end():]).rstrip() + "\n"
+    return summary, stripped
+
+
+def summary_frontmatter_line(summary: dict[str, Any] | None) -> str:
+    return f"summary: {json.dumps(summary, ensure_ascii=False)}\n" if summary else ""
+
+
+def _plain(md: str) -> str:
+    out = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", md)
+    out = re.sub(r"(\*\*|__|`|~~)", "", out)
+    out = re.sub(r"(?<![\w*])[*_](?=\S)([^*_\n]+?)(?<=\S)[*_](?![\w*])", r"\1", out)
+    return re.sub(r"\s+", " ", out).strip(" -:")
+
+
+def derive_summary(body: str) -> dict[str, Any] | None:
+    """Cheap fallback for reports written before summaries existed: the TL;DR's
+    first sentence, else the first bolded takeaway, else the first heading.
+    Never a raw excerpt."""
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^#{1,4}\s*(tl;?\s?dr|summary|bottom line|executive summary)\b", line.strip(), re.I):
+            for nxt in lines[i + 1:]:
+                t = nxt.strip()
+                if not t:
+                    continue
+                if t.startswith("#"):
+                    break
+                t = re.sub(r"^([-*]|\d+\.)\s+", "", t)
+                sentence = re.split(r"(?<=[.!?])\s+", _plain(t))[0]
+                if len(sentence) > 12:
+                    return {"headline": sentence[:220], "points": [], "action": None, "signal": None, "derived": True}
+                break
+    for m in re.finditer(r"\*\*([^*\n]{16,200})\*\*", body):
+        txt = _plain(m.group(1))
+        if len(txt) >= 16:
+            return {"headline": txt, "points": [], "action": None, "signal": None, "derived": True}
+    for line in lines:
+        hm = re.match(r"^#{1,4}\s+(.+)$", line.strip())
+        if hm:
+            return {"headline": _plain(hm.group(1)), "points": [], "action": None, "signal": None, "derived": True}
+    return None
+
+
+def _summary_of(metadata: dict[str, Any], body: str) -> tuple[dict[str, Any] | None, str]:
+    """(summary, body) for a stored artifact: frontmatter first, then an
+    unstripped block in the body, then a derived fallback."""
+    raw = metadata.get("summary")
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            summary = normalise_summary(json.loads(raw))
+        except json.JSONDecodeError:
+            summary = None
+        if summary:
+            _, body = extract_summary(body)
+            return summary, body
+    summary, body = extract_summary(body)
+    if summary:
+        return summary, body
+    return derive_summary(body), body
 
 
 def _artifacts_root() -> Path:
@@ -136,7 +240,8 @@ def list_artifacts() -> list[dict[str, Any]]:
                 continue
 
             size_bytes = full_path.stat().st_size
-            metadata, _body = _parse_frontmatter(text)
+            metadata, body = _parse_frontmatter(text)
+            summary, _ = _summary_of(metadata, body)
 
             artifact_type = metadata.get("type") or _infer_type(relative)
             title = metadata.get("title") or filename.removesuffix(".md")
@@ -162,6 +267,7 @@ def list_artifacts() -> list[dict[str, Any]]:
                     "task_name": task_name,
                     "tags": tags if isinstance(tags, list) else [],
                     "size_bytes": size_bytes,
+                    "summary": summary,
                 }
             )
 
@@ -193,6 +299,8 @@ def get_artifact(relative_path: str) -> dict[str, Any] | None:
     if full_path is not None and full_path.is_file():
         text = full_path.read_text(encoding="utf-8")
         metadata, body = _parse_frontmatter(text)
+        summary, body = _summary_of(metadata, body)
+        metadata["summary"] = summary
         return {
             "path": relative_path,
             "content": body,

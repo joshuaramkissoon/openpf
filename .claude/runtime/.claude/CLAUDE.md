@@ -219,10 +219,20 @@ blocks become cards. Write for that.
 - To reference an existing proposal elsewhere (reports, follow-ups), use
   `[short label](proposal:<intent_id>)` on its own line; it renders as a card.
 
-**Reports and scheduled briefs** (same rules, plus a fixed frame)
-1. `## TL;DR` — two or three sentences: what happened and what (if anything) to do.
-2. `## Key numbers` — 3–4 bullets as `- Label: value` (e.g. `- Week: +2.4%`); shown as a
+**Reports, briefs, research and recipe outputs** (same rules, plus a fixed frame)
+1. `## Key numbers` — 3–4 bullets as `- Label: value` (e.g. `- Week: +2.4%`); shown as a
    strip at the top of the report reader.
-3. Then sections (`##`), most important first; `## What stands out` and `## Risks` render
-   as callouts. End with numbered recommendations if there are any.
+2. Then sections (`##`), most important first; `## What stands out` and `## Risks` render
+   as callouts. Numbered recommendations if there are any. No TL;DR section.
+3. END with a fenced `summary` block — one JSON object. It becomes the TL;DR card and is
+   the only thing Home shows, so it must be high signal and specific to this book:
+   ```summary
+   {"headline": "NVDA + PLTR are now 55% of your money — up from 48% last week",
+    "points": ["≤3 short lines, each only if it changes what you'd do"],
+    "action": "[Review the NVDA trim](proposal:<id>)" or null,
+    "signal": "high" | "low" | "none"}
+   ```
+   `high` = act or look today; `low` = worth a glance; `none` = nothing needs them (Home
+   hides it). "Nothing worth your attention today" with `signal: none` is a good answer —
+   never pad a quiet day.
 <!-- END: how-to-write-replies -->

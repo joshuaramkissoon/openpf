@@ -117,11 +117,12 @@ def test_ids_from_fastmcp_wrapped_result():
 
 
 def test_scheduled_reports_share_the_report_frame():
-    """Scheduled reports open with TL;DR + Key numbers so the report reader can
-    show a TL;DR card and key-numbers strip."""
+    """Scheduled reports open with Key numbers and end with a summary block, so
+    the reader shows a key-numbers strip + TL;DR card and Home a digest."""
     from app.services.task_scheduler_service import REPORT_FORMAT, _DEFAULT_TASKS
 
-    assert "## TL;DR" in REPORT_FORMAT and "## Key numbers" in REPORT_FORMAT
+    assert "## Key numbers" in REPORT_FORMAT and "```summary" in REPORT_FORMAT
+    assert "nothing" in REPORT_FORMAT.lower()  # Archie may say nothing needs attention
     prompts = {t["name"]: t["prompt"] for t in _DEFAULT_TASKS}
     for name in ("morning_brief", "weekly_review"):
-        assert "TL;DR" in prompts[name] and "Key numbers" in prompts[name]
+        assert "Key numbers" in prompts[name] and "summary block" in prompts[name]
