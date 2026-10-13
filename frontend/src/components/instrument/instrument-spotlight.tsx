@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Clock, Search, Sparkles, Star, TrendingUp, type LucideIcon } from "lucide-react"
+import { Clock, Search, Star, TrendingUp, type LucideIcon } from "lucide-react"
 
 import {
   Command,
@@ -12,7 +12,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command"
 import { Badge } from "@/components/ui/badge"
-import { PctDelta } from "@/components/kit"
+import { ArchieIcon, PctDelta } from "@/components/kit"
 import { accountTag } from "@/utils/format"
 import { cn } from "@/lib/utils"
 import { getWatchlist } from "@/api/client"
@@ -300,7 +300,7 @@ export function InstrumentSpotlight({
                   onAskArchie(askText)
                 }}
               >
-                <Sparkles className="size-3.5 text-primary" />
+                <ArchieIcon className="size-3.5 text-primary" />
                 <span className="min-w-0 truncate">
                   Ask Archie: <span className="text-muted-foreground">“{askText}”</span>
                 </span>

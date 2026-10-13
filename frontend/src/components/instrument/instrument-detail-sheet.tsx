@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowLeftRight, ChevronDown, Loader2, MessageSquareText, Sparkles, Star, Telescope } from "lucide-react"
+import { ArrowLeftRight, ChevronDown, Loader2, Star, Telescope } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { AssetIcon } from "@/components/kit"
+import { ArchieIcon, AssetIcon } from "@/components/kit"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
@@ -15,7 +15,7 @@ import { getInstrumentInsight, type InstrumentInsight, type InsightPlay } from "
 import { createWatchlistItem, deleteWatchlistItem } from "@/api/client"
 import { InsightChartView } from "./insight-chart"
 import { CapMeter, EventsSection, FundamentalsSection, NewsSection, RiskSection, ThesisSection } from "./insight-sections"
-import { TradeSizer } from "./trade-sizer"
+import { TradeSizer, type TradePrefill } from "./trade-sizer"
 import { SmartMoneySection } from "@/features/smart-money"
 import { fmtMoney, fmtPct, fmtPrice, num } from "./insight-format"
 
@@ -25,6 +25,8 @@ export type InstrumentHint = {
   currency?: string | null
   price?: number | null
   change_pct?: number | null
+  /** Open straight onto the Trade panel, prefilled (e.g. "Place it myself" on a held-back ask). */
+  trade?: TradePrefill | null
 }
 
 const POLL_MS = 2500
@@ -90,12 +92,21 @@ export function InstrumentDetailSheet({
     if (!open || !ticker) return
     setData(null)
     setError(null)
-    setSizerOpen(false)
+    setSizerOpen(Boolean(hint?.trade))
     void load(ticker)
     return () => {
       reqRef.current++
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new hint arrives with a new open
   }, [open, ticker, load])
+
+  // Prefilled trade: bring the panel into view once the sheet has painted it.
+  const prefill = hint?.trade ?? null
+  useEffect(() => {
+    if (!open || !prefill || !data) return
+    const t = window.setTimeout(() => document.getElementById("sizer-amount")?.scrollIntoView({ block: "center", behavior: "smooth" }), 120)
+    return () => window.clearTimeout(t)
+  }, [open, prefill, data])
 
   async function toggleWatch() {
     if (!data || !ticker) return
@@ -197,7 +208,9 @@ export function InstrumentDetailSheet({
                 />
                 {sizerOpen ? (
                   <TradeSizer
+                    key={prefill ? JSON.stringify(prefill) : "fresh"}
                     insight={data}
+                    prefill={prefill}
                     onDone={(placed) => {
                       setSizerOpen(false)
                       // A placed trade changes the position, weight and cap meter: refresh them.
@@ -331,7 +344,7 @@ function Hero({
 
       {data?.why_moved?.text ? (
         <p className="flex items-start gap-2 text-sm leading-snug text-muted-foreground">
-          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+          <ArchieIcon className="mt-0.5 size-3.5 shrink-0" />
           <span className="text-foreground/90">{data.why_moved.text}.</span>
         </p>
       ) : null}
@@ -482,22 +495,30 @@ function Actions({
   ]
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="flex">
-        <Button size="sm" className="rounded-r-none" onClick={() => onAsk(readPrompt(data, name))} title="Ask Archie (A)">
-          <MessageSquareText className="size-3.5" />
+      {/* One split button: equal heights, one shared radius, a hairline between the halves. */}
+      <div role="group" aria-label="Ask Archie" className="inline-flex">
+        <Button size="sm" className="rounded-r-none pr-2" onClick={() => onAsk(readPrompt(data, name))} title="Ask Archie (A)">
+          <ArchieIcon className="size-3.5" />
           Ask Archie
           <Kbd>A</Kbd>
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger
-            className="inline-flex h-7 items-center rounded-r-[min(var(--radius-md),12px)] border-l border-primary-foreground/25 bg-primary px-1.5 text-primary-foreground hover:bg-primary/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-            aria-label="More questions for Archie"
+            render={
+              <Button
+                size="icon-sm"
+                className="w-6 rounded-l-none border-l-primary-foreground/20"
+                aria-label="More questions for Archie"
+                title="More questions"
+              />
+            }
           >
-            <ChevronDown className="size-3.5" />
+            <ChevronDown className="size-3.5 opacity-80" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-52">
             {prompts.map((c) => (
               <DropdownMenuItem key={c.label} onClick={() => onAsk(c.prompt)}>
+                <ArchieIcon className="size-3.5 text-muted-foreground" />
                 {c.label}
               </DropdownMenuItem>
             ))}

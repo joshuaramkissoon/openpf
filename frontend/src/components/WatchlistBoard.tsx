@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Bot, Eye, EyeOff, MessageSquareText, MoreHorizontal, Plus, Target, Trash2, User } from 'lucide-react'
+import { Eye, EyeOff, MoreHorizontal, Plus, Target, Trash2, User } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { Segmented } from '@/components/kit'
+import { ArchieIcon, Segmented } from '@/components/kit'
 import { useInstrument, WATCHLIST_CHANGED_EVENT } from '@/components/instrument/instrument-provider'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -34,9 +34,9 @@ type StatusFilter = 'watching' | 'acted' | 'archived'
 
 const SOURCE: Record<string, { label: string; Icon: typeof User }> = {
   manual: { label: 'You', Icon: User },
-  archie: { label: 'Archie', Icon: Bot },
-  agent_run: { label: 'Archie', Icon: Bot },
-  watchlist_review: { label: 'Archie', Icon: Bot },
+  archie: { label: 'Archie', Icon: ArchieIcon },
+  agent_run: { label: 'Archie', Icon: ArchieIcon },
+  watchlist_review: { label: 'Archie', Icon: ArchieIcon },
 }
 
 /** Within this distance of the trigger an idea reads as "close". */
@@ -381,7 +381,7 @@ function WatchRow({
       {/* Next actions */}
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2.5 pb-2 transition-opacity sm:px-3.5 md:opacity-60 md:group-focus-within/row:opacity-100 md:group-hover/row:opacity-100">
         <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground" onClick={ask}>
-          <MessageSquareText className="size-3.5" />
+          <ArchieIcon className="size-3.5" />
           Ask Archie
         </Button>
         <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground" onClick={startPlay}>

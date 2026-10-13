@@ -6,17 +6,17 @@ import {
   CheckCheck,
   Clock,
   Gauge,
+  Hand,
   Hourglass,
   Info,
   Layers,
   Loader2,
   PauseCircle,
-  Sparkles,
   TriangleAlert,
   X,
 } from "lucide-react"
 
-import { AssetIcon, COIN_NAMES, Money } from "@/components/kit"
+import { ArchieIcon, AssetIcon, COIN_NAMES, Money } from "@/components/kit"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +31,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useOpenInstrument } from "@/components/instrument/instrument-provider"
 import { navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 import { accountLabel, formatMoney, formatPercent, formatQuantity } from "@/utils/format"
@@ -63,9 +64,27 @@ function assetName(i: TradeIntent) {
   return i.instrument_name || (i.account_kind === "crypto" ? COIN_NAMES[i.symbol.toUpperCase()] : null) || null
 }
 
-/** Older play tranches carried a "[play] Title — " prefix; the owner label says that now. */
-function cleanRationale(r: string) {
-  return r.replace(/^\[play\][^—]*—\s*/, "").trim()
+/**
+ * Older play tranches carried a "[play] Title — " prefix; the owner label says that now.
+ * Rationale is written to the user: a stray third-person "the user's" reads as "your".
+ */
+export function cleanRationale(r: string) {
+  return r
+    .replace(/^\[play\][^—]*—\s*/, "")
+    .replace(/\b([Tt])he user's\b/g, (_, t: string) => (t === "T" ? "Your" : "your"))
+    .replace(/\b([Tt])he user\b/g, (_, t: string) => (t === "T" ? "You" : "you"))
+    .trim()
+}
+
+/** "Place it myself": the stock sheet's Trade panel, prefilled with this ask. Advisory limits there. */
+function usePlaceMyself(intent: TradeIntent) {
+  const open = useOpenInstrument()
+  if (!open) return null
+  return () =>
+    open(intent.symbol, {
+      name: assetName(intent),
+      trade: { side: intent.side, amount_gbp: intent.estimated_notional, account_kind: intent.account_kind ?? null },
+    })
 }
 
 function ownerOf(i: TradeIntent): { kind: "play" | "core" | null; playId: string | null; label: string | null } {
@@ -420,6 +439,7 @@ export function ProposalTile({
   const rationale = intent.rationale ? cleanRationale(intent.rationale) : ""
   const later = laterDay(intent)
   const sub = [name, intent.crypto?.label ?? accountShort(intent.account_kind)].filter(Boolean).join(" · ") || "\u00a0"
+  const placeMyself = usePlaceMyself(intent)
 
   function place() {
     if (!account) return
@@ -507,7 +527,7 @@ export function ProposalTile({
           className={cn(
             "text-left text-xs leading-relaxed text-muted-foreground transition-colors hover:text-foreground/80",
             compact ? "mt-1.5" : "mt-2",
-            expanded ? "" : "line-clamp-1",
+            expanded ? "" : "line-clamp-2",
           )}
         >
           {rationale}
@@ -517,8 +537,13 @@ export function ProposalTile({
       <footer className={cn("mt-auto flex items-center gap-0.5", compact ? "pt-2" : "pt-3")}>
         <DetailsPopover intent={intent} rail={rail} />
         <IconAction label={askLabel} onClick={() => onAsk(intent)}>
-          <Sparkles className="size-3.5" />
+          <ArchieIcon className="size-3.5" />
         </IconAction>
+        {placeMyself && (later || !rail.ok) ? (
+          <IconAction label="Place it myself" onClick={placeMyself} disabled={disabled}>
+            <Hand className="size-3.5" />
+          </IconAction>
+        ) : null}
         <IconAction label="Reject" onClick={() => void ctx.proposals.reject(intent.id)} disabled={disabled}>
           <X className="size-3.5" />
         </IconAction>
@@ -610,6 +635,7 @@ export function HeldTile({
   const fields = [...new Set(blocks.map((b) => RAIL_FIELD[b.rail]))]
   const reason = blocks.length ? blocks.map(blockPhrase).join(" and ") : (intent.held?.reason ?? "over your limits")
   const name = assetName(intent)
+  const placeMyself = usePlaceMyself(intent)
 
   return (
     <article
@@ -652,31 +678,37 @@ export function HeldTile({
         <Gauge className="mt-px size-3.5 shrink-0 text-warning/80" />
         <span>
           <span className="text-foreground/80">{reason.replace(/^./, (c) => c.toUpperCase())}.</span>
-          {!fitsTomorrow ? " Too big for one order under your limits." : ""}
+          {!fitsTomorrow ? " Too big for one order under your limits." : ""}{" "}
+          <button
+            type="button"
+            className="whitespace-nowrap underline decoration-muted-foreground/40 underline-offset-2 transition-colors hover:text-foreground"
+            onClick={() => navigate(`/settings/risk?focus=${fields.join(",") || "max_daily_notional"}`)}
+          >
+            Change limits
+          </button>
         </span>
       </p>
 
       <footer className={cn("mt-auto flex items-center gap-1", compact ? "pt-2.5" : "pt-3")}>
+        {placeMyself ? (
+          <Button size="sm" variant="outline" className="h-7 gap-1.5 bg-card px-2.5 text-xs" disabled={working} onClick={placeMyself}>
+            <Hand className="size-3.5" />
+            Place it myself
+          </Button>
+        ) : null}
         {fitsTomorrow ? (
           <Button
             size="sm"
-            variant="outline"
-            className="h-7 gap-1.5 bg-card px-2.5 text-xs"
+            variant={placeMyself ? "ghost" : "outline"}
+            className={cn("h-7 gap-1.5 px-2.5 text-xs", placeMyself ? "text-muted-foreground hover:text-foreground" : "bg-card")}
             disabled={working}
+            title="Propose it under tomorrow's limits"
             onClick={() => void ctx.proposals.stageTomorrow(intent)}
           >
             {working ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            Propose tomorrow
+            {placeMyself ? "Tomorrow" : "Propose tomorrow"}
           </Button>
         ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-          onClick={() => navigate(`/settings/risk?focus=${fields.join(",") || "max_daily_notional"}`)}
-        >
-          Change limits
-        </Button>
         <span className="ml-auto">
           <IconAction label="Drop it" onClick={() => void ctx.proposals.dropHeld(intent.id)} disabled={working}>
             <X className="size-3.5" />
@@ -760,6 +792,7 @@ export function TrancheGroup({
           <span className="text-xs text-muted-foreground">
             {n} orders · <Money value={total} currency="GBP" decimals={0} className="font-sans font-medium text-foreground" />
           </span>
+          {approvable.length > 0 || running ? (
           <Button
             size="sm"
             className="h-7 gap-1.5 px-3 text-xs"
@@ -769,6 +802,7 @@ export function TrancheGroup({
             {running ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCheck className="size-3.5" />}
             {running ? "Placing…" : label}
           </Button>
+          ) : null}
         </span>
       </div>
       <div className={row ? "flex flex-1 gap-2" : cn("grid grid-cols-1 gap-2 @lg:grid-cols-2", n > 2 && "@4xl:grid-cols-3")}>
