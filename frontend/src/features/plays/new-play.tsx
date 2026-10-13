@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
+  Ban,
   Check,
   ChevronDown,
   CircleCheck,
@@ -9,6 +10,7 @@ import {
   Gauge,
   Landmark,
   Lightbulb,
+  ListPlus,
   Loader2,
   type LucideIcon,
   RotateCw,
@@ -26,7 +28,8 @@ import { parseApiError, toastApiError } from '@/lib/api-error'
 import { useAppActions } from '@/lib/app-actions'
 import { navigate as routerNavigate } from '@/lib/router'
 import { cn } from '@/lib/utils'
-import { getDraftJob, retryDraft, startDraft } from './api'
+import { detectNames, getDraftJob, retryDraft, startDraft, type InstrumentName } from './api'
+import { NameSearch, NameTag, rememberNames } from './names'
 import { DraftProgressView } from './drafting'
 import { StarterCryptoDialog } from './starter-crypto'
 import {
@@ -92,7 +95,33 @@ function NewPlayForm({ initialIdea, templateId }: { initialIdea?: string; templa
   const [submitting, setSubmitting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [flash, setFlash] = useState(0)
+  const [include, setInclude] = useState<InstrumentName[]>([])
+  const [exclude, setExclude] = useState<InstrumentName[]>([])
+  const [spotted, setSpotted] = useState<InstrumentName[]>([])
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const box = useRef<HTMLTextAreaElement>(null)
+
+  // Names written in the idea ("no SNDK?", "SanDisk") become must-haves unless removed.
+  useEffect(() => {
+    const text = idea.trim()
+    if (text.length < 4) {
+      setSpotted([])
+      return
+    }
+    const t = window.setTimeout(() => {
+      detectNames(text)
+        .then((rows) => {
+          rememberNames(rows)
+          setSpotted(rows)
+        })
+        .catch(() => {})
+    }, 600)
+    return () => window.clearTimeout(t)
+  }, [idea])
+
+  const sym = (n: InstrumentName) => n.symbol.toUpperCase()
+  const chosen = new Set([...include, ...exclude].map(sym))
+  const fromIdea = spotted.filter((n) => !chosen.has(sym(n)) && !dismissed.has(sym(n)))
 
   async function submit() {
     if (idea.trim().length < 3) {
@@ -109,6 +138,8 @@ function NewPlayForm({ initialIdea, templateId }: { initialIdea?: string; templa
         conviction,
         horizon_months: Number(horizon) || null,
         account_kind: account,
+        include: [...include, ...fromIdea].map((n) => n.symbol),
+        exclude: exclude.map((n) => n.symbol),
       })
       navigate(`/plays?new=1&job=${job.job_id}`)
     } catch (e) {
@@ -234,6 +265,37 @@ function NewPlayForm({ initialIdea, templateId }: { initialIdea?: string; templa
             {idea ? null : <RotatingPlaceholder />}
           </div>
 
+          {include.length || fromIdea.length || exclude.length ? (
+            <div className="space-y-1.5 px-5 pb-3">
+              {include.length || fromIdea.length ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-0.5 text-[11px] text-muted-foreground">Must include</span>
+                  {include.map((n) => (
+                    <NameTag key={n.symbol} n={n} onRemove={() => setInclude((l) => l.filter((x) => sym(x) !== sym(n)))} />
+                  ))}
+                  {fromIdea.map((n) => (
+                    <NameTag
+                      key={n.symbol}
+                      n={n}
+                      tone="suggested"
+                      hint="Spotted in your idea. Remove it if you didn't mean it."
+                      onRemove={() => setDismissed((d) => new Set(d).add(sym(n)))}
+                    />
+                  ))}
+                  {fromIdea.length ? <span className="text-[11px] text-muted-foreground">from your idea</span> : null}
+                </div>
+              ) : null}
+              {exclude.length ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-0.5 text-[11px] text-muted-foreground">Leave out</span>
+                  {exclude.map((n) => (
+                    <NameTag key={n.symbol} n={n} tone="muted" onRemove={() => setExclude((l) => l.filter((x) => sym(x) !== sym(n)))} />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 px-3.5 py-3">
             <BudgetPill budget={budget} setBudget={setBudget} />
             <ChoicePill<Conviction>
@@ -261,6 +323,25 @@ function NewPlayForm({ initialIdea, templateId }: { initialIdea?: string; templa
               value={account}
               options={ACCOUNTS}
               onChange={setAccount}
+            />
+            <NamesPill
+              Icon={ListPlus}
+              label={include.length ? `Include ${include.length}` : 'Include'}
+              set={include.length > 0}
+              title="Names Archie must put in the basket"
+              skip={[...chosen]}
+              onPick={(n) => {
+                setInclude((l) => [...l, n])
+                setDismissed((d) => new Set(d).add(sym(n)))
+              }}
+            />
+            <NamesPill
+              Icon={Ban}
+              label={exclude.length ? `Exclude ${exclude.length}` : 'Exclude'}
+              set={exclude.length > 0}
+              title="Names to leave out"
+              skip={[...chosen]}
+              onPick={(n) => setExclude((l) => [...l, n])}
             />
           </div>
         </div>
@@ -420,6 +501,35 @@ function ChoicePill<T extends string>({
             />
           ))}
         </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function NamesPill({
+  Icon,
+  label,
+  set,
+  title,
+  skip,
+  onPick,
+}: {
+  Icon: LucideIcon
+  label: string
+  set: boolean
+  title: string
+  skip: string[]
+  onPick: (n: InstrumentName) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger className={pillClass(set)}>
+        <PillTrigger Icon={Icon} label={label} set={set} />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 gap-0 p-2">
+        <p className="px-1 pb-2 text-[11px] text-muted-foreground">{title}</p>
+        <NameSearch autoFocus skip={skip} onPick={(n) => onPick(n)} />
       </PopoverContent>
     </Popover>
   )

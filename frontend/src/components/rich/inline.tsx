@@ -27,7 +27,7 @@ function escapeRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-export function RichProvider({ children }: { children: ReactNode }) {
+export function RichProvider({ children, extra }: { children: ReactNode; extra?: string[] }) {
   const positions = useHeldPositions()
   const { openTicker, navigate } = useAppActions()
   const mode = usePrivacyMode()
@@ -42,10 +42,18 @@ export function RichProvider({ children }: { children: ReactNode }) {
         if (!STOP.has(key) && !tickers.has(key)) tickers.set(key, p.ticker)
       }
     }
+    for (const sym of extra ?? []) {
+      const full = sym.toUpperCase()
+      // Market symbols too: "SMSN.L" and its bare "SMSN" both chip.
+      for (const f of [full, full.replace(/\.[A-Z]{1,2}$/, '')]) {
+        if (f.length >= 2 && !STOP.has(f) && !tickers.has(f)) tickers.set(f, full)
+      }
+    }
     const syms = [...tickers.keys()].sort((a, b) => b.length - a.length).map(escapeRe)
     const tickerRe = syms.length ? new RegExp(`(?<![A-Za-z0-9$£€.])(${syms.join('|')})(?![A-Za-z0-9])`, 'g') : null
     return { tickers, tickerRe, openTicker, navigate, blurMoney: privacyBlurClass(mode) }
-  }, [positions, openTicker, navigate, mode])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, openTicker, navigate, mode, (extra ?? []).join(',')])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 

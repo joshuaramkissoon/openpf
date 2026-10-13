@@ -33,7 +33,7 @@ const shortDate = (d: string | Date) => new Date(d).toLocaleDateString('en-GB', 
 // ── Thesis, up top, as a quote ───────────────────────────────────────────────
 
 function firstParagraph(md: string) {
-  const para = md.trim().split(/\n\s*\n/)[0] ?? ''
+  const para = md.replace(/\\n/g, '\n').trim().split(/\n\s*\n/)[0] ?? ''
   return para.replace(/^#+\s*/gm, '').replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
 }
 
@@ -46,7 +46,7 @@ export function ThesisQuote({ thesis }: { thesis: string }) {
     <div className="max-w-3xl border-l-2 border-border pl-4">
       {open ? (
         <div className="text-sm leading-relaxed text-foreground/90">
-          <RichMarkdown markdown={thesis} />
+          <RichMarkdown markdown={thesis.replace(/\\n/g, '\n')} />
         </div>
       ) : (
         <p className="line-clamp-3 text-[15px] leading-relaxed text-foreground/85 text-pretty">{lead}</p>

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Loader2, MoreHorizontal, Scale, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, Info, Loader2, MoreHorizontal, Plus, Scale, TriangleAlert } from 'lucide-react'
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { toast } from 'sonner'
 
-import { ArchieIcon } from '@/components/kit'
+import { ArchieIcon, Money } from '@/components/kit'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RichMarkdown } from '@/components/RichMarkdown'
 import {
   AlertDialog,
@@ -27,16 +28,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toastApiError } from '@/lib/api-error'
 import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
-import { accountLabel } from '@/utils/format'
+import { accountLabel, formatPercent } from '@/utils/format'
 import { deletePlay, getPerformance, getPlay, runReview, stageTranche, updatePlay } from './api'
 import { reloadBook, useBook } from './book'
 import { BasketEditor, Block, KillList, OverlapCallout, SizingPanel, TranchePlan } from './parts'
 import { EntryStepper, HealthRow, nextActions, PlayHero, ReviewsBlock, ThesisQuote } from './detail'
-import { LegName } from './names'
+import type { InstrumentName } from './api'
+import { displayName, LegName, NameSearch } from './names'
 import { RebalanceDialog } from './rebalance'
 import { driftedCount, holdingRows, PlayRings } from './rings'
 import type { Play, PlayLeg, PlayPerformance, StageResult } from './types'
-import { ConvictionDots, Eyebrow, StatusChip } from './ui'
+import { ConvictionDots, StatusChip } from './ui'
 
 export function playContextPrompt(play: Play): string {
   const legs = play.legs.map((l) => `${l.ticker} ${Math.round(l.target_weight * 100)}%`).join(', ')
@@ -128,10 +130,20 @@ export function PlayPage({ id }: { id: string }) {
 function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => void }) {
   const { navigate, askArchie, refresh } = useAppActions()
   const [legs, setLegs] = useState<PlayLeg[]>(play.legs)
-  const [busy, setBusy] = useState<null | 'save' | 'activate' | 'stage' | 'discard'>(null)
+  const [busy, setBusy] = useState<null | 'save' | 'activate' | 'stage' | 'discard' | 'conviction'>(null)
+  const [adding, setAdding] = useState(false)
   const dirty = useMemo(() => JSON.stringify(legs) !== JSON.stringify(play.legs), [legs, play.legs])
 
   useEffect(() => setLegs(play.legs), [play.legs])
+
+  const dropped = play.meta.dropped ?? (play.meta.dropped_legs ?? []).map((t) => ({ ticker: t, name: '', reason: 'not on Trading 212' }))
+  const unlisted = dropped.filter((d) => d.reason === 'not on Trading 212')
+  const excluded = dropped.filter((d) => d.reason !== 'not on Trading 212')
+  const suggested = play.meta.suggested_conviction && play.meta.suggested_conviction !== play.conviction ? play.meta.suggested_conviction : null
+  const chipTickers = [...legs.map((l) => l.ticker), ...dropped.map((d) => d.ticker), ...(play.meta.overlap ?? []).map((o) => o.ticker)]
+  const s = play.sizing
+  const tranches = s.tranches ?? []
+  const stress = Math.round(((s as { stress_drawdown?: number }).stress_drawdown ?? 0.4) * 100)
 
   async function save(): Promise<Play> {
     const next = await updatePlay(play.id, { legs, resize: true })
@@ -166,6 +178,18 @@ function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => vo
     }
   }
 
+  async function applyConviction(c: Play['conviction']) {
+    setBusy('conviction')
+    try {
+      onChange(await updatePlay(play.id, { conviction: c, resize: true }))
+      toast.success(`Conviction set to ${c}`, { description: 'Re-sized to match.' })
+    } catch (e) {
+      toastApiError(e, 'Could not change the conviction')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function discard() {
     setBusy('discard')
     try {
@@ -177,85 +201,181 @@ function DraftReview({ play, onChange }: { play: Play; onChange: (p: Play) => vo
     }
   }
 
+  function addLeg(n: InstrumentName) {
+    if (legs.some((l) => l.ticker.toUpperCase() === n.symbol.toUpperCase())) return
+    setLegs((ls) => [
+      ...ls,
+      {
+        ticker: n.symbol, name: n.name ?? n.ticker, role: 'satellite', target_weight: 0.1, rationale: 'Added by you.',
+        instrument_code: n.instrument_code ?? null, instrument_verified: n.tradable !== false,
+      },
+    ])
+    setAdding(false)
+  }
+
+  function findAlternative() {
+    const names = unlisted.map((d) => `${d.name || displayName(d.ticker)} (${d.ticker})`).join(', ')
+    askArchie(
+      `My draft play "${play.title}" (${accountLabel(play.account_kind)}) lost ${names}: not on Trading 212. ` +
+        `For each, suggest a substitute I can actually buy there (another listing, an ADR/GDR, a UCITS ETF or a close peer), ` +
+        `with one line on why. Play id: ${play.id}.`,
+    )
+  }
+
+  const addName = (
+    <Popover open={adding} onOpenChange={setAdding}>
+      <PopoverTrigger className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted">
+        <Plus className="size-3.5" /> Add a name
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 gap-0 p-2">
+        <p className="px-1 pb-2 text-[11px] text-muted-foreground">Add a Trading 212 listing to the basket</p>
+        <NameSearch autoFocus skip={legs.map((l) => l.ticker)} onPick={addLeg} />
+      </PopoverContent>
+    </Popover>
+  )
+
   return (
     <div className="space-y-8 pb-28">
-      <div className="space-y-3">
+      <header className="space-y-3">
         <BackLink />
         <div className="space-y-2">
-          <Eyebrow>
-            Draft · {accountLabel(play.account_kind)} · {play.horizon_months >= 12 ? `${play.horizon_months / 12}y` : `${play.horizon_months}m`} horizon
-          </Eyebrow>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-muted-foreground/60" />
+              Draft
+            </span>
+            <span>{accountLabel(play.account_kind)}</span>
+            <span>{play.horizon_months >= 12 ? `${+(play.horizon_months / 12).toFixed(1)}y horizon` : `${play.horizon_months}m horizon`}</span>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight text-balance">{play.title}</h1>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        </div>
+        {play.meta.idea ? <p className="max-w-2xl text-sm text-muted-foreground italic">“{play.meta.idea}”</p> : null}
+      </header>
+
+      <section className="grid gap-6 rounded-xl border border-border bg-card p-5 md:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] md:gap-8">
+        <div className={cn('flex min-w-0 flex-col justify-center gap-4 transition-opacity', dirty && 'opacity-50')}>
+          <div>
+            <p className="mb-1 text-xs text-muted-foreground">Suggested size</p>
+            <Money value={play.budget_gbp} decimals={0} className="text-4xl font-semibold tracking-tight" />
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              <span className="font-mono text-foreground tabular-nums">{formatPercent(play.budget_pct_of_book, 1)}</span> of your book
+              {tranches.length ? ` · bought in ${tranches.length} steps` : ''}
+              {s.max_loss_gbp ? (
+                <>
+                  {' '}· a {stress}% fall would cost <Money value={s.max_loss_gbp} decimals={0} className="text-foreground" />
+                </>
+              ) : null}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <ConvictionDots conviction={play.conviction} />
-            {play.meta.conviction_source === 'archie' ? <span className="text-xs text-muted-foreground">suggested by Archie</span> : null}
+            {suggested ? (
+              <span className="inline-flex flex-wrap items-center gap-2 rounded-full border border-dashed border-foreground/25 py-0.5 pr-1 pl-2.5 text-xs">
+                <ArchieIcon className="size-3.5" />
+                Archie suggests <span className="font-medium capitalize">{suggested}</span>
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={busy !== null} onClick={() => void applyConviction(suggested)}>
+                  {busy === 'conviction' ? <Loader2 className="size-3 animate-spin" /> : null}
+                  Apply
+                </Button>
+              </span>
+            ) : play.meta.conviction_source === 'archie' ? (
+              <span className="text-xs text-muted-foreground">suggested by Archie</span>
+            ) : null}
           </div>
         </div>
-        {play.meta.idea ? (
-          <p className="max-w-2xl border-l-2 border-border pl-3 text-sm text-muted-foreground italic">“{play.meta.idea}”</p>
-        ) : null}
-      </div>
+        <div className="min-w-0 border-t border-border pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
+          <p className="mb-3 text-xs text-muted-foreground">How it goes in</p>
+          <TranchePlan play={play} staged={play.sizing.staged ?? []} />
+        </div>
+      </section>
+
+      {unlisted.length || excluded.length || play.meta.left_out?.length ? (
+        <div className="space-y-2">
+          {unlisted.length ? (
+            <div className="flex flex-col gap-3 rounded-lg border border-warning/40 bg-warning/5 px-4 py-3 sm:flex-row sm:items-center">
+              <TriangleAlert className="hidden size-4 shrink-0 text-warning sm:block" />
+              <p className="min-w-0 flex-1 text-sm">
+                Dropped {unlisted.length} name{unlisted.length === 1 ? '' : 's'} not on Trading 212:{' '}
+                {unlisted.map((d, i) => (
+                  <span key={d.ticker}>
+                    {i ? ', ' : ''}
+                    <LegName symbol={d.ticker} hint={d.name} className="font-medium" />
+                    <span className="font-mono text-xs text-muted-foreground"> ({d.ticker})</span>
+                  </span>
+                ))}
+                . The thesis may still mention {unlisted.length === 1 ? 'it' : 'them'}.
+              </p>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button size="sm" variant="outline" onClick={findAlternative}>
+                  <ArchieIcon className="size-3.5" /> Find an alternative
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setAdding(true)}>
+                  <Plus className="size-3.5" /> Add a name
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {excluded.length ? (
+            <p className="text-xs text-muted-foreground">
+              Left out as you asked: {excluded.map((d) => d.name || displayName(d.ticker)).join(', ')}.
+            </p>
+          ) : null}
+          {play.meta.left_out?.map((lo) => (
+            <p key={lo.ticker} className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Info className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                <LegName symbol={lo.ticker} className="font-medium text-foreground" /> isn’t in the basket: {lo.reason}
+              </span>
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      <Block
+        title="Basket"
+        description={`${legs.length} names · edit weights or remove one, then re-size`}
+        action={
+          <>
+            {addName}
+            {dirty ? (
+              <Button size="sm" variant="outline" onClick={() => void run('save')} disabled={busy !== null}>
+                {busy === 'save' ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                Re-size
+              </Button>
+            ) : null}
+          </>
+        }
+      >
+        <BasketEditor legs={legs} allocations={play.sizing.allocations} onChange={setLegs} />
+      </Block>
 
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
-        <div className="min-w-0 space-y-10 lg:col-span-3">
-          <Block title="Thesis">
-            <div className="text-sm leading-relaxed">
-              <RichMarkdown markdown={play.thesis} />
-            </div>
+        <Block title="Thesis" className="lg:col-span-3">
+          <div className="max-w-prose text-sm leading-relaxed text-foreground/90">
+            <RichMarkdown markdown={play.thesis.replace(/\\n/g, '\n')} tickers={chipTickers} />
+          </div>
+        </Block>
+        <Block title="Why this size" className="lg:col-span-2">
+          <div className={cn('space-y-4 transition-opacity', dirty && 'opacity-50')}>
+            <SizingPanel play={play} />
+            <OverlapCallout play={play} />
+          </div>
+        </Block>
+      </div>
+
+      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-2">
+        <Block title="Kill criteria" description="Checked daily. Archie flags it on Home when one trips.">
+          <KillList items={play.kill_criteria} wwcmm={play.what_would_change_my_mind} />
+        </Block>
+        {play.meta.key_risks?.length ? (
+          <Block title="Key risks">
+            <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+              {play.meta.key_risks.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
           </Block>
-          <Block
-            title="Basket"
-            description={`${legs.length} legs · edit weights or remove a leg, then re-size`}
-            action={
-              dirty ? (
-                <Button size="sm" variant="outline" onClick={() => void run('save')} disabled={busy !== null}>
-                  {busy === 'save' ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  Re-size
-                </Button>
-              ) : null
-            }
-          >
-            <BasketEditor legs={legs} allocations={play.sizing.allocations} onChange={setLegs} />
-            {play.meta.dropped_legs?.length ? (
-              <p className="mt-3 flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
-                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  Left out, not listed on Trading 212:{' '}
-                  {play.meta.dropped_legs.map((t, i) => (
-                    <span key={t}>
-                      {i ? ', ' : ''}
-                      <LegName symbol={t} className="font-medium" />
-                    </span>
-                  ))}
-                  .
-                </span>
-              </p>
-            ) : null}
-          </Block>
-          <Block title="Kill criteria" description="Checked daily. Archie flags it on Home when one trips.">
-            <KillList items={play.kill_criteria} wwcmm={play.what_would_change_my_mind} />
-          </Block>
-          {play.meta.key_risks?.length ? (
-            <Block title="Key risks">
-              <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                {play.meta.key_risks.map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ul>
-            </Block>
-          ) : null}
-        </div>
-        <div className="min-w-0 space-y-10 lg:col-span-2">
-          <Block title="Sizing" description="Why this much">
-            <div className={cn('space-y-4 transition-opacity', dirty && 'opacity-50')}>
-              <SizingPanel play={play} />
-              <OverlapCallout play={play} />
-            </div>
-          </Block>
-          <Block title="Entry plan" description={`Max loss at a ${Math.round(((play.sizing as { stress_drawdown?: number }).stress_drawdown ?? 0.4) * 100)}% drawdown: £${Math.round(play.sizing.max_loss_gbp ?? 0).toLocaleString()}`}>
-            <TranchePlan play={play} staged={play.sizing.staged ?? []} />
-          </Block>
-        </div>
+        ) : null}
       </div>
 
       <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75 lg:left-[var(--sidebar-width,0px)]">

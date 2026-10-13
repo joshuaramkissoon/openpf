@@ -96,6 +96,15 @@ def instrument_names(
     return {"items": names.describe(db, wanted, account_kind=account)}
 
 
+@router.get("/names/search")
+def instrument_names_search(q: str = Query("", max_length=60), limit: int = Query(8, ge=1, le=20),
+                            db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Typeahead for plays: Trading 212 listings as market symbols with company names."""
+    from app.services import instrument_names as names
+
+    return {"items": names.search(db, q, limit=limit) if q.strip() else []}
+
+
 @router.get("/{ticker}/detail", response_model=InstrumentDetail)
 def instrument_detail(
     ticker: str,

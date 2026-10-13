@@ -21,6 +21,7 @@ export function RichMarkdown({
   variant = 'chat',
   className,
   proposalGroup,
+  tickers,
 }: {
   markdown: string
   streaming?: boolean
@@ -28,11 +29,13 @@ export function RichMarkdown({
   className?: string
   /** All proposal ids in the surrounding message (so they render as one group). */
   proposalGroup?: string[]
+  /** Extra symbols to render as ticker chips (e.g. a play's legs), beyond what's held. */
+  tickers?: string[]
 }) {
   const blocks = useMemo(() => parseMarkdown(markdown, { streaming }), [markdown, streaming])
   const group = useMemo(() => proposalGroup ?? proposalIdsIn(markdown), [proposalGroup, markdown])
   return (
-    <RichProvider>
+    <RichProvider extra={tickers}>
       <ProposalGroupContext.Provider value={group}>
         <div className={cn('rc', `rc-${variant}`, className)}>
           {variant === 'chat' ? <ChatBlocks blocks={blocks} streaming={streaming} /> : <Blocks blocks={blocks} />}

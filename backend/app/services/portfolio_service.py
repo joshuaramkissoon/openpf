@@ -597,6 +597,7 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
                     "ticker": ticker,
                     "currency": str(inst.get("currencyCode", "") or ""),
                     "type": str(inst.get("type", "") or ""),
+                    "isin": str(inst.get("isin", "") or ""),
                 }
     except Exception:  # noqa: BLE001 — metadata is best-effort, never block the snapshot
         mapping = {}
@@ -604,6 +605,21 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
     if mapping:
         _instrument_meta_cache = (now, mapping)
     return mapping
+
+
+_T212_CODE_RE = re.compile(r"^(.+?)_(?:[A-Z]{2}_)?EQ$")
+_VENUE_TAIL_RE = re.compile(r"^([0-9A-Z.]+?)([a-z]+)\d*$")
+
+
+def t212_symbol(code: str | None) -> str:
+    """The market symbol inside a T212 code, from its ORIGINAL case:
+    ``AAPL_US_EQ`` → ``AAPL``, ``BAl_EQ`` → ``BA`` (``l`` is the London venue
+    letter), ``3ASMl1_EQ`` → ``3ASM``. Upper-casing first would read ``BAL``."""
+    raw = (code or "").strip()
+    m = _T212_CODE_RE.match(raw)
+    core = m.group(1) if m else raw.split("_", 1)[0]
+    v = _VENUE_TAIL_RE.match(core)
+    return (v.group(1) if v else core).upper()
 
 
 def display_ticker(legacy_symbol: str | None, short_name: str | None) -> str:
@@ -671,7 +687,7 @@ def search_instruments(term: str, db: Session, *, limit: int = 8) -> list[dict[s
     prefix: list[dict[str, Any]] = []
     partial: list[dict[str, Any]] = []
     for code, info in meta.items():
-        symbol = code.split("_", 1)[0].upper()
+        symbol = t212_symbol(info.get("ticker") or code)
         name = str(info.get("name", ""))
         short = str(info.get("short_name", "")).upper()
         row = {

@@ -93,6 +93,102 @@ EXTRA_UNIVERSE: list[tuple[str, str]] = [
     ("BLK", "BlackRock"), ("AXP", "American Express"), ("T", "AT&T"), ("VZ", "Verizon"),
     ("TMUS", "T-Mobile US"), ("CMCSA", "Comcast"), ("O", "Realty Income"), ("PLD", "Prologis"),
     ("EQIX", "Equinix"), ("DLR", "Digital Realty"), ("AMT", "American Tower"), ("WELL", "Welltower"),
+    ("SNDK", "Sandisk"), ("WDC", "Western Digital"), ("STX", "Seagate Technology"), ("RMBS", "Rambus"),
+    ("AMKR", "Amkor Technology"), ("ONTO", "Onto Innovation"), ("COHR", "Coherent"), ("TER", "Teradyne"),
+]
+
+# London / continental listings, so non-US themes draft and trade end to end.
+# (Yahoo symbol, T212 code, shortName, name, currency, type). Names and quote
+# currencies were taken from market data; codes follow T212's
+# ``<SYMBOL><venue letter>_EQ`` form (l London, d Xetra, p Paris, a Amsterdam,
+# m Milan, e Madrid, s Stockholm), pence lines quote in GBX.
+INTL_UNIVERSE: list[tuple[str, str, str, str, str, str]] = [
+    ('BA.L', 'BAl_EQ', 'BA', 'BAE Systems plc', 'GBX', 'STOCK'),
+    ('RR.L', 'RRl_EQ', 'RR', 'Rolls-Royce Holdings plc', 'GBX', 'STOCK'),
+    ('QQ.L', 'QQl_EQ', 'QQ', 'QinetiQ Group plc', 'GBX', 'STOCK'),
+    ('CHG.L', 'CHGl_EQ', 'CHG', 'Chemring Group PLC', 'GBX', 'STOCK'),
+    ('BAB.L', 'BABl_EQ', 'BAB', 'Babcock International Group PLC', 'GBX', 'STOCK'),
+    ('SHEL.L', 'SHELl_EQ', 'SHEL', 'Shell plc', 'GBX', 'STOCK'),
+    ('BP.L', 'BPl_EQ', 'BP', 'BP p.l.c.', 'GBX', 'STOCK'),
+    ('AZN.L', 'AZNl_EQ', 'AZN', 'AstraZeneca PLC', 'GBX', 'STOCK'),
+    ('HSBA.L', 'HSBAl_EQ', 'HSBA', 'HSBC Holdings plc', 'GBX', 'STOCK'),
+    ('ULVR.L', 'ULVRl_EQ', 'ULVR', 'Unilever PLC', 'GBX', 'STOCK'),
+    ('GSK.L', 'GSKl_EQ', 'GSK', 'GSK plc', 'GBX', 'STOCK'),
+    ('RIO.L', 'RIOl_EQ', 'RIO', 'Rio Tinto Group', 'GBX', 'STOCK'),
+    ('GLEN.L', 'GLENl_EQ', 'GLEN', 'Glencore plc', 'GBX', 'STOCK'),
+    ('LSEG.L', 'LSEGl_EQ', 'LSEG', 'London Stock Exchange Group plc', 'GBX', 'STOCK'),
+    ('BARC.L', 'BARCl_EQ', 'BARC', 'Barclays PLC', 'GBX', 'STOCK'),
+    ('LLOY.L', 'LLOYl_EQ', 'LLOY', 'Lloyds Banking Group plc', 'GBX', 'STOCK'),
+    ('NWG.L', 'NWGl_EQ', 'NWG', 'NatWest Group plc', 'GBX', 'STOCK'),
+    ('DGE.L', 'DGEl_EQ', 'DGE', 'Diageo plc', 'GBX', 'STOCK'),
+    ('REL.L', 'RELl_EQ', 'REL', 'RELX PLC', 'GBX', 'STOCK'),
+    ('NG.L', 'NGl_EQ', 'NG', 'National Grid plc', 'GBX', 'STOCK'),
+    ('VOD.L', 'VODl_EQ', 'VOD', 'Vodafone Group Public Limited Company', 'GBX', 'STOCK'),
+    ('TSCO.L', 'TSCOl_EQ', 'TSCO', 'Tesco PLC', 'GBX', 'STOCK'),
+    ('BT-A.L', 'BTAl_EQ', 'BT A', 'BT Group plc', 'GBX', 'STOCK'),
+    ('III.L', 'IIIl_EQ', 'III', '3i Group Ord', 'GBX', 'STOCK'),
+    ('EXPN.L', 'EXPNl_EQ', 'EXPN', 'Experian plc', 'GBX', 'STOCK'),
+    ('BATS.L', 'BATSl_EQ', 'BATS', 'British American Tobacco p.l.c.', 'GBX', 'STOCK'),
+    ('AAL.L', 'AALl_EQ', 'AAL', 'Anglo American plc', 'GBX', 'STOCK'),
+    ('PRU.L', 'PRUl_EQ', 'PRU', 'Prudential plc', 'GBX', 'STOCK'),
+    ('LGEN.L', 'LGENl_EQ', 'LGEN', 'Legal & General Group Plc', 'GBX', 'STOCK'),
+    ('SSE.L', 'SSEl_EQ', 'SSE', 'SSE plc', 'GBX', 'STOCK'),
+    ('IAG.L', 'IAGl_EQ', 'IAG', 'International Consolidated Airlines Group S.A.', 'GBX', 'STOCK'),
+    ('SMSN.L', 'SMSNl_EQ', 'SMSN', 'Samsung Electronics Co., Ltd.', 'USD', 'STOCK'),
+    ('VWRL.L', 'VWRLl_EQ', 'VWRL', 'Vanguard FTSE All-World UCITS ETF', 'GBP', 'ETF'),
+    ('VUSA.L', 'VUSAl_EQ', 'VUSA', 'Vanguard S&P 500 UCITS ETF', 'GBP', 'ETF'),
+    ('ISF.L', 'ISFl_EQ', 'ISF', 'iShares Core FTSE 100 UCITS ETF GBP (Dist)', 'GBX', 'ETF'),
+    ('CSPX.L', 'CSPXl_EQ', 'CSPX', 'iShares Core S&P 500 UCITS ETF USD (Acc)', 'USD', 'ETF'),
+    ('EQQQ.L', 'EQQQl_EQ', 'EQQQ', 'Invesco EQQQ NASDAQ-100 UCITS ETF', 'GBX', 'ETF'),
+    ('ARMR.L', 'ARMRl_EQ', 'ARMR', 'Global X Defence Tech UCITS ETF USD Accumulating', 'USD', 'ETF'),
+    ('DFNS.L', 'DFNSl_EQ', 'DFNS', 'VanEck Defense ETF A USD Acc', 'USD', 'ETF'),
+    ('WDEF.L', 'WDEFl_EQ', 'WDEF', 'WisdomTree Europe Defence UCITS ETF - EUR Acc', 'EUR', 'ETF'),
+    ('SGLN.L', 'SGLNl_EQ', 'SGLN', 'iShares Physical Gold ETC', 'GBX', 'STOCK'),
+    ('IGLN.L', 'IGLNl_EQ', 'IGLN', 'iShares Physical Gold ETC', 'USD', 'STOCK'),
+    ('INRG.L', 'INRGl_EQ', 'INRG', 'iShares Global Clean Energy Transition UCITS ETF USD (Dist)', 'GBX', 'ETF'),
+    ('SEMI.L', 'SEMIl_EQ', 'SEMI', 'iShares MSCI Global Semiconductors UCITS ETF USD Acc', 'GBP', 'ETF'),
+    ('RHM.DE', 'RHMd_EQ', 'RHM', 'Rheinmetall AG', 'EUR', 'STOCK'),
+    ('SAP.DE', 'SAPd_EQ', 'SAP', 'SAP SE', 'EUR', 'STOCK'),
+    ('SIE.DE', 'SIEd_EQ', 'SIE', 'Siemens Aktiengesellschaft', 'EUR', 'STOCK'),
+    ('ALV.DE', 'ALVd_EQ', 'ALV', 'Allianz SE', 'EUR', 'STOCK'),
+    ('AIR.DE', 'AIRd_EQ', 'AIR', 'Airbus SE', 'EUR', 'STOCK'),
+    ('MTX.DE', 'MTXd_EQ', 'MTX', 'MTU Aero Engines AG', 'EUR', 'STOCK'),
+    ('HAG.DE', 'HAGd_EQ', 'HAG', 'Hensoldt AG', 'EUR', 'STOCK'),
+    ('R3NK.DE', 'R3NKd_EQ', 'R3NK', 'RENK Group AG', 'EUR', 'STOCK'),
+    ('IFX.DE', 'IFXd_EQ', 'IFX', 'Infineon Technologies AG', 'EUR', 'STOCK'),
+    ('DTE.DE', 'DTEd_EQ', 'DTE', 'Deutsche Telekom AG', 'EUR', 'STOCK'),
+    ('BMW.DE', 'BMWd_EQ', 'BMW', 'Bayerische Motoren Werke Aktiengesellschaft', 'EUR', 'STOCK'),
+    ('MBG.DE', 'MBGd_EQ', 'MBG', 'Mercedes-Benz Group AG', 'EUR', 'STOCK'),
+    ('8RMY.DE', '8RMYd_EQ', '8RMY', 'HANetf ICAV - Future of European Defence Screened UCITS ETF Accumulating', 'EUR', 'ETF'),
+    ('HO.PA', 'HOp_EQ', 'HO', 'Thales S.A.', 'EUR', 'STOCK'),
+    ('AIR.PA', 'AIRp_EQ', 'AIR', 'Airbus SE', 'EUR', 'STOCK'),
+    ('SAF.PA', 'SAFp_EQ', 'SAF', 'Safran SA', 'EUR', 'STOCK'),
+    ('MC.PA', 'MCp_EQ', 'MC', 'LVMH Moët Hennessy - Louis Vuitton, Société Européenne', 'EUR', 'STOCK'),
+    ('OR.PA', 'ORp_EQ', 'OR', "L'Oréal S.A.", 'EUR', 'STOCK'),
+    ('TTE.PA', 'TTEp_EQ', 'TTE', 'TotalEnergies SE', 'EUR', 'STOCK'),
+    ('SU.PA', 'SUp_EQ', 'SU', 'Schneider Electric S.E.', 'EUR', 'STOCK'),
+    ('AM.PA', 'AMp_EQ', 'AM', 'Dassault Aviation société anonyme', 'EUR', 'STOCK'),
+    ('BNP.PA', 'BNPp_EQ', 'BNP', 'BNP Paribas SA', 'EUR', 'STOCK'),
+    ('LDO.MI', 'LDOm_EQ', 'LDO', 'Leonardo S.p.a.', 'EUR', 'STOCK'),
+    ('FCT.MI', 'FCTm_EQ', 'FCT', 'Fincantieri S.p.A.', 'EUR', 'STOCK'),
+    ('ENI.MI', 'ENIm_EQ', 'ENI', 'Eni S.p.A.', 'EUR', 'STOCK'),
+    ('ISP.MI', 'ISPm_EQ', 'ISP', 'Intesa Sanpaolo S.p.A.', 'EUR', 'STOCK'),
+    ('RACE.MI', 'RACEm_EQ', 'RACE', 'Ferrari N.V.', 'EUR', 'STOCK'),
+    ('STMMI.MI', 'STMMIm_EQ', 'STMMI', 'STMicroelectronics N.V.', 'EUR', 'STOCK'),
+    ('ASML.AS', 'ASMLa_EQ', 'ASML', 'ASML Holding N.V.', 'EUR', 'STOCK'),
+    ('BESI.AS', 'BESIa_EQ', 'BESI', 'BE Semiconductor Industries N.V.', 'EUR', 'STOCK'),
+    ('ADYEN.AS', 'ADYENa_EQ', 'ADYEN', 'Adyen N.V.', 'EUR', 'STOCK'),
+    ('INGA.AS', 'INGAa_EQ', 'INGA', 'ING Groep N.V.', 'EUR', 'STOCK'),
+    ('ASM.AS', 'ASMa_EQ', 'ASM', 'ASM International NV', 'EUR', 'STOCK'),
+    ('PRX.AS', 'PRXa_EQ', 'PRX', 'Prosus N.V.', 'EUR', 'STOCK'),
+    ('IDR.MC', 'IDRe_EQ', 'IDR', 'Indra Sistemas, S.A.', 'EUR', 'STOCK'),
+    ('ITX.MC', 'ITXe_EQ', 'ITX', 'Industria de Diseño Textil, S.A.', 'EUR', 'STOCK'),
+    ('SAN.MC', 'SANe_EQ', 'SAN', 'Banco Santander, S.A.', 'EUR', 'STOCK'),
+    ('IBE.MC', 'IBEe_EQ', 'IBE', 'Iberdrola, S.A.', 'EUR', 'STOCK'),
+    ('SAAB-B.ST', 'SAABBs_EQ', 'SAAB B', 'Saab AB (publ)', 'SEK', 'STOCK'),
+    ('ERIC-B.ST', 'ERICBs_EQ', 'ERIC B', 'Telefonaktiebolaget LM Ericsson (publ)', 'SEK', 'STOCK'),
+    ('VOLV-B.ST', 'VOLVBs_EQ', 'VOLV B', 'AB Volvo (publ)', 'SEK', 'STOCK'),
+    ('ATCO-A.ST', 'ATCOAs_EQ', 'ATCO A', 'Atlas Copco AB (publ)', 'SEK', 'STOCK'),
 ]
 
 # The seeded book: (account, ticker, quantity, cost basis as a multiple of the price ~1y ago)
@@ -120,6 +216,9 @@ def code_for(ticker: str) -> str:
 
 
 def _ticker_for_code(code: str) -> str:
+    row = _INTL.get(code.upper())
+    if row:
+        return row[0]
     base = code.removesuffix("_US_EQ")
     return base.replace("_", ".") if base.endswith("_B") else base
 
@@ -127,6 +226,44 @@ def _ticker_for_code(code: str) -> str:
 _NAMES = {code_for(t): n for t, n, _ in UNIVERSE}
 _NAMES.update({code_for(t): n for t, n in EXTRA_UNIVERSE})
 _FALLBACK = {code_for(t): p for t, _, p in UNIVERSE}
+# Keyed by the UPPER code (how the app stores and sends codes); values keep the original case.
+_INTL = {code.upper(): row for row in INTL_UNIVERSE for code in [row[1]]}
+_NAMES.update({k: row[3] for k, row in _INTL.items()})
+_YAHOO_INTL = {row[0] for row in INTL_UNIVERSE}
+
+
+def currency_of(code: str) -> str:
+    row = _INTL.get(code.upper())
+    return row[4] if row else "USD"
+
+
+def display_code(code: str) -> str:
+    """The code as T212 spells it (original case: ``BAl_EQ``)."""
+    row = _INTL.get(code.upper())
+    return row[1] if row else code
+
+
+def gbp_rate(code: str) -> float:
+    """GBP per one unit of the instrument's quote currency."""
+    ccy = currency_of(code)
+    if ccy == "USD":
+        return 1.0 / gbpusd()
+    if ccy == "GBX":
+        return 0.01
+    if ccy == "GBP":
+        return 1.0
+    hit = _price_cache.get(f"FX:{ccy}")
+    if hit and time.time() - hit[1] < _PRICE_TTL:
+        return hit[0]
+    value = {"EUR": 0.85, "SEK": 0.075, "CHF": 0.93}.get(ccy, 1.0)
+    try:
+        from app.services.fx import get_fx_rate
+
+        value = float(get_fx_rate(ccy, "GBP")) or value
+    except Exception:  # noqa: BLE001
+        pass
+    _price_cache[f"FX:{ccy}"] = (value, time.time())
+    return value
 
 
 def is_sandbox_enabled_env() -> bool:
@@ -153,11 +290,11 @@ def _state_path() -> Path:
 def _history(ticker: str, days: int):
     from app.services.market_data import fetch_history
 
-    return fetch_history(ticker.replace(".", "-"), lookback_days=days)
+    return fetch_history(ticker if ticker in _YAHOO_INTL else ticker.replace(".", "-"), lookback_days=days)
 
 
 def price(code: str) -> float:
-    """Latest price in instrument currency (USD), cached for a few minutes."""
+    """Latest price in the instrument's quote currency, cached for a few minutes."""
     now = time.time()
     hit = _price_cache.get(code)
     if hit and now - hit[1] < _PRICE_TTL:
@@ -287,17 +424,18 @@ def _seed_state() -> dict[str, Any]:
 
 def _order_record(code: str, side: str, qty: float, px: float, fx: float, when: datetime, otype: str) -> dict[str, Any]:
     oid = int(_rand(f"{code}{when.isoformat()}{qty}") * 10**10) or uuid.uuid4().int % 10**10
-    net_gbp = round(qty * px / fx, 2)
+    rate = gbp_rate(code)
+    net_gbp = round(qty * px * rate, 2)
     return {
         "order": {
-            "id": oid, "type": otype, "side": side, "status": "FILLED", "ticker": code,
-            "instrument": {"ticker": code, "name": _NAMES.get(code, code), "currency": "USD", "isin": ""},
+            "id": oid, "type": otype, "side": side, "status": "FILLED", "ticker": display_code(code),
+            "instrument": {"ticker": display_code(code), "name": _NAMES.get(code, code), "currency": currency_of(code), "isin": ""},
             "quantity": qty if side == "BUY" else -qty, "filledQuantity": qty, "filledValue": net_gbp,
             "currency": "GBP", "createdAt": _iso(when), "initiatedFrom": "API",
         },
         "fill": {
             "id": oid + 1, "quantity": qty if side == "BUY" else -qty, "price": round(px, 4), "filledAt": _iso(when), "type": "TRADE",
-            "walletImpact": {"currency": "GBP", "netValue": net_gbp, "fxRate": round(1 / fx, 6), "taxes": []},
+            "walletImpact": {"currency": "GBP", "netValue": net_gbp, "fxRate": round(rate, 6), "taxes": []},
         },
     }
 
@@ -358,10 +496,11 @@ def _positions_payload(acct: dict[str, Any]) -> list[dict[str, Any]]:
         if qty <= 0:
             continue
         px = price(code)
-        cost_gbp = qty * float(pos["avg_price"]) / fx
-        value_gbp = qty * px / fx
+        rate = gbp_rate(code)
+        cost_gbp = qty * float(pos["avg_price"]) * rate
+        value_gbp = qty * px * rate
         out.append({
-            "instrument": {"ticker": code, "name": _NAMES.get(code, code), "currency": "USD", "isin": ""},
+            "instrument": {"ticker": display_code(code), "name": _NAMES.get(code, code), "currency": currency_of(code), "isin": ""},
             "createdAt": pos.get("opened_at"),
             "quantity": qty, "quantityAvailableForTrading": qty, "quantityInPies": 0,
             "averagePricePaid": round(float(pos["avg_price"]), 4), "currentPrice": round(px, 4),
@@ -434,6 +573,10 @@ def instruments() -> list[dict[str, Any]]:
         {"ticker": code_for(t), "name": n, "shortName": t, "currencyCode": "USD", "type": "ETF" if t in {"SPY", "QQQ"} else "STOCK",
          "isin": "", "workingScheduleId": 1, "minTradeQuantity": 0.01, "maxOpenQuantity": 100000, "addedOn": "2018-01-01T00:00:00.000Z"}
         for t, n in [(t, n) for t, n, _ in UNIVERSE] + EXTRA_UNIVERSE
+    ] + [
+        {"ticker": code, "name": name, "shortName": short, "currencyCode": ccy, "type": typ, "isin": "",
+         "workingScheduleId": 1, "minTradeQuantity": 0.01, "maxOpenQuantity": 100000, "addedOn": "2018-01-01T00:00:00.000Z"}
+        for _, code, short, name, ccy, typ in INTL_UNIVERSE
     ]
 
 
@@ -500,14 +643,14 @@ def place_order(account: str, scope: str, kind: str, body: dict[str, Any]) -> di
             pending = {
                 "id": oid, "ticker": code, "type": kind.upper(), "side": side, "quantity": qty, "status": "NEW",
                 "limitPrice": body.get("limitPrice"), "stopPrice": body.get("stopPrice"),
-                "creationTime": _iso(now), "value": round(abs(qty) * price(code) / gbpusd(), 2),
+                "creationTime": _iso(now), "value": round(abs(qty) * price(code) * gbp_rate(code), 2),
             }
             acct["pending"].append(pending)
             _save(state)
             return pending
         px = price(code)
         fx = gbpusd()
-        notional = abs(qty) * px / fx
+        notional = abs(qty) * px * gbp_rate(code)
         pos = acct["positions"].get(code, {"quantity": 0.0, "avg_price": px, "opened_at": _iso(now)})
         if side == "BUY":
             _top_up_locked(acct, account, notional)  # fake money: never refuse a demo buy for cash

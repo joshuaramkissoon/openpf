@@ -7,7 +7,7 @@ import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
 import { formatPercent } from '@/utils/format'
 import type { KillCriterion, KillState, LegPerformance, Play, PlayLeg, PlaySizing, StagedTranche } from './types'
-import { InstrumentLabel } from './names'
+import { InstrumentChip, InstrumentLabel } from './names'
 import { Block, Eyebrow, KillIcon, ROLE_LABEL, ruleLabel } from './ui'
 
 /** Editable basket for a draft: weights as %, remove a leg. */
@@ -156,21 +156,11 @@ export function LegsTable({ legs, built }: { legs: LegPerformance[]; built: bool
   )
 }
 
-/** Why this size: big number, the reasoning steps, warnings. */
+/** Why this size: the reasoning steps and warnings (the number itself leads the page). */
 export function SizingPanel({ play }: { play: Play }) {
   const s = play.sizing
   return (
     <div className="space-y-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <div>
-          <Eyebrow>Budget</Eyebrow>
-          <Money value={play.budget_gbp} decimals={0} className="text-3xl font-semibold tracking-tight" />
-        </div>
-        <div className="text-right">
-          <Eyebrow>Of your book</Eyebrow>
-          <Pct value={play.budget_pct_of_book} decimals={1} className="text-lg" />
-        </div>
-      </div>
       {s.steps?.length ? (
         <ol className="space-y-2 border-l border-border pl-4">
           {s.steps.map((step, i) => (
@@ -293,16 +283,16 @@ export function OverlapCallout({ play }: { play: Play }) {
       <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="space-y-1 text-xs leading-relaxed">
         <p className="font-medium text-foreground">You already own part of this theme</p>
-        <p className="text-muted-foreground">
-          {rows.map((r, i) => (
-            <span key={r.ticker}>
-              {i ? ', ' : ''}
-              <span className="font-mono text-foreground">{r.ticker}</span> <Money value={r.value_gbp} decimals={0} /> (
-              {formatPercent(r.weight_of_book, 1)} of book)
-            </span>
+        <ul className="space-y-1.5">
+          {rows.map((r) => (
+            <li key={r.ticker} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+              <InstrumentChip symbol={r.ticker} />
+              <Money value={r.value_gbp} decimals={0} className="text-foreground" />
+              <span>{formatPercent(r.weight_of_book, 1)} of book</span>
+            </li>
           ))}
-          . Sizing counts this towards the play, so new money goes to the legs you don't hold.
-        </p>
+        </ul>
+        <p className="text-muted-foreground">Sizing counts this towards the play, so new money goes to the legs you don't hold.</p>
       </div>
     </div>
   )

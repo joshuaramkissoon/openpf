@@ -190,3 +190,13 @@ export async function placeRebalance(id: string, opts: { liveConfirmed: boolean;
   )
   return data
 }
+
+export async function searchInstrumentNames(q: string, limit = 8) {
+  const { data } = await api.get<{ items: InstrumentName[] }>('/instruments/names/search', { params: { q, limit } })
+  return data.items
+}
+
+export async function detectNames(idea: string) {
+  const { data } = await api.post<{ items: (InstrumentName & { query: string })[] }>('/plays/draft/detect', { idea })
+  return data.items
+}

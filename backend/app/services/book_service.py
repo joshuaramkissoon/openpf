@@ -527,7 +527,7 @@ def add_bench(db: Session, play: Play, ticker: str, why: str = "", name: str = "
         raise OwnershipError(f"{t} is already in this play's plan.")
     verified = True
     if verify:
-        code, verified = ps.resolve_instrument(db, t)
+        code, verified = ps.resolve_instrument(db, t, name)
         if not verified and ps.instruments_known(db):
             raise OwnershipError(f"{t} isn't available on Trading 212.")
     items = [b for b in play.bench or [] if norm_ticker(b.get("ticker")) != t]

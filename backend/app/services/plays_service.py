@@ -468,9 +468,10 @@ def verdict_from_states(states: list[str], drift: bool = False) -> str:
 
 # ── Instruments ──────────────────────────────────────────────────────────────
 
-def resolve_instrument(db: Session, ticker: str) -> tuple[str, bool]:
+def resolve_instrument(db: Session, ticker: str, name: str | None = None) -> tuple[str, bool]:
     """Best-effort T212 instrument code for a Yahoo-style ticker, plus whether it
-    was found in the broker's instrument list (False → a guessed code)."""
+    was found in the broker's instrument list (False → a guessed code). ``name``
+    (the company) is a fallback when the symbol doesn't match."""
     t = (ticker or "").strip().upper()
     base = t.split(".")[0]
     is_lse = t.endswith(".L")
@@ -478,7 +479,7 @@ def resolve_instrument(db: Session, ticker: str) -> tuple[str, bool]:
         from app.services.instrument_names import find_listing
 
         # Any venue T212 lists (Xetra RHM.DE → RHMd_EQ, Paris HO.PA → HOp_EQ, …).
-        listing = find_listing(db, t)
+        listing = find_listing(db, t, name)
         if listing:
             return str(listing["instrument_code"]), True
     except Exception as exc:  # noqa: BLE001
@@ -514,7 +515,7 @@ def instruments_known(db: Session) -> bool:
 def _attach_instruments(db: Session, legs: list[dict[str, Any]]) -> None:
     for l in legs:
         if not l.get("instrument_code"):
-            l["instrument_code"], l["instrument_verified"] = resolve_instrument(db, l["ticker"])
+            l["instrument_code"], l["instrument_verified"] = resolve_instrument(db, l["ticker"], l.get("name"))
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -1125,6 +1126,8 @@ _DRAFT_TOOLS = [
     "mcp__marketdata__get_correlation_matrix",
     "mcp__fundamentals__get_fundamentals",
     "mcp__fundamentals__get_valuation",
+    "mcp__t212__check_tradable",
+    "mcp__t212__find_instrument",
     "WebSearch",
 ]
 
@@ -1141,8 +1144,13 @@ Rules:
   list is dropped from the draft.
 - 3-7 legs. Mix roles: "core" (purest, most liquid exposure), "satellite" (higher-beta / smaller), and
   optionally a "hedge". Weights sum to 1. No leveraged or inverse products.
-- Use the tools to sanity-check that each ticker exists, is liquid, and to gauge volatility/valuation. Be brief:
-  a handful of tool calls, not dozens.
+- Find candidates from CURRENT sources, not memory: run a WebSearch or two for the theme's leaders today
+  (recent spin-offs, IPOs, renamed or re-listed companies, e.g. "<theme> stocks 2026", "<theme> spin-off").
+- Before you finalise, call check_tradable on EVERY candidate. Only tickers it confirms may be legs; for one
+  it rejects, try find_instrument (company name) for a listing Trading 212 does carry (a London GDR, the
+  primary listing, a US ADR) or pick another name. Then write the thesis and rationales ONLY about the final
+  legs: never describe a name that isn't in the basket as part of it.
+- Use the market tools to sanity-check liquidity, volatility and valuation. Be brief: a handful of calls.
 - Mind the user's existing holdings: avoid doubling up on names they already hold heavily; mention overlap.
 - Kill criteria: 2-4 items. At least 2 must have a machine-checkable `rule`:
   price_below {ticker, value in the listing currency}, drawdown_pct {value: % basket drawdown from peak, e.g. 30},
@@ -1318,10 +1326,73 @@ def fail_interrupted_jobs(db: Session) -> int:
     return len(rows)
 
 
-def _mcp_servers() -> dict[str, Any]:
+def _tradable_server(account_kind: str | None):
+    """In-process tools so the drafting model checks names against the broker's
+    instrument list before it writes about them."""
+    from claude_agent_sdk import create_sdk_mcp_server, tool
+
+    from app.services import instrument_names
+
+    def _run(fn):
+        with _session_factory() as db:
+            return fn(db)
+
+    @tool("check_tradable",
+          "Check market symbols (Yahoo style: CCJ, BA.L, RHM.DE, SAAB-B.ST) against Trading 212's instrument list. "
+          "Pass names too (same order) so a symbol that misses can be matched by company. Returns per symbol whether "
+          "it can be bought, in which accounts, and its name.",
+          {"type": "object", "properties": {"symbols": {"type": "array", "items": {"type": "string"}},
+                                            "names": {"type": "array", "items": {"type": "string"}}},
+           "required": ["symbols"]})
+    async def check_tradable(args: dict[str, Any]) -> dict[str, Any]:
+        syms = [str(x) for x in (args.get("symbols") or [])][:20]
+        names = [str(x) for x in (args.get("names") or [])]
+
+        def run(db: Session) -> list[dict[str, Any]]:
+            items = instrument_names.describe(db, syms, account_kind=account_kind, profile=False,
+                                              names=dict(zip([x.upper() for x in syms], names)))
+            out = []
+            for it in items:
+                row = {"symbol": it["symbol"], "tradable": it["tradable"], "name": it["name"]}
+                if it["tradable"]:
+                    row["accounts"] = it["accounts"]
+                    if account_kind and account_kind not in it["accounts"]:
+                        row["note"] = f"not available in the {account_kind} account"
+                elif it["tradable"] is False:
+                    row["note"] = "not on Trading 212 — use find_instrument for another listing, or drop it"
+                out.append(row)
+            return out
+
+        try:
+            text = json.dumps(await asyncio.to_thread(_run, run))
+        except Exception as exc:  # noqa: BLE001
+            text = f"error: {exc}"
+        return {"content": [{"type": "text", "text": text}]}
+
+    @tool("find_instrument",
+          "Search Trading 212's instrument list by company name or symbol (e.g. 'Samsung', 'SanDisk', 'Rheinmetall'). "
+          "Returns tradable listings with the market symbol to use as a leg ticker.",
+          {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]})
+    async def find_instrument(args: dict[str, Any]) -> dict[str, Any]:
+        q = str(args.get("query") or "")[:60]
+        try:
+            rows = await asyncio.to_thread(_run, lambda db: instrument_names.search(db, q, limit=6))
+            text = json.dumps([{k: r.get(k) for k in ("symbol", "name", "currency", "accounts")} for r in rows])
+        except Exception as exc:  # noqa: BLE001
+            text = f"error: {exc}"
+        return {"content": [{"type": "text", "text": text or "[]"}]}
+
+    return create_sdk_mcp_server(name="t212", version="1.0.0", tools=[check_tradable, find_instrument])
+
+
+def _mcp_servers(account_kind: str | None = None) -> dict[str, Any]:
     from app.services.mcp_registry import mcp_server_env, server_spec
 
-    servers = {}
+    servers: dict[str, Any] = {}
+    try:
+        servers["t212"] = _tradable_server(account_kind)
+    except Exception:  # noqa: BLE001 — drafting still works, the post-check drops unlisted names
+        logger.debug("t212 tool server unavailable", exc_info=True)
     for name in ("marketdata", "fundamentals"):
         spec = server_spec(name)
         if spec.script_path.is_file():
@@ -1342,6 +1413,8 @@ _TOOL_PHASES: dict[str, tuple[str, str, str]] = {  # tool → (label, phase, sou
     "get_fundamentals": ("Reading fundamentals for", "fundamentals", "fundamentals"),
     "get_valuation": ("Checking valuation for", "fundamentals", "fundamentals"),
     "WebSearch": ("Searching the web:", "research", "web"),
+    "check_tradable": ("Checking Trading 212 for", "compare", "portfolio"),
+    "find_instrument": ("Looking up on Trading 212:", "research", "portfolio"),
     "WebFetch": ("Reading", "research", "web"),
 }
 
@@ -1367,7 +1440,7 @@ def _tool_event(name: str, args: dict[str, Any]) -> dict[str, Any]:
     short = name.split("__")[-1]
     label, phase, source = _TOOL_PHASES.get(short, ("Using " + short, "research", "web"))
     tickers: list[str] = []
-    if short not in ("WebSearch", "WebFetch"):
+    if short not in ("WebSearch", "WebFetch", "find_instrument"):
         items = raw if isinstance(raw, list) else re.split(r"[,\s]+", str(raw))
         tickers = [str(t).strip().upper()[:16] for t in items if str(t).strip()][:12]
     target = ", ".join(map(str, raw)) if isinstance(raw, list) else str(raw)
@@ -1440,7 +1513,8 @@ async def _run_structured(prompt: str, *, system: str, schema: dict[str, Any], m
     return _extract_json("\n".join(text_chunks))
 
 
-def _draft_prompt(req: dict[str, Any], book: dict[str, Any], error: str | None = None) -> str:
+def _draft_prompt(req: dict[str, Any], book: dict[str, Any], error: str | None = None,
+                  musts: list[dict[str, Any]] | None = None, nots: list[dict[str, Any]] | None = None) -> str:
     account = req.get("account_kind") or "stocks_isa"
     holdings = [
         {"ticker": p["ticker"], "name": p["name"], "account": p["account_kind"], "value_gbp": round(p["value"]),
@@ -1460,35 +1534,100 @@ def _draft_prompt(req: dict[str, Any], book: dict[str, Any], error: str | None =
         },
         "today": date.today().isoformat(),
     }
+    if musts:
+        payload["must_include"] = [{k: m.get(k) for k in ("query", "symbol", "name", "tradable")} for m in musts]
+    if nots:
+        payload["exclude"] = [{k: m.get(k) for k in ("query", "symbol", "name")} for m in nots]
     text = "Draft a Play for this idea. Context (JSON):\n" + json.dumps(payload, indent=1)
+    if musts:
+        text += ("\n\nmust_include: the user wants these in the basket. Put every tradable one in as a leg, using the "
+                 "symbol given (size it as you judge). If you think one is a mistake, keep it and say why in its "
+                 "rationale. Only a name that isn't tradable may be left out: list it in left_out with the reason.")
+    if nots:
+        text += "\n\nexclude: never use these names (or another listing of the same company)."
     if error:
         text += f"\n\nYour previous answer was invalid: {error}\nFix it and return valid JSON matching the schema."
     return text
 
 
-def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: dict[str, Any]) -> Play:
+def _same_instrument(db: Session, a: str, b: dict[str, Any]) -> bool:
+    """Does leg ticker ``a`` name the instrument row ``b`` (from instrument_names)?"""
+    from app.services.instrument_names import clean_ticker, find_listing
+
+    if a.strip().upper() in {str(b.get("symbol") or "").upper(), str(b.get("query") or "").upper()}:
+        return True
+    code = b.get("instrument_code")
+    if code:
+        hit = find_listing(db, a)
+        return bool(hit and hit["instrument_code"] == code)
+    return clean_ticker(a) == clean_ticker(str(b.get("symbol") or ""))
+
+
+def _include_problem(db: Session, out: PlayDraftOut, musts: list[dict[str, Any]], nots: list[dict[str, Any]]) -> str | None:
+    """Why a draft ignores the user's must-haves / exclusions, or None."""
+    left = {lo.ticker.strip().upper() for lo in out.left_out}
+    missing = [m for m in musts if m.get("tradable") and not any(_same_instrument(db, l.ticker, m) for l in out.legs)
+               and str(m.get("symbol") or "").upper() not in left and str(m.get("query") or "").upper() not in left]
+    banned = [l.ticker for l in out.legs if any(_same_instrument(db, l.ticker, n) for n in nots)]
+    parts = []
+    if missing:
+        parts.append("must_include names missing from legs: " + ", ".join(f"{m['symbol']} ({m.get('name')})" for m in missing))
+    if banned:
+        parts.append("excluded names used as legs: " + ", ".join(banned))
+    return "; ".join(parts) or None
+
+
+def _enforce_includes(db: Session, out: PlayDraftOut, musts: list[dict[str, Any]], nots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Last resort after a retry: drop excluded legs, add missing must-haves as
+    satellites. Returns the dropped legs as ``{ticker, name, reason}``."""
+    from app.schemas.plays import DraftLeg
+
+    dropped = []
+    for l in list(out.legs):
+        if any(_same_instrument(db, l.ticker, n) for n in nots):
+            out.legs.remove(l)
+            dropped.append({"ticker": l.ticker.upper(), "name": l.name, "reason": "you excluded it"})
+    left = {lo.ticker.strip().upper() for lo in out.left_out}
+    for m in musts:
+        if m.get("tradable") and not any(_same_instrument(db, l.ticker, m) for l in out.legs) \
+                and str(m.get("symbol") or "").upper() not in left:
+            out.legs.append(DraftLeg(ticker=m["symbol"], name=m.get("name") or m["symbol"], role="satellite",
+                                     weight=round(1 / (len(out.legs) + 1), 3), rationale="You asked for this one.",
+                                     currency=m.get("currency")))
+    return dropped
+
+
+def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: dict[str, Any],
+                   dropped: list[dict[str, Any]] | None = None, musts: list[dict[str, Any]] | None = None) -> Play:
     from app.services.config_store import ConfigStore
 
+    dropped = list(dropped or [])
     legs = _normalise_legs([
         {"ticker": l.ticker.strip().upper(), "name": l.name, "role": l.role, "target_weight": l.weight,
          "rationale": l.rationale, "currency": listing_currency(l.ticker, l.currency)}
         for l in out.legs
     ])
     _attach_instruments(db, legs)
-    # Drop legs Trading 212 doesn't list; a basket needs at least two real ones.
+    # Drop legs Trading 212 doesn't list; keep the rest. A basket needs at least two real ones.
     missing = unknown_tickers(db, legs)
     if missing:
         kept = [l for l in legs if l["ticker"] not in missing]
+        named = ", ".join(f"{l.get('name') or l['ticker']} ({l['ticker']})" for l in legs if l["ticker"] in missing)
         if len(kept) < 2:
             acct = "Stocks ISA" if (req.get("account_kind") or "stocks_isa") == "stocks_isa" else "Invest account"
+            found = f"only {len(kept)} of its names" if kept else "none of its names"
             raise DraftFailure(
-                f"Archie couldn't find enough of this theme on Trading 212 ({', '.join(missing)} aren't listed for your "
-                f"{acct}). Try a broader angle on the idea, or the other account.", "no_instruments")
+                f"Archie found {found} on Trading 212 for your {acct}: {named} aren't listed there. "
+                "Try naming the companies you want, a broader angle, or the other account.", "no_instruments")
+        dropped += [{"ticker": l["ticker"], "name": l.get("name") or "", "reason": "not on Trading 212"}
+                    for l in legs if l["ticker"] in missing]
         legs = _normalise_legs(kept)
     conviction = req.get("conviction") or out.suggested_conviction
+    suggested = out.suggested_conviction if req.get("conviction") and out.suggested_conviction != req.get("conviction") else None
     play = Play(
         title=out.title.strip(),
-        thesis=out.thesis.strip(),
+        # Models sometimes double-escape newlines inside the JSON string.
+        thesis=out.thesis.replace("\\n", "\n").strip(),
         status="draft",
         conviction=conviction,
         horizon_months=int(req.get("horizon_months") or 12),
@@ -1502,7 +1641,11 @@ def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: di
         bench=[],
         meta={"idea": req["idea"], "benchmark": (out.benchmark or "SPY").upper(), "key_risks": out.key_risks,
               "conviction_source": "user" if req.get("conviction") else "archie",
-              **({"dropped_legs": missing} if missing else {})},
+              **({"dropped_legs": [d["ticker"] for d in dropped], "dropped": dropped} if dropped else {}),
+              **({"suggested_conviction": suggested} if suggested else {}),
+              **({"left_out": [lo.model_dump() for lo in out.left_out]} if out.left_out else {}),
+              **({"include": [{k: m.get(k) for k in ("query", "symbol", "name", "tradable")} for m in musts]}
+                 if musts else {})},
     )
     if req.get("budget_gbp"):
         play.budget_gbp = float(req["budget_gbp"])
@@ -1526,19 +1669,30 @@ async def _draft(job: DraftJob) -> str:
             raise DraftFailure("Archie couldn't read your portfolio just now. Check the broker connection, then retry.",
                                "failed") from exc
         job.add(f"Book: {_fmt_gbp(book['total_gbp'])} across {len(book['positions'])} holdings")
+        from app.services import instrument_names
+
+        musts = instrument_names.resolve_names(db, req.get("include") or [])
+        nots = instrument_names.resolve_names(db, req.get("exclude") or [])
+        if musts:
+            job.add(f"Must include: {', '.join(m.get('name') or m['query'] for m in musts)}", phase="portfolio",
+                    source="portfolio")
         job.add("Researching the theme")
         schema = PlayDraftOut.model_json_schema()
         error: str | None = None
         for attempt in range(2):
             raw = await _run_structured(
-                _draft_prompt(req, book, error), system=_DRAFT_SYSTEM, schema=schema,
-                model=model_routing.sdk_model("plays_draft"), tools=_DRAFT_TOOLS, mcp=_mcp_servers(), max_turns=24,
+                _draft_prompt(req, book, error, musts, nots), system=_DRAFT_SYSTEM, schema=schema,
+                model=model_routing.sdk_model("plays_draft"), tools=_DRAFT_TOOLS,
+                mcp=_mcp_servers(req.get("account_kind") or "stocks_isa"), max_turns=30,
                 on_progress=job.add, usage_source="play_draft", usage_id=job.id,
             )
             try:
                 if raw is None:
                     raise ValueError("no JSON returned")
                 out = PlayDraftOut.model_validate(raw)
+                problem = None if out.unclear else _include_problem(db, out, musts, nots)
+                if problem and attempt == 0:
+                    raise ValueError(problem)
                 break
             except (ValidationError, ValueError) as exc:
                 error = str(exc)[:1500]
@@ -1549,12 +1703,13 @@ async def _draft(job: DraftJob) -> str:
             raise RuntimeError(f"Draft was invalid twice: {error}")
         if out.unclear:
             raise DraftFailure(out.unclear.strip()[:400], "unclear_idea")
+        excluded = _enforce_includes(db, out, musts, nots)
         job.add(f"Basket: {', '.join(l.ticker.upper() for l in out.legs)}",
                 basket=[{"ticker": l.ticker.upper(), "name": l.name, "weight": l.weight, "role": l.role} for l in out.legs])
         job.add("Checking it's all on Trading 212")
         job.add("Sizing against your book and risk rails")
-        play = _draft_to_play(db, req, out, book)
-        dropped = (play.meta or {}).get("dropped_legs") or []
+        play = _draft_to_play(db, req, out, book, excluded, musts)
+        dropped = [d["ticker"] for d in (play.meta or {}).get("dropped") or [] if d.get("reason") == "not on Trading 212"]
         if dropped:
             job.add(f"Dropped {', '.join(dropped)}: not on Trading 212", phase="sizing", source="portfolio",
                     dropped=dropped)
