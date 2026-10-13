@@ -399,3 +399,54 @@ def validate_spec(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
     except ValidationError as exc:
         return None, _explain(exc)
     return spec.model_dump(by_alias=True, exclude_none=True), []
+
+
+# ── normalise near-misses from fast models ─────────────────────────────
+_ROW_BLOCKS = {"treemap", "allocation", "bars", "timeseries", "multiples", "heatgrid", "table"}
+_GROUP_DIMS = {"sector", "industry", "country", "asset_type", "play", "theme"}
+
+
+def _fix_measure(m: Any) -> None:
+    if not isinstance(m, dict) or m.get("field") or m.get("agg") == "count":
+        return
+    computed = [s["compute"].get("as") for s in m.get("transform") or [] if isinstance(s, dict) and isinstance(s.get("compute"), dict)]
+    m["field"] = next((c for c in reversed(computed) if c), "value")
+
+
+def normalize_spec(spec: Any) -> Any:
+    """Fill in the obvious gaps fast models leave, before validation:
+
+    * a rows block with no ``from`` reads the portfolio (``pf.positions``);
+    * an allocation/bars block labelled by a dimension (country, sector, …)
+      gets the ``enrich`` + ``groupBy`` it implies;
+    * a measure with an aggregate but no field measures ``value`` (or the last
+      computed field).
+
+    Only additive, unambiguous fixes; anything else is left for the validator."""
+    if not isinstance(spec, dict):
+        return spec
+    for b in spec.get("blocks") or []:
+        if not isinstance(b, dict):
+            continue
+        kind = b.get("type")
+        if kind in _ROW_BLOCKS and not b.get("from"):
+            b["from"] = "pf.positions"
+        label = b.get("label")
+        if kind in ("allocation", "bars") and label in _GROUP_DIMS and b.get("from") == "pf.positions":
+            steps = b.setdefault("transform", [])
+            if isinstance(steps, list) and not any(isinstance(s, dict) and "groupBy" in s for s in steps):
+                if not any(isinstance(s, dict) and label in (s.get("enrich") or []) for s in steps):
+                    steps.insert(0, {"enrich": [label]})
+                steps.append({"groupBy": label})
+        measures = [b.get(k) for k in ("value", "delta", "max")]
+        measures += [it.get(k) for it in b.get("items") or [] if isinstance(it, dict) for k in ("value", "delta")]
+        if kind in ("hero", "kpis", "meter") and not b.get("from") and any(
+                isinstance(m, dict) and not m.get("from") for m in measures):
+            b["from"] = "pf.positions"
+        for key in ("value", "delta", "max"):
+            _fix_measure(b.get(key))
+        for item in b.get("items") or []:
+            if isinstance(item, dict):
+                _fix_measure(item.get("value"))
+                _fix_measure(item.get("delta"))
+    return spec

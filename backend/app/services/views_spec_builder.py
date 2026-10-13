@@ -223,7 +223,9 @@ def _check(reply: dict[str, Any]) -> tuple[SpecResult | None, list[str]]:
         return SpecResult("decline" if decision == "decline" else "needs_code", reason=reason), []
     if decision != "build":
         return None, ["'decision' must be build, decline or needs_code"]
-    spec, problems = validate_spec(reply.get("spec"))
+    from app.services.viz_spec import normalize_spec
+
+    spec, problems = validate_spec(normalize_spec(reply.get("spec")))
     if problems:
         return None, problems
     return SpecResult("spec", spec=spec), []
