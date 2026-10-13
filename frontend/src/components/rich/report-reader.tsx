@@ -4,6 +4,7 @@ import { ChevronDown, FileText } from 'lucide-react'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import type { ReportSummary } from '@/types'
 import { Blocks, Callout, CLAMP_WEIGHT, Clamp, calloutToneFor } from './blocks'
 import { Inline, RichProvider } from './inline'
 import { blockWeight, buildReport, parseMarkdown, plainText, type KeyNumber, type ReportDoc, type Section } from './parse'
@@ -59,15 +60,49 @@ function ReportSection({ section }: { section: Section }) {
 }
 
 /** TL;DR + contents + sections. Use inside any scroll container. */
-export function ReportBody({ doc, markdown, showKeyNumbers = false }: { doc: ReportDoc; markdown: string; showKeyNumbers?: boolean }) {
+export function ReportBody({
+  doc,
+  markdown,
+  summary,
+  showKeyNumbers = false,
+}: {
+  doc: ReportDoc
+  markdown: string
+  /** The report's summary block: when present it *is* the TL;DR card. */
+  summary?: ReportSummary | null
+  showKeyNumbers?: boolean
+}) {
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   const group = useMemo(() => proposalIdsIn(markdown), [markdown])
+  const fromSummary = Boolean(summary && !summary.derived && summary.headline)
   return (
     <RichProvider>
       <ProposalGroupContext.Provider value={group}>
         <div className="rc rc-report">
           {showKeyNumbers ? <KeyNumbers items={doc.keyNumbers} /> : null}
-          {doc.tldr.length ? (
+          {fromSummary && summary ? (
+            <div className={cn('rc-tldr', summary.signal === 'none' && 'is-quiet')}>
+              <p className="rc-tldr-label">TL;DR</p>
+              <p className="rc-tldr-headline">
+                <Inline text={summary.headline} />
+              </p>
+              {summary.points.length ? (
+                <ul className="rc-ul">
+                  {summary.points.map((p, i) => (
+                    <li key={i}>
+                      <Inline text={p} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {summary.action ? (
+                <p className="rc-tldr-action">
+                  <span className="rc-tldr-action-label">Do</span>
+                  <Inline text={summary.action} />
+                </p>
+              ) : null}
+            </div>
+          ) : doc.tldr.length ? (
             <div className="rc-tldr">
               <p className="rc-tldr-label">TL;DR</p>
               <Blocks blocks={doc.tldr} />
@@ -121,6 +156,7 @@ export function ReportReader({
   empty,
   titleAdornment,
   footer,
+  summary,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -135,6 +171,8 @@ export function ReportReader({
   empty?: ReactNode
   titleAdornment?: ReactNode
   footer?: ReactNode
+  /** The report's summary block (becomes the TL;DR card). */
+  summary?: ReportSummary | null
 }) {
   const doc = useReport(markdown)
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -173,7 +211,7 @@ export function ReportReader({
             ) : error ? (
               <p className="text-sm text-negative">{error}</p>
             ) : doc && markdown ? (
-              <ReportBody doc={doc} markdown={markdown} />
+              <ReportBody doc={doc} markdown={markdown} summary={summary} />
             ) : (
               <div className="text-sm text-muted-foreground">{empty ?? 'Nothing to show.'}</div>
             )}

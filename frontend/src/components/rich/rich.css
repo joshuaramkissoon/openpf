@@ -467,6 +467,38 @@
   text-transform: uppercase;
   color: var(--primary);
 }
+.rc-tldr.is-quiet {
+  background: color-mix(in oklch, var(--foreground) 3%, transparent);
+  border-color: var(--rc-rule);
+}
+.rc-tldr-headline {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+}
+.rc-tldr .rc-ul {
+  margin: 0.55em 0 0;
+  color: var(--rc-body);
+  font-size: 0.92rem;
+}
+.rc-tldr-action {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  margin: 0.75em 0 0;
+  padding-top: 0.65em;
+  border-top: 1px solid color-mix(in oklch, var(--primary) 18%, transparent);
+  font-size: 0.92rem;
+}
+.rc-tldr-action-label {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
 .rc-tldr > .rc-p:first-of-type {
   margin-top: 0;
 }

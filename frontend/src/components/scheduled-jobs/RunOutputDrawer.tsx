@@ -3,7 +3,7 @@ import dayjs from 'dayjs'
 import { ArrowRight, CheckCircle2, XCircle } from 'lucide-react'
 
 import { getArtifact } from '../../api/client'
-import type { ArtifactDetail } from '../../types'
+import type { ArtifactDetail, ReportSummary } from '../../types'
 import { ReportReader } from '@/components/rich/report-reader'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -73,6 +73,7 @@ export function RunOutputDrawer({ run, onClose, onViewTask }: Props) {
         ) : null
       }
       markdown={state.detail?.content ?? null}
+      summary={(state.detail?.metadata?.summary as ReportSummary | null | undefined) ?? null}
       loading={state.loading}
       error={state.error ? [state.error, run?.message].filter(Boolean).join(' — ') : null}
       empty={run?.message || 'This run produced no output artifact.'}
