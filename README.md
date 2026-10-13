@@ -23,9 +23,9 @@ Your keys, your data, your machine. MIT licensed.
 | **Trade it yourself.** Every order gets a review step showing amount, account, fees, your weight after the trade, and a check against your limits before anything is sent. | **Recipes.** Routines Archie runs on a schedule or when something happens, such as a morning brief, a play check-in or a big-move explainer. Refine one with a sentence. Recipes can propose trades, never place them. |
 | ![Trade review step](docs/images/trade-review.webp) | ![Recipes](docs/images/recipes.webp) |
 
-**Connections.** Trading 212, Kraken, Coinbase, Binance, Interactive Brokers, Alpaca, and brokers with no public API (Robinhood, Schwab, Fidelity, …) through SnapTrade. Each account starts read-only, and every account feeds the same book.
+**Connections.** Trading 212, Kraken, Coinbase, Binance, Interactive Brokers, Alpaca, and many brokers without a public API through SnapTrade (read-only; check SnapTrade's current broker list). Each account starts read-only, and every account feeds the same book.
 
-![Settings → Connections](docs/images/connections.webp)
+![Settings → Accounts](docs/images/connections.webp)
 
 ## Safety model
 
@@ -37,7 +37,7 @@ OpenPF is built so that a confused or prompt-injected agent can't move your mone
 
   ![A proposal split by the daily limit](docs/images/held-back.webp)
 
-- **Standing permissions are opt-in.** In Settings → Permissions you can let a narrow category of trade go through without a tap, for example the next tranche of a play you already approved. Each permission has a per-trade cap, a daily cap, an optional expiry and an off switch. No agent tool can create or widen one.
+- **Standing permissions are opt-in.** In Settings → Safety you can let a narrow category of trade go through without a tap, for example the next tranche of a play you already approved. Each permission has a per-trade cap, a daily cap, an optional expiry and an off switch. No agent tool can create or widen one.
 - **Read-only connections can't execute.** Archie's suggestions for those accounts say "Place it in <broker>", and the gate refuses them.
 - **Keys never reach the agent.** Trade keys live only in the API server. Connection secrets are encrypted at rest, and crypto keys that can withdraw or transfer are refused when you connect them. Provider credentials are scrubbed from every agent process, and agent hooks block the brokers' and exchanges' API hosts as well as the app's own API.
 - **Safe defaults.** New installs use paper mode on Trading 212's demo environment, and the server binds to localhost. `OPENPF_API_TOKEN` locks the API if you expose it.
@@ -67,9 +67,9 @@ python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt
 cd frontend && npm install && npm run dev
 ```
 
-Open http://localhost:5173 → **Settings → Connections** and add your accounts. For Trading 212, create a **read** key per account (Invest, Stocks ISA) in the T212 app under Settings → API. If you want to approve trades from OpenPF, also create a separate IP-restricted **trade** key. Each provider has an in-app guide listing the permissions to tick.
+Open http://localhost:5173 → **Settings → Accounts** and add your accounts. For Trading 212, create a **read** key per account (Invest, Stocks ISA) in the T212 app under Settings → API. If you want to approve trades from OpenPF, also create a separate IP-restricted **trade** key. Each provider has an in-app guide listing the permissions to tick.
 
-The app starts in paper mode on T212's demo environment. Switch to live in Settings → Broker & keys once you're happy.
+The app starts in paper mode on T212's demo environment. Switch to live in Settings → Safety once you're happy.
 
 **Always-on:** `./scripts/serve.sh` runs the API and dashboard in the background (see [docs/running-on-mac-mini.md](docs/running-on-mac-mini.md)), or use Docker with `make up`, which also runs the scheduler worker. If you run it without Docker, set `INPROC_SCHEDULER_ENABLED=true` so that recipes run.
 
@@ -89,8 +89,8 @@ Settings go in `backend/.env` (template: [`backend/.env.example`](backend/.env.e
 | `SEC_CONTACT_EMAIL` | Optional. Enables smart money (insider Form 4 and 13F filings): the SEC requires a contact email in the User-Agent. |
 | `OPENPF_API_TOKEN` | Requires a token on the API and chat. Set it before exposing OpenPF beyond localhost. |
 | `OPENPF_USER_NAME` | Optional. The name Archie addresses you by. |
-| `BROKER_MODE` / `T212_BASE_ENV` | `paper` (default) or `live` / `demo` (default), `live` or `sandbox`. Settings → Broker & keys overrides them once saved. |
-| `MAX_SINGLE_ORDER_NOTIONAL`, `MAX_DAILY_NOTIONAL`, `MAX_POSITION_WEIGHT`, `MAX_CRYPTO_PCT_OF_BOOK` | Default limits. Settings → Risk rails overrides them. |
+| `BROKER_MODE` / `T212_BASE_ENV` | `paper` (default) or `live` / `demo` (default), `live` or `sandbox`. Settings → Accounts (Trading 212) overrides them once saved. |
+| `MAX_SINGLE_ORDER_NOTIONAL`, `MAX_DAILY_NOTIONAL`, `MAX_POSITION_WEIGHT`, `MAX_CRYPTO_PCT_OF_BOOK` | Default limits. Settings → Safety overrides them. |
 | `OPENPF_SANDBOX` | `1` = mock broker and exchanges. Real keys are ignored, and the DB, views and Archie's runtime default to `.demo/`. |
 | `OPENPF_SECRETS_KEY` | Optional Fernet key for connection secrets. By default it's `openpf-secrets.key`, stored next to the database. Back it up with the DB. |
 

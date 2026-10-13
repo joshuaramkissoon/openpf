@@ -21,7 +21,7 @@ browser ──/api/logos/{key}──▶ OpenPF server ──(once per company)�
 - After each portfolio sync, the server warms the holdings' logos in the background: one
   request every 0.5 s, at most 80 per run. Logos that are already cached or recently missed are
   skipped. Set `LOGOS_PREWARM=false` to turn this off.
-- **Settings → General → Company logos** is on by default. When it's off, the server fetches and
+- **Settings → Appearance & privacy → Company logos** is on by default. When it's off, the server fetches and
   serves nothing, the UI makes no logo requests, and every icon is a monogram.
 - Cache folder: `LOGOS_DATA_DIR` (default `backend/data/logos`, gitignored). Deleting it is safe.
 
