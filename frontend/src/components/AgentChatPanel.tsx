@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { ArrowUp, Banknote, ChevronDown, ChevronRight, Globe, LayoutGrid, PanelLeft, Sparkles, Square, Target, Wrench } from 'lucide-react'
+import { ArrowUp, ChevronDown, ChevronRight, PanelLeft, Square, Wrench } from 'lucide-react'
 
 import { getChatMessages, stopChat, streamChatMessage, type StreamHandle } from '../api/client'
 import type { ChatMessage, ChatQuestionAnswers, ChatQuestionPrompt, ChatSession, ToolCallEntry } from '../types'
@@ -13,6 +13,8 @@ import {
   InputGroupTextarea,
 } from './ui/input-group'
 import { RichMarkdown } from './RichMarkdown'
+import { ArchieEmptyState } from './chat/archie-empty-state'
+import { proposalIdsIn } from './rich/proposal'
 
 type SegmentGroup =
   | { type: 'tools'; segments: StreamSegment[] }
@@ -136,38 +138,6 @@ function ToolCallsSummary({ toolCalls, expanded, onToggle }: {
     </div>
   )
 }
-
-// Starter prompts for an empty conversation — each one shows off a different
-// thing Archie is for: deploying cash, sizing a theme bet, reacting to macro,
-// and building a custom view.
-const STARTERS: { icon: typeof Banknote; title: string; prompt: string }[] = [
-  {
-    icon: Banknote,
-    title: 'Put my idle cash to work',
-    prompt:
-      'I have uninvested cash sitting in my accounts. Given my current allocation and risk rails, how should I deploy it? Propose specific trades with sizes and which account each belongs in.',
-  },
-  {
-    icon: Target,
-    title: 'Build me a play around…',
-    prompt:
-      'Build me a play around AI power demand: a basket of names, position sizing for my book, a staged entry plan and clear kill criteria.',
-  },
-  {
-    icon: Globe,
-    title: "React to today's macro news",
-    prompt:
-      "What's moved in macro and markets today, and what does it mean for my holdings specifically? Is there anything I should do?",
-  },
-  {
-    icon: LayoutGrid,
-    title: 'Build me a view of…',
-    prompt: 'Build me a view of my dividend income by month over the last year.',
-  },
-]
-
-const MARKDOWN_CLASS =
-  'text-sm leading-relaxed [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ul]:list-disc [&_ul]:pl-5 [&_table]:w-full'
 
 type StatusItem = { id: string; phase: string; message: string }
 type StreamSegment = {
@@ -722,6 +692,18 @@ export function AgentChatPanel({
     void submitContent(prompt)
   }
 
+  /** Start a sentence in the composer for the user to finish ("Build me a view of …"). */
+  function prefillComposer(text: string) {
+    setInput(text)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(text.length, text.length)
+      autoResize()
+    })
+  }
+
   function onInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -761,35 +743,7 @@ export function AgentChatPanel({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6"
       >
         {visibleMessages.length === 0 && !current.sending ? (
-          <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-8">
-            <div className="space-y-2">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <Sparkles className="size-5" />
-              </div>
-              <p className="text-2xl font-semibold tracking-tight text-foreground">What should we work on?</p>
-              <p className="text-sm text-muted-foreground">
-                Archie reads your live portfolio and the market. Anything it wants to trade comes back to you as a
-                proposal to approve.
-              </p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {STARTERS.map(({ icon: Icon, title, prompt }) => (
-                <button
-                  key={title}
-                  type="button"
-                  onClick={() => onPromptChipClick(prompt)}
-                  disabled={!activeSessionId}
-                  className="group flex flex-col gap-1.5 rounded-xl border border-border bg-card/40 p-4 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
-                >
-                  <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <Icon className="size-4 text-muted-foreground transition-colors group-hover:text-primary" />
-                    {title}
-                  </span>
-                  <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{prompt}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <ArchieEmptyState disabled={!activeSessionId} onSend={onPromptChipClick} onPrefill={prefillComposer} />
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
             {visibleMessages.map((message) => {
@@ -799,15 +753,22 @@ export function AgentChatPanel({
                 if (isStreaming) {
                   const groups = groupSegments(current.streamSegments)
                   const expanded = current.toolCallsExpanded
+                  // Proposals made across tool calls in this reply render as one group.
+                  const streamProposalIds = proposalIdsIn(
+                    groups.map((g) => (g.type === 'text' ? g.text : '')).join('\n\n'),
+                  )
 
                   return (
                     <article key={`${message.id}-${message.role}`} className="space-y-3">
                       {groups.map((group, gi) => {
                         if (group.type === 'text') {
                           return (
-                            <div key={`text-${gi}`} className={MARKDOWN_CLASS}>
-                              <RichMarkdown markdown={group.text} />
-                            </div>
+                            <RichMarkdown
+                              key={`text-${gi}`}
+                              markdown={group.text}
+                              streaming={gi === groups.length - 1}
+                              proposalGroup={streamProposalIds}
+                            />
                           )
                         }
                         const isLastToolGroup = !groups.slice(gi + 1).some(g => g.type === 'tools')
@@ -881,9 +842,11 @@ export function AgentChatPanel({
                         }}
                       />
                     )}
-                    <div className={cn(MARKDOWN_CLASS, isError && 'text-negative')}>
+                    {isError ? (
+                      <p className="text-sm text-negative">{message.content}</p>
+                    ) : (
                       <RichMarkdown markdown={message.content} />
-                    </div>
+                    )}
                   </article>
                 )
               }
