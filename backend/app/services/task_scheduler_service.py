@@ -23,7 +23,12 @@ from app.services.claude_sdk_config import (
 )
 from app.services import mcp_registry
 from app.services import costs_service
-from app.services.artifact_service import extract_summary, summary_frontmatter_line
+from app.services.artifact_service import (
+    data_frontmatter_line,
+    extract_machine_blocks,
+    extract_summary,
+    summary_frontmatter_line,
+)
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import (
     _daily_entry_count,
@@ -242,25 +247,49 @@ SUMMARY_RULES = (
     "``` "
     "headline: ONE sentence, the single most important takeaway, concrete and about this book "
     "(e.g. 'NVDA + PLTR are now 55% of your money — up from 48% last week'). "
-    "points: at most 3 short lines, each ONLY if it changes what the user would do (empty list is fine). "
+    "points: at most 3 short lines, each ONLY if it changes what the user would do (empty list is fine); "
+    "never repeat the headline or a number already shown as a stat. "
     "action: what to do now in a few words, with a link where one exists — '[Review the NVDA trim](proposal:<id>)' "
     "or '[Open the play](#/plays/<id>)' — or null. "
     "signal: 'high' if the user should act or look today, 'low' if worth a glance, 'none' if nothing needs "
     "them. Saying nothing is worth their attention is a valid, good answer: use signal 'none' and a plain "
     "headline like 'Nothing worth your attention today'. "
-    "If the task also asks for a JSON block, put that before the summary block."
+    "If the task also asks for a JSON block, put that before the summary block (it is stored as data, never shown)."
 )
 
-REPORT_FORMAT = (
-    "REPORT FORMAT (the app renders this richly — follow it exactly): "
-    "Start with '## Key numbers' — 3-4 bullets as '- Label: value' (e.g. '- Week: +2.4%', '- Cash: £5,055'). "
-    "Then short '##' sections, most important first. Use '## What stands out' for highlights and "
-    "'## Risks' for risk notes (both render as callouts). Tables only for genuinely tabular data, with "
-    "numbers in their own columns and explicit signs on moves. Bold sparingly — never whole sentences. "
-    "No emoji traffic lights. Reference a proposal you created as '[label](proposal:<intent_id>)' on its own line. "
-    "Do NOT write a TL;DR section: the summary block below becomes the TL;DR. "
-    f"{SUMMARY_RULES}"
+SUMMARY_STATS_RULES = (
+    "The summary object may also carry 'stats': at most 4 headline numbers drawn as visual tiles — "
+    '[{"label": "Exposure", "value": 11320, "kind": "money", "sub": "13.6% of book", "bar": {"value": 0.136, "max": 1}}, '
+    '{"label": "Week", "value": 0.024, "kind": "signedPct", "tone": "positive", "spark": [100, 101.2, 102.4]}, '
+    '{"label": "Next report", "value": "2026-10-14", "kind": "date", "tickers": ["ASML"], '
+    '"timeline": [{"date": "2026-10-14", "label": "ASML"}]}]. '
+    "kind is money | pct | signedPct | date | count | text; money/pct/count values are plain numbers "
+    "(percent as a fraction: 0.024 = 2.4%), dates are YYYY-MM-DD; labels at most 3 words, text values at most "
+    "4 words (put the rest in 'sub'). Only numbers you actually have, never invented; omit 'stats' if you have none. "
+    "When the report covers several names (earnings, plays, watchlist), also add 'holdings': "
+    '[{"ticker": "ASML", "date": "2026-10-14", "timing": "before open", "verdict": "hold" | "trim" | "opportunity", '
+    '"value": 6200, "weight": 0.074, "gain_pct": 0.21, "forward_pe": 31.2, "watch": ["2027 order guidance", "China mix"]}].'
 )
+
+# The report body rules on their own (digest mode computes the stats in code).
+REPORT_BODY_RULES = (
+    "REPORT FORMAT (the app renders this richly — follow it exactly): "
+    "Start with '## Key numbers' — 3-4 bullets as '- Label: value' with SHORT values (e.g. '- Week: +2.4%', "
+    "'- Cash: £5,055'); context goes in a later section, never in the value. "
+    "Then short '##' sections, most important first. Use '## What stands out' for highlights and "
+    "'## Risks' for risk notes (both render as callouts; neither restates the headline). When the report "
+    "covers several names, give each its own '## TICKER' section with bullets 'Exposure: …', 'Timing: …', "
+    "'Valuation: …', 'What to watch: …', 'Verdict: Hold through | Consider trimming | Opportunity'. "
+    "Tables only for genuinely tabular data, with numbers in their own columns and explicit signs on moves. "
+    "Bold sparingly — never whole sentences. No emoji traffic lights. "
+    "Reference a proposal you created as '[label](proposal:<intent_id>)' on its own line. "
+    "Write for the investor, not about the system: never mention the trigger context, tools, data sources, "
+    "JSON or what data was 'provided'. If something you needed wasn't available, say so in at most one short "
+    "last line ('Some data wasn't available: timing, surprise history'), never a section. "
+    "Do NOT write a TL;DR section: the summary block below becomes the TL;DR. "
+)
+
+REPORT_FORMAT = f"{REPORT_BODY_RULES}{SUMMARY_RULES} {SUMMARY_STATS_RULES}"
 
 
 _DEFAULT_TASKS: list[dict[str, Any]] = [
@@ -768,6 +797,8 @@ def _cron_log_path(
     # Parse + strip a trailing ```summary block; it's stored as frontmatter.
     found, content = extract_summary(content)
     summary = summary or found
+    # Machine-readable ```json blocks are data for code, never shown to the user.
+    data, content = extract_machine_blocks(content)
     root = artifacts_dir() / "scheduled" / task_name
     root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -778,7 +809,7 @@ task_name: {task_name}
 task_kind: {task_kind}
 created_at: {datetime.now(tz=timezone.utc).isoformat()}
 title: {description or task_name}
-{summary_frontmatter_line(summary)}---
+{summary_frontmatter_line(summary)}{data_frontmatter_line(data)}---
 
 """
     path = root / f"{stamp}.md"

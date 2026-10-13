@@ -137,14 +137,41 @@ def _excerpt_line(text: str, limit: int = 220) -> str:
     return ""
 
 
+def _run_headline(output: str, summary: dict[str, Any] | None) -> str:
+    """A run's one-line title: the summary headline, else the first line that isn't a section label."""
+    from app.services.artifact_service import GENERIC_HEADING, extract_summary
+
+    if not summary:
+        summary, _ = extract_summary(output or "")
+    if summary and str(summary.get("headline") or "").strip():
+        return str(summary["headline"]).strip()[:220]
+    for line in (output or "").splitlines():
+        clean = _excerpt_line(line)
+        if clean and not GENERIC_HEADING.match(clean):
+            return clean
+    return ""
+
+
 def _run_row(row: ScheduledTaskLog) -> dict[str, Any]:
+    from app.services.artifact_service import GENERIC_HEADING, summary_at
+
     payload = row.payload or {}
+    card = summary_at(row.output_path) if row.status == "ok" and row.output_path else None
+    title = str(payload.get("summary") or "")
+    # The timeline shows the run's headline. Older runs stored the report's
+    # first line (often a section label like "Key numbers"): use the summary's.
+    if card and card.get("headline") and (not title or GENERIC_HEADING.match(title)):
+        title = card["headline"]
+    elif GENERIC_HEADING.match(title):
+        title = ""
     return {
         "id": row.id,
         "at": row.created_at,
         "status": row.status,
         "message": row.message,
-        "summary": payload.get("summary") or "",
+        "summary": title,
+        "card": card,
+        "manual": bool(payload.get("manual")),
         "output_path": row.output_path,
         "version": payload.get("recipe_version"),
         "trigger_context": payload.get("trigger_context") or "",
@@ -573,7 +600,8 @@ def start_run(db: Session, slug: str) -> dict[str, Any]:
 
 def build_run_prompt(recipe: Recipe, *, trigger_context: str = "", manual: bool = False) -> str:
     when = "the user pressed Run now" if manual else rv.describe_trigger(recipe.trigger or {})
-    ctx = f"\nTrigger context (from a deterministic check, not from the user):\n{trigger_context}\n" if trigger_context else ""
+    ctx = (f"\nWhy it ran (found by a deterministic check, not written by the user; use it, never mention it):\n"
+           f"{trigger_context}\n") if trigger_context else ""
     return (
         f"You are running the user's recipe \"{recipe.title}\" (skill recipes:{recipe.slug}, version "
         f"{recipe.current_version}). Trigger: {when}.{ctx}\n"
@@ -581,9 +609,9 @@ def build_run_prompt(recipe: Recipe, *, trigger_context: str = "", manual: bool 
         "and the most you can do with a trade idea is propose_trade for the user to approve. Never claim a trade was "
         "placed. If the instructions ask for something you can't do or data you can't get, do what you can and say "
         "plainly what you skipped.\n"
-        "Your FINAL message is the report delivered to the user's Home screen (and Telegram if they enabled it). Its very "
-        "first line must be the one-line headline itself — no preamble, no caveats; put any data problems in a short "
-        "'Notes' line at the end.\n"
+        "Your FINAL message is the report delivered to the user's Home screen (and Telegram if they enabled it). Start "
+        "straight with the report — no preamble, no caveats, no talk of tools, data sources or why it ran; put any "
+        "data gaps in one short line at the very end.\n"
         "If this recipe itself should change (e.g. it keeps finding nothing, or the user's preferences in memory "
         "contradict it), you may call update_recipe with a short reason — it becomes a suggestion the user reviews.\n\n"
         f"=== RECIPE: {recipe.title} ===\n{recipe.body.strip()}\n=== END RECIPE ===\n"
@@ -624,7 +652,10 @@ def run_recipe_task(db: Session, task: ScheduledTask) -> tuple[str, dict[str, An
             return "skipped", {"skipped": True, "reason": gate["reason"]}, None, {}
         recipe.meta = {**(recipe.meta or {}), "event_state": gate["state"]}
         db.commit()
-        trigger_context = gate["context"] or gate["reason"]
+        # Only what the gate actually found. A forced run (Run now) with nothing
+        # found ran because the user asked — its "no holdings report…" reason is
+        # not why it ran, and would contradict a report that finds them.
+        trigger_context = gate["context"]
 
     sync_plugin(db)
     prompt = build_run_prompt(recipe, trigger_context=trigger_context, manual=forced)
@@ -648,7 +679,7 @@ def run_recipe_task(db: Session, task: ScheduledTask) -> tuple[str, dict[str, An
     payload: dict[str, Any] = {
         "recipe": recipe.slug,
         "recipe_version": recipe.current_version,
-        "summary": _excerpt_line(output),
+        "summary": _run_headline(output, run_meta.get("summary")),
         "trigger_context": trigger_context,
         "manual": forced,
         "mode": mode,

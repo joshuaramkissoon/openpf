@@ -20,3 +20,4 @@ Macro headlines are only useful once mapped onto the user's actual exposures. Do
 - If a hedge or trim is clearly warranted, describe it; use `propose_trade` only when the case is strong, and never more than once.
 - Never present a macro view as certain.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: only numbers that moved your book — e.g. the rate or index move (signedPct) and your exposed value (money, sub '% of book'). None on a quiet day. Exact numbers only; leave a tile out rather than guess.

@@ -20,3 +20,4 @@ Plays are theme bets with written kill rules. Hold them to their own rules so co
 - A tripped kill rule goes first and is stated plainly — don't argue the user out of their own rule.
 - Proposals only; nothing happens without the user.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: active plays (count), best and weakest play (signedPct, sub the play), plays that need you (count). (In digest mode the app computes these itself.) Exact numbers only; leave a tile out rather than guess.

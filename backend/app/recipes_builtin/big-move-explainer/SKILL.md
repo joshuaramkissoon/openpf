@@ -5,7 +5,7 @@ description: When a holding moves sharply in a day, finds out why, judges whethe
 A big move is a question: noise, news, or a changed story? Answer it quickly and calmly.
 
 ## Steps
-1. The trigger context names the holding(s) and the move. For each:
+1. "Why it ran" names the holding(s) and the move. For each:
 2. Confirm the move with `get_price_snapshot` and check `get_technical_snapshot` (is it breaking a key level?).
 3. Find the cause: `get_company_news` (since_days=2), then `get_market_news` — company-specific, sector-wide or market-wide? If unclear, a quick web search.
 4. Exposure (`get_positions`): value, % of book, account, gain or loss on the position.
@@ -20,3 +20,4 @@ A big move is a question: noise, news, or a changed story? Answer it quickly and
 - Don't chase. A big up-move alone is not a reason to add.
 - Be explicit about uncertainty when the cause isn't clear.
 - Follow the app's report format: open with `## Key numbers`, end with the `summary` block (signal `none` on a quiet day).
+- In the `summary` block, add `stats`: the move (signedPct, with the ticker), your exposure (money, sub '% of book'), the day's £ impact (money), and the usual daily range if you computed it. Exact numbers only; leave a tile out rather than guess.

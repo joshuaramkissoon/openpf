@@ -25,10 +25,14 @@ def _holdings(db: Session) -> list[dict[str, Any]]:
     return top_holdings(db, top=TOP_HOLDINGS)
 
 
-def _next_earnings(ticker: str) -> dict[str, Any] | None:
-    from app.services import intel_service
+def _next_earnings(symbol: str) -> dict[str, Any] | None:
+    # The same lookup the earnings-prep report uses (Finnhub, then the
+    # fundamentals calendar), on the market symbol. The gate used to ask Finnhub
+    # alone with the raw T212 symbol, so it could say "no holdings report this
+    # week" while the report found ASML and TSM.
+    from app.services.report_digest import next_earnings
 
-    return (intel_service.get_earnings(ticker) or {}).get("next")
+    return next_earnings(symbol)
 
 
 def _change_pct(symbol: str) -> float | None:
@@ -61,17 +65,19 @@ def check_event(db: Session, trigger: dict[str, Any], state: dict[str, Any], *, 
     if event == "earnings_week":
         hits: list[str] = []
         for p in holdings:
-            tk = p.get("ticker")
-            if not tk:
+            tk = p.get("display_ticker") or p.get("ticker")
+            sym = p.get("yfinance_ticker") or p.get("ticker")
+            if not tk or not sym:
                 continue
             try:
-                nxt = _next_earnings(tk)
+                nxt = _next_earnings(sym)
             except Exception:  # noqa: BLE001
                 continue
             if not nxt or nxt.get("days_away") is None:
                 continue
             if 0 <= int(nxt["days_away"]) <= EARNINGS_WINDOW_DAYS:
-                when = nxt.get("hour") or "time TBD"
+                when = {"bmo": "before open", "amc": "after close", "dmh": "during market hours"}.get(
+                    str(nxt.get("hour") or "").lower(), "time TBD")
                 hits.append(f"{tk} reports {nxt.get('date')} ({when}), £{float(p.get('value') or 0):,.0f} held")
         if not hits:
             return {"fire": force, "context": "", "reason": "no holdings report in the next 7 days", "state": state}
