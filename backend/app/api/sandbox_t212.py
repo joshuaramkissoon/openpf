@@ -128,6 +128,12 @@ def cancel(order_id: str, request: Request) -> Any:
 
 
 @router.post("/reset")
-def reset() -> Any:
+def reset(request: Request) -> Any:
+    # Needs a sandbox key like every other route, so a cross-site page can't
+    # wipe the demo portfolio with a bare POST. (`demo.sh --reset` is the usual way.)
+    try:
+        _auth(request)
+    except sbx.SandboxError as exc:
+        return _err(exc)
     sbx.reset()
     return {"status": "reset"}

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import plays as plays_api
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
-from app.core.auth import ApiTokenMiddleware
+from app.core.auth import ApiTokenMiddleware, OriginGuardMiddleware
 from app.api import views
 from app.core.config import get_settings
 from app.core.database import init_db
@@ -164,7 +164,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request, exc):  # noqa: ANN001
+    """Last-resort 500: log the traceback server-side, return a JSON message the
+    UI can show — never the exception text or a stack trace."""
+    from fastapi.responses import JSONResponse
+
+    logging.getLogger("openpf.api").exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal error — see the OpenPF server log for details."})
+
 # Added before CORS so CORS stays outermost and 401s still carry CORS headers.
+app.add_middleware(
+    OriginGuardMiddleware,
+    allowed_origins=settings.cors_origins_list,
+    allowed_regex=settings.cors_allow_origin_regex or None,
+    api_prefix=settings.api_prefix,
+)
 if settings.openpf_api_token:
     app.add_middleware(ApiTokenMiddleware, token=settings.openpf_api_token, api_prefix=settings.api_prefix)
 
