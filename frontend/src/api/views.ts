@@ -61,9 +61,9 @@ export async function getViewData(source: string, params: Record<string, unknown
   return data
 }
 
-/** Save a viz spec as a view instantly (chat "Pin as view"). */
-export async function pinSpecView(spec: unknown, title?: string) {
-  const { data } = await api.post<ViewMeta>('/views/specs', { spec, title })
+/** Save a viz spec as a view instantly (chat "Pin as view"; `starter` marks a Home widget's own page). */
+export async function pinSpecView(spec: unknown, title?: string, starter?: string) {
+  const { data } = await api.post<ViewMeta>('/views/specs', { spec, title, starter })
   return data
 }
 

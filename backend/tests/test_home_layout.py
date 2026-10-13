@@ -86,8 +86,47 @@ def test_http_roundtrip(client):
     assert bad.status_code == 422 and "unknown kind" in bad.json()["detail"]
 
     added = client.post("/api/home/widgets", json={"kind": "spec", "spec": SPEC, "title": "From chat", "size": "S"}).json()
-    assert added["widget"]["title"] == "From chat" and len(added["layout"]["widgets"]) == 2
+    # A chart from chat is saved as a view and lands as a view widget, so it deep-links.
+    w = added["widget"]
+    assert w["kind"] == "view" and w["block"] == 0 and w["size"] == "S" and len(added["layout"]["widgets"]) == 2
+    view = client.get(f"/api/views/{w['ref']}").json()
+    assert view["title"] == "From chat"
     again = client.post("/api/home/widgets", json={"kind": "preset", "ref": "movers"}).json()
     assert len(again["layout"]["widgets"]) == 2 and again["widget"]["id"] == "x"
 
     assert client.post("/api/home/layout/reset").json() == hl.DEFAULT_LAYOUT
+
+
+def test_inline_spec_widgets_migrate_to_views_on_read(client):
+    from app.core.database import SessionLocal
+    from app.services.config_store import ConfigStore
+
+    lead = {**SPEC, "blocks": [{"type": "note", "text": "Context first"}, *SPEC["blocks"]]}
+    with SessionLocal() as db:  # a layout saved before chat specs became views
+        ConfigStore(db).set(hl.KEY, {"version": 1, "widgets": [{"id": "old", "kind": "spec", "spec": lead, "title": "Pinned", "size": "M"}]})
+    first = client.get("/api/home/layout").json()["widgets"]
+    assert [(w["id"], w["kind"], w.get("block"), w["size"]) for w in first] == [("old", "view", 1, "M")]
+    assert client.get(f"/api/views/{first[0]['ref']}").json()["title"] == "Pinned"
+    # Persisted once: a second read neither re-migrates nor makes another view.
+    views = len(client.get("/api/views").json())
+    assert client.get("/api/home/layout").json()["widgets"] == first
+    assert len(client.get("/api/views").json()) == views
+
+
+def test_view_widgets_accept_code_views_and_validate_block():
+    out = hl.normalise({"widgets": [{"kind": "view", "ref": "abc123", "size": "L"}]})
+    assert out["widgets"][0]["block"] == 0  # code views have no blocks: index 0
+    with pytest.raises(hl.LayoutError, match="block index"):
+        hl.normalise({"widgets": [{"kind": "view", "ref": "abc123", "block": -1}]})
+    with pytest.raises(hl.LayoutError, match="block index"):
+        hl.normalise({"widgets": [{"kind": "view", "ref": "abc123", "block": True}]})
+    with pytest.raises(hl.LayoutError, match="valid ref"):
+        hl.normalise({"widgets": [{"kind": "view", "ref": "../etc", "block": 0}]})
+
+
+def test_preset_widget_page_is_a_findable_view(client):
+    ok = client.post("/api/views/specs", json={"spec": SPEC, "starter": "widget:value"})
+    assert ok.status_code == 200 and ok.json()["starter"] == "widget:value"
+    assert any(v["starter"] == "widget:value" for v in client.get("/api/views").json())
+    for bad in ["today", "widget:../x", "widget:" + "a" * 41]:
+        assert client.post("/api/views/specs", json={"spec": SPEC, "starter": bad}).status_code == 422

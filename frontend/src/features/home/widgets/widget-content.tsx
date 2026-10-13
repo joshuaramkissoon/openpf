@@ -3,11 +3,13 @@ import type { PortfolioState } from '@/app/hooks/use-portfolio'
 import { AutonomyDigest } from '@/features/autonomy/home'
 import { BookByPlay } from '@/features/plays'
 import type { AppConfig } from '@/types'
+import { useAppActions } from '@/lib/app-actions'
 
 import { RiskChips } from '../holdings-summary'
 import { TodayCard } from '../today-card'
 import { BUILTINS, presetById, presetSpec, type BuiltinId } from './registry'
-import { SlimLine, VizTile, oneBlock, useViewSpec } from './viz-widget'
+import { leadSpec, presetViewId, useViewMeta } from './links'
+import { SlimLine, ViewCardTile, VizTile, oneBlock, useViewSpec } from './viz-widget'
 
 export type HomeCtx = { portfolio: PortfolioState; config: AppConfig | null }
 
@@ -46,28 +48,36 @@ export function BuiltinBody({ id, ctx, editing }: { id: BuiltinId; ctx: HomeCtx;
 /** A widget's display title (for headers, aria labels and toasts). */
 export function useWidgetTitle(w: HomeWidget): string {
   const { spec } = useViewSpec(w.kind === 'view' ? w.ref : null)
+  const { meta } = useViewMeta(w.kind === 'view' ? w.ref : null)
   if (w.kind === 'builtin') return BUILTINS[w.ref]?.title ?? 'Widget'
   if (w.kind === 'preset') return presetById(w.ref)?.title ?? 'Widget'
-  if (w.kind === 'view') return spec?.title ?? 'View'
+  if (w.kind === 'view') return spec?.title ?? meta?.title ?? 'View'
   return w.title ?? w.spec.title
 }
 
 export function WidgetBody({ widget, size, ctx, editing }: { widget: HomeWidget; size: HomeWidgetSize; ctx: HomeCtx; editing: boolean }) {
-  const view = useViewSpec(widget.kind === 'view' ? widget.ref : null)
+  const { navigate } = useAppActions()
+  const viewId = widget.kind === 'view' ? widget.ref : null
+  const view = useViewSpec(viewId)
+  const meta = useViewMeta(viewId)
   switch (widget.kind) {
     case 'builtin':
       return <BuiltinBody id={widget.ref} ctx={ctx} editing={editing} />
     case 'preset': {
       const p = presetById(widget.ref)
       if (!p) return <SlimLine title="Widget" text="This widget no longer exists — remove it in Edit Home" />
-      return <VizTile spec={presetSpec(p, size)} size={size} title={p.title} live={!editing} />
+      // Its full view: installed on first open, then just opened.
+      return <VizTile spec={presetSpec(p, size)} size={size} title={p.title} live={!editing} onOpen={async () => navigate(`/views/${await presetViewId(p)}`)} />
     }
     case 'view': {
-      if (view.loading) return <div className="h-[204px] animate-pulse rounded-2xl bg-muted/40" />
-      if (!view.spec) return <SlimLine title="View" text="This view was deleted or isn’t a chart view" />
-      return <VizTile spec={oneBlock(view.spec, widget.block)} size={size} title={view.spec.title} href={`/views/${widget.ref}`} live={!editing} />
+      if (view.loading || meta.loading) return <div className="h-[204px] animate-pulse rounded-2xl bg-muted/40" />
+      const open = () => navigate(`/views/${widget.ref}`)
+      if (view.spec) return <VizTile spec={leadSpec(view.spec, widget.block, size)} size={size} title={view.spec.title} onOpen={open} live={!editing} />
+      if (meta.meta) return <ViewCardTile meta={meta.meta} size={size} onOpen={open} live={!editing} />
+      return <SlimLine title="View" text="This view was deleted — remove it in Edit Home" />
     }
     case 'spec':
+      // Legacy inline chart (the server saves these as views on read; this shows until it has).
       return <VizTile spec={oneBlock(widget.spec, 0)} size={size} title={widget.title ?? widget.spec.title} live={!editing} />
   }
 }

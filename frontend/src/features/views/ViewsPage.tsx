@@ -7,7 +7,6 @@ import {
   ChevronRight,
   History,
   LayoutDashboard,
-  LayoutGrid,
   LoaderCircle,
   MoreHorizontal,
   Pin,
@@ -36,7 +35,7 @@ import {
   retryView,
   revertView,
 } from '@/api/views'
-import { addToHome } from '@/api/home'
+import { HomeToggle } from './on-home'
 import { ViewSpecRenderer, VizBlock, WIDGET_PRESETS, type VizBlockSpec } from '@/components/viz'
 import {
   AlertDialog,
@@ -972,19 +971,14 @@ function ViewDetail({ viewId }: { viewId: string }) {
               <Sparkles className="text-primary" /> Edit
               <kbd className="ml-0.5 hidden rounded border border-border px-1 font-mono text-[10px] text-muted-foreground sm:inline">E</kbd>
             </Button>
-              {doc?.kind === 'spec' && doc.spec ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Add to Home"
-                  aria-label="Add to Home"
-                  onClick={() => {
-                    const block = Math.max(0, doc.spec!.blocks.findIndex((b) => b.type !== 'note'))
-                    void addToHome({ kind: 'view', ref: meta.id, block, size: 'M' }, meta.title, navigate)
-                  }}
-                >
-                  <LayoutGrid className="text-muted-foreground" />
-                </Button>
+              {doc && meta.current_version ? (
+                <HomeToggle
+                  viewId={meta.id}
+                  starter={meta.starter}
+                  title={meta.title}
+                  block={doc.kind === 'spec' && doc.spec ? Math.max(0, doc.spec.blocks.findIndex((b) => b.type !== 'note')) : 0}
+                  navigate={navigate}
+                />
               ) : null}
             </>
           ) : null}

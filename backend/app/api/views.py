@@ -70,6 +70,8 @@ class ReorderRequest(BaseModel):
 class SpecRequest(BaseModel):
     spec: dict[str, Any]
     title: str | None = Field(default=None, max_length=60)
+    # What the view was made from, so it's found again instead of duplicated ("widget:value").
+    starter: str | None = Field(default=None, pattern=r"^widget:[a-z0-9-]{1,40}$")
 
 
 class GoodRequest(BaseModel):
@@ -110,8 +112,9 @@ def pin_spec(payload: SpecRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="This chart can't be saved: " + "; ".join(problems[:3]))
     if payload.title:
         spec["title"] = payload.title.strip()[:60] or spec["title"]
-    meta = store.create_view(title=spec["title"], description=spec.get("description", ""), icon=spec.get("icon") or store.DEFAULT_ICON, slug=store.prompt_slug(spec["title"]))
-    return store.save_version(meta["id"], json.dumps(spec, indent=1), note="Pinned from chat", kind="spec")
+    if payload.starter:
+        return store.create_spec_view(spec, note=f"Opened from the {spec['title']} widget", starter=payload.starter)
+    return store.create_spec_view(spec, note="Pinned from chat")
 
 
 def _declined(exc: builder.ViewDeclined) -> HTTPException:

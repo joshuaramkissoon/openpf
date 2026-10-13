@@ -11,7 +11,8 @@ import type { ViewMeta, ViewPreset } from '@/types/views'
 
 import { BUILTINS, SIZE_LABEL, SUGGESTION_MAP, headlineBlock, presetSpec, type BuiltinId } from './registry'
 import { BuiltinBody, type HomeCtx } from './widget-content'
-import { VizTile, loadViewSpec, oneBlock, useViewSpec } from './viz-widget'
+import { leadSpec } from './links'
+import { ViewCardTile, VizTile, loadViewSpec, useViewSpec } from './viz-widget'
 
 type Item = {
   key: string
@@ -26,7 +27,7 @@ type Item = {
 const newId = () => `w_${Math.random().toString(16).slice(2, 10)}`
 
 function isFromChat(v: ViewMeta) {
-  return v.versions.some((x) => x.note === 'Pinned from chat')
+  return v.versions.some((x) => x.note === 'Pinned from chat' || x.note === 'Added to Home from chat')
 }
 
 function useSmallScreen() {
@@ -69,11 +70,12 @@ function Inert({ children, className }: { children: ReactNode; className?: strin
   )
 }
 
-function ViewPreview({ id, size }: { id: string; size: HomeWidgetSize }) {
-  const { spec, loading } = useViewSpec(id)
+function ViewPreview({ view, size }: { view: ViewMeta; size: HomeWidgetSize }) {
+  const { spec, loading } = useViewSpec(view.kind === 'spec' ? view.id : null)
+  if (view.kind !== 'spec') return <ViewCardTile meta={view} size={size} live={false} />
   if (loading) return <div className="h-full w-full animate-pulse rounded-2xl bg-muted/40" />
-  if (!spec) return <p className="p-4 text-xs text-muted-foreground">Preview unavailable.</p>
-  return <VizTile spec={oneBlock(spec, headlineBlock(spec))} size={size} title={spec.title} live={false} />
+  if (!spec) return <ViewCardTile meta={view} size={size} live={false} />
+  return <VizTile spec={leadSpec(spec, headlineBlock(spec), size)} size={size} title={spec.title} live={false} />
 }
 
 /**
@@ -144,8 +146,9 @@ export function AddWidgetSheet({
       }
     }
 
+    // Every view can be a widget: chart views draw their lead blocks, code views a card that opens them.
     const viewItem = (v: ViewMeta): Item | null => {
-      if (v.kind !== 'spec' || !v.current_version || onHome.has(`view:${v.id}`)) return null
+      if (!v.current_version || onHome.has(`view:${v.id}`)) return null
       return {
         key: `view:${v.id}`,
         title: v.title,
@@ -153,15 +156,16 @@ export function AddWidgetSheet({
         sizes: ['S', 'M', 'L'],
         defaultSize: 'M',
         make: async (size) => {
-          const spec = await loadViewSpec(v.id)
+          const spec = v.kind === 'spec' ? await loadViewSpec(v.id) : null
           return { id: newId(), kind: 'view', ref: v.id, block: spec ? headlineBlock(spec) : 0, size }
         },
-        preview: (size) => <ViewPreview id={v.id} size={size} />,
+        preview: (size) => <ViewPreview view={v} size={size} />,
       }
     }
-    const specViews = (views ?? []).filter((v) => v.kind === 'spec')
-    const yours = specViews.filter((v) => !isFromChat(v)).map(viewItem).filter(Boolean) as Item[]
-    const chat = specViews.filter(isFromChat).map(viewItem).filter(Boolean) as Item[]
+    // Views made to back a Home widget (a preset's full page) aren't offered back as widgets.
+    const all = (views ?? []).filter((v) => !(v.starter ?? '').startsWith('widget:'))
+    const yours = all.filter((v) => !isFromChat(v)).map(viewItem).filter(Boolean) as Item[]
+    const chat = all.filter(isFromChat).map(viewItem).filter(Boolean) as Item[]
 
     const builtins = (Object.keys(BUILTINS) as BuiltinId[])
       .filter((id) => !onHome.has(`builtin:${id}`))

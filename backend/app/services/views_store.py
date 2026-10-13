@@ -282,6 +282,13 @@ def save_version(view_id: str, html: str, *, note: str = "", title: str | None =
         return public(meta)
 
 
+def create_spec_view(spec: dict[str, Any], *, note: str = "Pinned from chat", starter: str | None = None) -> dict[str, Any]:
+    """Save an already-validated viz spec as a new view (chat "Pin as view", "Add to
+    Home", and a Home widget's full page — ``starter`` names which, to find it again)."""
+    meta = create_view(title=spec["title"], description=spec.get("description", ""), icon=spec.get("icon") or DEFAULT_ICON, slug=prompt_slug(spec["title"]), starter=starter)
+    return save_version(meta["id"], json.dumps(spec, indent=1), note=note, kind="spec")
+
+
 def revert(view_id: str, version: int) -> dict[str, Any]:
     with _LOCK:
         meta = _read_meta(view_id)
