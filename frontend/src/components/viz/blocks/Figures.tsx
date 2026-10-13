@@ -22,8 +22,8 @@ export function Sparkline({ values, height = 44, signed = false }: { values: num
   const Y = (v: number) => height - 3 - ((v - lo) / (hi - lo || 1)) * (height - 8)
   const d = values.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')
   const up = values[values.length - 1] >= values[0]
-  // Direction colour only where up/down means good/bad; otherwise the neutral series hue.
-  const color = signed ? (up ? 'var(--viz-gain)' : 'var(--viz-loss)') : 'var(--viz-1)'
+  // Direction colour only where up/down means good/bad; otherwise the accent.
+  const color = signed ? (up ? 'var(--viz-gain)' : 'var(--viz-loss)') : 'var(--viz-accent)'
   return (
     <div ref={ref} className="w-full" aria-hidden>
       {width > 0 ? (
@@ -36,41 +36,39 @@ export function Sparkline({ values, height = 44, signed = false }: { values: num
           </defs>
           <path d={`${d} L${X(values.length - 1)},${height} L${X(0)},${height} Z`} fill={`url(#${gid})`} />
           <path d={d} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-          <circle cx={X(values.length - 1)} cy={Y(values[values.length - 1])} r={3.5} fill={color} stroke="var(--card)" strokeWidth={2} />
+          <circle cx={X(values.length - 1)} cy={Y(values[values.length - 1])} r={3.5} fill={color} stroke="var(--viz-surface)" strokeWidth={2} />
         </svg>
       ) : null}
     </div>
   )
 }
 
-/** The one number a page leads with. Proportional figures, same sans, ≥48px on pages. */
+/** The one number a page leads with — the answer. Label, figure, then what the figure means. */
 export function Hero({ block, value, delta, trend }: { block: HeroBlock; value: number | null; delta: number | null; trend?: number[] }) {
   const fmt = useFmt()
   const blur = useBlur()
   const env = useVizEnv()
   const small = env.size === 'S' || env.size === 'M'
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-end gap-x-4 gap-y-1">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-muted-foreground">{block.label}</p>
-          <p
-            className={cn(
-              'mt-1 font-semibold leading-none tracking-tight',
-              small ? 'text-[30px]' : 'text-5xl sm:text-[56px]',
-              tone(value, block.format),
-              blur(block.format),
-            )}
-          >
-            {fmt(value, block.format)}
-          </p>
+    <div className="flex flex-col">
+      <p className={cn('font-medium text-muted-foreground', small ? 'text-xs' : 'text-[13px]')}>{block.label}</p>
+      <p className={cn('mt-2 font-semibold', small ? 'text-[30px] leading-none tracking-tight' : 'viz-hero-value', tone(value, block.format), blur(block.format))}>
+        {fmt(value, block.format)}
+      </p>
+      {block.delta ? (
+        <p className={cn('leading-snug', small ? 'mt-1.5 truncate text-xs' : 'mt-4 text-[15px]')}>
+          <span className={cn('font-medium tabular-nums', tone(delta, block.deltaFormat) || 'text-foreground', blur(block.deltaFormat))}>{fmt(delta, block.deltaFormat)}</span>
+          {block.deltaLabel ? <span className="text-muted-foreground"> {block.deltaLabel}</span> : null}
+        </p>
+      ) : null}
+      {block.caption && env.size !== 'S' ? (
+        <p className={cn('max-w-[56ch] text-muted-foreground', small ? 'mt-1 line-clamp-2 text-xs' : 'mt-2 text-[13px] leading-relaxed')}>{block.caption}</p>
+      ) : null}
+      {trend && trend.length > 1 ? (
+        <div className={small ? 'mt-2' : 'mt-6'}>
+          <Sparkline values={trend} height={env.size === 'L' ? 150 : small ? 40 : 56} />
         </div>
-        {block.delta ? (
-          <p className={cn('font-medium tabular-nums', small ? 'text-sm' : 'pb-1.5 text-lg', tone(delta, block.deltaFormat), blur(block.deltaFormat))}>{fmt(delta, block.deltaFormat)}</p>
-        ) : null}
-      </div>
-      {block.caption && env.size !== 'S' ? <p className="text-sm text-muted-foreground">{block.caption}</p> : null}
-      {trend && trend.length > 1 ? <Sparkline values={trend} height={env.size === 'L' ? 150 : small ? 40 : 64} /> : null}
+      ) : null}
     </div>
   )
 }
@@ -83,75 +81,80 @@ export function Meter({ block, value, max, mark }: { block: MeterBlock; value: n
   const share = value != null && max ? Math.max(0, Math.min(1, value / max)) : 0
   const ahead = mark != null ? share >= mark : true
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-muted-foreground">{block.label}</p>
-          <p className={cn('mt-1 font-semibold leading-none tracking-tight', env.size ? 'text-[28px]' : 'text-4xl', blur(block.format))}>{fmt(value, block.format)}</p>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          of <span className={cn('font-medium text-foreground', blur(block.format))}>{fmt(max, block.format)}</span> · <span className="font-medium text-foreground tabular-nums">{fmt(share, 'pct')}</span>
+    <div className="flex flex-col">
+      <p className={cn('font-medium text-muted-foreground', env.size ? 'text-xs' : 'text-[13px]')}>{block.label}</p>
+      <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className={cn('font-semibold', env.size ? 'text-[28px] leading-none tracking-tight' : 'viz-hero-value', blur(block.format))}>{fmt(value, block.format)}</p>
+        <p className={cn('text-muted-foreground', env.size ? 'text-xs' : 'text-[15px]')}>
+          <span className="font-medium text-foreground tabular-nums">{fmt(share, 'pct')}</span> used of{' '}
+          <span className={cn('font-medium text-foreground', blur(block.format))}>{fmt(max, block.format)}</span>
         </p>
       </div>
       <div
-        className="relative h-2.5 overflow-visible rounded-full"
-        style={{ background: 'color-mix(in oklab, var(--viz-1) 16%, var(--viz-mid))' }}
+        className={cn('relative overflow-visible rounded-full', env.size ? 'mt-3 h-2' : 'mt-5 h-2.5')}
+        style={{ background: 'color-mix(in oklab, var(--viz-accent) 16%, var(--viz-mid))' }}
         role="meter"
         aria-valuemin={0}
         aria-valuemax={max ?? 0}
         aria-valuenow={value ?? 0}
         aria-label={block.label}
       >
-        <div className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500" style={{ width: `${share * 100}%`, background: 'var(--viz-1)' }} />
+        <div className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500" style={{ width: `${share * 100}%`, background: 'var(--viz-accent)' }} />
         {mark != null ? (
-          <div className="absolute -top-1 -bottom-1 w-0.5 rounded-full bg-foreground/60" style={{ left: `calc(${Math.max(0, Math.min(1, mark)) * 100}% - 1px)` }} title={block.markLabel} />
+          <div
+            className="absolute -top-1.5 -bottom-1.5 w-0.5 rounded-full bg-foreground/70"
+            style={{ left: `calc(${Math.max(0, Math.min(1, mark)) * 100}% - 1px)` }}
+            title={block.markLabel}
+          />
         ) : null}
       </div>
       {mark != null && block.markLabel && env.size !== 'S' ? (
-        <p className="text-xs text-muted-foreground">
-          <span className="mr-1 inline-block h-2.5 w-0.5 translate-y-0.5 rounded-full bg-foreground/60" />
+        <p className={cn('text-muted-foreground', env.size ? 'mt-2 text-xs' : 'mt-3 text-[13px]')}>
+          <span className="mr-1.5 inline-block h-3 w-0.5 translate-y-0.5 rounded-full bg-foreground/70" />
           {block.markLabel} ({fmt(mark, 'pct')}) — you’re {ahead ? 'ahead of' : 'behind'} an even pace.
         </p>
       ) : null}
-      {block.caption && env.size !== 'S' ? <p className="text-xs text-muted-foreground">{block.caption}</p> : null}
+      {block.caption && !env.size ? <p className="mt-1.5 max-w-[68ch] text-[13px] leading-relaxed text-muted-foreground">{block.caption}</p> : null}
     </div>
   )
 }
 
-export function Kpis({ block, values }: { block: KpisBlock; values: { value: number | null; delta: number | null }[] }) {
+/**
+ * Supporting figures. On a page they sit on the canvas separated by hairlines:
+ * side by side, or a stacked column when the block is narrow (the aside next
+ * to a hero). In a widget they share the widget's own card.
+ */
+export function Kpis({ block, values, stacked = false }: { block: KpisBlock; values: { value: number | null; delta: number | null }[]; stacked?: boolean }) {
   const fmt = useFmt()
   const blur = useBlur()
   const env = useVizEnv()
   const cap = env.size === 'S' ? 1 : env.size === 'M' ? 2 : env.size === 'L' ? 4 : 5
   const items = block.items.slice(0, cap)
-  const cols = env.size
-    ? items.length >= 2
-      ? 'grid-cols-2'
-      : 'grid-cols-1'
-    : items.length >= 4
-      ? 'sm:grid-cols-2 lg:grid-cols-4'
-      : items.length === 3
-        ? 'sm:grid-cols-3'
-        : 'sm:grid-cols-2'
-  return (
-    <div className={cn('grid gap-px overflow-hidden rounded-xl border border-border bg-border', env.size ? '' : 'grid-cols-2', cols)}>
-      {items.map((it, i) => {
-        const v = values[i] ?? { value: null, delta: null }
-        return (
-          <div key={it.label} className="min-w-0 bg-card px-4 py-3.5">
-            <p className="truncate text-xs text-muted-foreground">{it.label}</p>
-            <p className={cn('mt-1 truncate font-semibold tracking-tight', items.length >= 4 && !env.size ? 'text-xl' : 'text-2xl', tone(v.value, it.format), blur(it.format))}>
-              {fmt(v.value, it.format)}
-            </p>
-            {it.delta || it.hint ? (
-              <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                {it.delta ? <span className={cn('mr-1.5 font-medium tabular-nums', tone(v.delta, it.deltaFormat), blur(it.deltaFormat))}>{fmt(v.delta, it.deltaFormat)}</span> : null}
-                {it.hint}
-              </p>
+  const item = (it: (typeof items)[number], i: number, cls: string) => {
+    const v = values[i] ?? { value: null, delta: null }
+    return (
+      <div key={it.label} className={cn('min-w-0', cls)}>
+        <p className={cn('truncate text-muted-foreground', env.size ? 'text-xs' : 'text-[13px]')}>{it.label}</p>
+        <p className={cn('mt-1.5 truncate', env.size ? 'text-2xl font-semibold tracking-tight' : 'viz-kpi-value', tone(v.value, it.format), blur(it.format))}>
+          {fmt(v.value, it.format)}
+        </p>
+        {it.delta || it.hint ? (
+          <p className={cn('mt-1 line-clamp-2 text-muted-foreground', env.size ? 'text-[11px]' : 'text-xs leading-snug')}>
+            {it.delta ? (
+              <span className={cn('mr-1 font-medium tabular-nums', tone(v.delta, it.deltaFormat) || 'text-foreground', blur(it.deltaFormat))}>{fmt(v.delta, it.deltaFormat)}</span>
             ) : null}
-          </div>
-        )
-      })}
-    </div>
-  )
+            {it.hint}
+          </p>
+        ) : null}
+      </div>
+    )
+  }
+  if (env.size) {
+    return <div className={cn('grid gap-x-4 gap-y-3', items.length >= 2 ? 'grid-cols-2' : 'grid-cols-1')}>{items.map((it, i) => item(it, i, ''))}</div>
+  }
+  if (stacked) {
+    return <div className="flex flex-col divide-y divide-border/70">{items.map((it, i) => item(it, i, 'py-4 first:pt-0 last:pb-0'))}</div>
+  }
+  const cols = items.length >= 4 ? 'sm:grid-cols-4' : items.length === 3 ? 'sm:grid-cols-3' : items.length === 2 ? 'sm:grid-cols-2' : ''
+  return <div className={cn('grid grid-cols-2 gap-y-6', cols)}>{items.map((it, i) => item(it, i, cn('pr-4', i > 0 && 'sm:border-l sm:border-border/70 sm:pl-6')))}</div>
 }

@@ -304,7 +304,9 @@ export function measureOn(rows: Row[], m: Measure): number | null {
 
 export async function resolveMeasure(spec: VizSpec, m: Measure, blockFrom: string | undefined, blockSteps: Step[] | undefined, ctx: EngineCtx): Promise<number | null> {
   const rows = await resolveRows(spec, m.from ?? blockFrom, m.from ? m.transform : (m.transform ?? blockSteps), ctx)
-  if (m.per && m.per.from) {
+  // The denominator reads its own rows: its `from`, or the block's rows when the
+  // numerator filtered its own (Σ filtered ÷ Σ the same filtered rows is always 1).
+  if (m.per && (m.per.from || m.transform)) {
     const top = measureOn(rows, { ...m, per: undefined })
     const d = await resolveMeasure(spec, m.per, blockFrom, blockSteps, ctx)
     return top != null && d ? top / d : null
@@ -336,8 +338,10 @@ export function formatValue(v: unknown, format: VizFormat | undefined, opts: { c
         style: 'currency',
         currency: opts.currency,
         notation: compact && abs >= 1000 ? 'compact' : 'standard',
-        minimumFractionDigits: compact ? 0 : abs >= 10_000 ? 0 : 2,
-        maximumFractionDigits: compact ? 1 : abs >= 10_000 ? 0 : 2,
+        // Whole pounds from £100 up (pennies are noise on a headline amount);
+        // pennies only where they matter — small sums like a £3.88 dividend.
+        minimumFractionDigits: compact ? 0 : abs >= 100 ? 0 : 2,
+        maximumFractionDigits: compact ? 1 : abs >= 100 ? 0 : 2,
       }).format(abs)
     } catch {
       body = abs.toFixed(2)
@@ -346,7 +350,9 @@ export function formatValue(v: unknown, format: VizFormat | undefined, opts: { c
     return sign + body
   }
   if (format === 'pct' || format === 'signedPct') {
-    const d = Math.abs(n) < 0.1 ? 2 : 1
+    // 0.17% · 6.6% · 172%: two decimals only under 1%, none from 100%.
+    const a = Math.round(Math.abs(n) * 1e6) / 1e6
+    const d = a < 0.01 ? 2 : a >= 1 ? 0 : 1
     const sign = n < 0 ? '−' : format === 'signedPct' && n > 0 ? '+' : ''
     return `${sign}${Math.abs(n * 100).toFixed(d)}%`
   }

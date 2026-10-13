@@ -68,7 +68,7 @@ export function validateVizSpec(input: unknown): ValidateResult {
     if (b.type === 'table' && (!Array.isArray(b.columns) || !b.columns.length)) return { ok: false, error: `Block ${i + 1} (table) has no columns.` }
     if (b.type === 'note' && typeof b.text !== 'string') return { ok: false, error: `Block ${i + 1} (note) has no text.` }
   }
-  return { ok: true, spec: { ...(raw as unknown as VizSpec), version: 1, data: data as VizSpec['data'], blocks: dropDuplicateTables((raw.blocks as Block[]).map(withDefaults)) } }
+  return { ok: true, spec: { ...(raw as unknown as VizSpec), version: 1, data: data as VizSpec['data'], blocks: tidyBlocks((raw.blocks as Block[]).map(withDefaults)) } }
 }
 
 const groupKey = (b: Block) => {
@@ -106,4 +106,51 @@ export function dropDuplicateTables(blocks: Block[]): Block[] {
     out.push(b)
   }
   return out
+}
+
+/**
+ * A hero's sparkline is dropped when the page already charts the same series
+ * (same rows and field): one series, drawn once.
+ */
+export function dropDuplicateTrends(blocks: Block[]): Block[] {
+  const charted = new Set(blocks.flatMap((b) => (b.type === 'timeseries' ? b.series.map((s) => `${b.from}|${s.field}`) : [])))
+  return blocks.map((b) => (b.type === 'hero' && b.trend && charted.has(`${b.trend.from}|${b.trend.field}`) ? { ...b, trend: undefined } : b))
+}
+
+/** Client mirror of the backend tidy pass. */
+export function tidyBlocks(blocks: Block[]): Block[] {
+  return dropDuplicateTrends(dropDuplicateTables(blocks))
+}
+
+export type Cell = { block: Block; index: number; span: number }
+const SPAN: Record<NonNullable<Block['width']>, number> = { full: 12, 'two-thirds': 8, half: 6, third: 4 }
+
+/**
+ * Pack blocks into 12-column rows so every row is full: a row that comes up
+ * short (a half followed by a full) widens its blocks instead of leaving a
+ * void — equal blocks share the row, otherwise the last one takes the rest.
+ */
+export function packRows(blocks: Block[]): Cell[][] {
+  const rows: Cell[][] = []
+  let cur: Cell[] = []
+  let used = 0
+  const close = () => {
+    if (!cur.length) return
+    const rest = 12 - used
+    if (rest > 0) {
+      if (cur.every((c) => c.span === cur[0].span) && 12 % cur.length === 0) cur = cur.map((c) => ({ ...c, span: 12 / cur.length }))
+      else cur[cur.length - 1] = { ...cur[cur.length - 1], span: cur[cur.length - 1].span + rest }
+    }
+    rows.push(cur)
+    cur = []
+    used = 0
+  }
+  blocks.forEach((block, index) => {
+    const span = SPAN[block.width ?? 'full'] ?? 12
+    if (used + span > 12) close()
+    cur.push({ block, index, span })
+    used += span
+  })
+  close()
+  return rows
 }

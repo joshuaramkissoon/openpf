@@ -74,7 +74,7 @@ function tableBase(block: Block, rows: Row[]): { columns: TableColumn[]; rows: R
         columns: [
           { field: block.label, label: 'Name', format: 'text' },
           { field: block.value, label: 'Value', format: block.format ?? 'money' },
-          { field: '__share', label: 'Share', format: 'pct' },
+          { field: '__share', label: '% of total', format: 'pct' },
         ],
         rows: rows.map((r) => ({ ...r, __share: total ? (num(r[block.value]) ?? 0) / total : null })),
       }
@@ -83,8 +83,8 @@ function tableBase(block: Block, rows: Row[]): { columns: TableColumn[]; rows: R
       return {
         columns: [
           { field: block.label, label: 'Name', format: 'text' },
-          { field: block.value, label: fieldLabel(block.value), format: block.format ?? 'money' },
-          ...(block.secondary && block.secondary !== block.value ? [{ field: block.secondary, label: fieldLabel(block.secondary), format: block.secondaryFormat ?? 'signedPct' }] : []),
+          { field: block.value, label: block.valueLabel || fieldLabel(block.value), format: block.format ?? 'money' },
+          ...(block.secondary && block.secondary !== block.value ? [{ field: block.secondary, label: block.secondaryLabel || fieldLabel(block.secondary), format: block.secondaryFormat ?? 'signedPct' }] : []),
         ],
         rows,
       }
@@ -97,7 +97,12 @@ function tableBase(block: Block, rows: Row[]): { columns: TableColumn[]; rows: R
   }
 }
 
-export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; block: Block; ctx: EngineCtx; chrome?: boolean }) {
+/**
+ * One block: header (title, subtitle, table toggle) over its body. Blocks sit
+ * on the surface they're given — no card of their own — so a page reads as one
+ * composition. `span` is the block's width in 12ths (figures re-flow by it).
+ */
+export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec: VizSpec; block: Block; ctx: EngineCtx; chrome?: boolean; span?: number }) {
   const env = useVizEnv()
   const [data, setData] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -164,7 +169,7 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
         body = <Meter block={block} value={data.measures[0]?.value ?? null} max={data.measures[0]?.delta ?? null} mark={data.measures[1]?.value ?? null} />
         break
       case 'kpis':
-        body = <Kpis block={block} values={data.measures} />
+        body = <Kpis block={block} values={data.measures} stacked={!env.size && span <= 5} />
         break
       case 'treemap':
         body = <Treemap block={block} rows={data.rows} />
@@ -195,24 +200,17 @@ export function BlockView({ spec, block, ctx, chrome = true }: { spec: VizSpec; 
         )
         break
       case 'note':
-        body = <p className="text-sm leading-relaxed text-muted-foreground">{block.text}</p>
+        body = <p className="max-w-[68ch] text-[13px] leading-relaxed text-muted-foreground">{block.text}</p>
         break
     }
   }
 
   const bare = block.type === 'hero' || block.type === 'kpis' || block.type === 'note' || block.type === 'meter'
   const inner = <div className={cn('transition-opacity duration-200', loading && data && 'opacity-50')}>{body}</div>
-  if (bare || !chrome) {
-    return (
-      <div className="viz-in">
-        {!bare && (block.title || block.subtitle) ? <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} /> : null}
-        {inner}
-      </div>
-    )
-  }
+  const header = !bare && (chrome || block.title || block.subtitle) ? <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} /> : null
   return (
-    <section className="group/block viz-in min-w-0 rounded-xl border border-border bg-card p-5">
-      <BlockHeader block={shown} table={!!table} asTable={asTable} onToggle={() => setAsTable((v) => !v)} />
+    <section className="group/block viz-in min-w-0">
+      {header}
       {inner}
     </section>
   )
@@ -222,35 +220,35 @@ function BlockHeader({ block, table, asTable, onToggle }: { block: Block; table:
   const env = useVizEnv()
   if (!block.title && !block.subtitle && !table) return null
   return (
-    <div className="mb-4 flex items-start justify-between gap-3">
+    <header className={cn('flex items-start justify-between gap-3', env.compact ? 'mb-3' : 'mb-5')}>
       <div className="min-w-0">
-        {block.title ? <h3 className="text-sm font-semibold tracking-tight">{block.title}</h3> : null}
-        {block.subtitle ? <p className="mt-0.5 text-xs text-muted-foreground">{block.subtitle}</p> : null}
+        {block.title ? <h3 className="text-[15px] font-semibold leading-snug tracking-[-0.01em]">{block.title}</h3> : null}
+        {block.subtitle ? <p className="mt-1 max-w-[62ch] text-[13px] leading-snug text-muted-foreground">{block.subtitle}</p> : null}
       </div>
-      <div className="flex shrink-0 items-center gap-0.5">
-      {env.onEditBlock ? (
-        <button
-          type="button"
-          onClick={() => env.onEditBlock?.(block)}
-          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/block:opacity-100 [@media(hover:none)]:hidden"
-          title="Change this chart"
-        >
-          <Sparkles className="size-3.5 text-primary" /> Change
-        </button>
-      ) : null}
-      {table ? (
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title={asTable ? 'Show chart' : 'Show as table'}
-          aria-label={asTable ? 'Show chart' : 'Show as table'}
-          aria-pressed={asTable}
-        >
-          {asTable ? <ChartNoAxesColumn className="size-4" /> : <Table2 className="size-4" />}
-        </button>
-      ) : null}
+      <div className="-mt-1 flex shrink-0 items-center gap-0.5">
+        {env.onEditBlock ? (
+          <button
+            type="button"
+            onClick={() => env.onEditBlock?.(block)}
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/block:opacity-100 [@media(hover:none)]:hidden"
+            title="Change this chart"
+          >
+            <Sparkles className="size-3.5 text-primary" /> Change
+          </button>
+        ) : null}
+        {table ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+            title={asTable ? 'Show chart' : 'Show as table'}
+            aria-label={asTable ? 'Show chart' : 'Show as table'}
+            aria-pressed={asTable}
+          >
+            {asTable ? <ChartNoAxesColumn className="size-4" /> : <Table2 className="size-4" />}
+          </button>
+        ) : null}
       </div>
-    </div>
+    </header>
   )
 }

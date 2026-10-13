@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 
 import { cn } from '@/lib/utils'
 import { num } from '../engine'
-import { Breadcrumb, EmptyNote, fieldLabel, isSigned, prettyLabel, shortLabel, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
+import { ACCENT, Breadcrumb, EmptyNote, fieldLabel, isSigned, NEUTRAL, prettyLabel, shortLabel, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
 import type { BarsBlock, Detail, Row } from '../types'
 import { DrillList } from './DrillList'
 
@@ -63,7 +63,16 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   }, [width, labelKey, env.size]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!data.length || data.every((r) => num(r[block.value]) === 0)) return <EmptyNote>{block.empty ?? 'Nothing to show yet.'}</EmptyNote>
   const signed = isSigned(data, block.value)
-  const colorOf = (v: number) => (signed ? (v >= 0 ? 'var(--viz-gain)' : 'var(--viz-loss)') : 'var(--viz-1)')
+  // Emphasis, not decoration: one accent for the bar(s) the chart is about,
+  // neutral for the rest. Signed bars keep gain/loss — the sign is the point.
+  const vals = data.map((r) => num(r[block.value]) ?? 0)
+  const highlight = block.highlight ?? (block.orientation === 'vertical' ? 'all' : 'max')
+  const pick =
+    highlight === 'max' ? vals.indexOf(Math.max(...vals)) : highlight === 'min' ? vals.indexOf(Math.min(...vals)) : highlight === 'first' ? 0 : highlight === 'last' ? vals.length - 1 : -1
+  const emphasised = (i: number) => highlight === 'all' || i === pick
+  const colorOf = (v: number, i = -1) => (signed ? (v >= 0 ? 'var(--viz-gain)' : 'var(--viz-loss)') : emphasised(i) ? ACCENT : NEUTRAL)
+  const valueHead = block.valueLabel || fieldLabel(block.value)
+  const secondaryHead = block.secondary ? block.secondaryLabel || fieldLabel(block.secondary) : null
   const labelOf = (r: Row) => prettyLabel(r[block.label])
   const shownLabel = (r: Row) => (labelCol.short ? shortLabel(labelOf(r)) : labelOf(r))
   const click = (r: Row) => {
@@ -73,8 +82,8 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const tipFor = (r: Row) => ({
     title: String(r.name && r.name !== r[block.label] ? `${labelOf(r)} · ${r.name}` : labelOf(r)),
     rows: [
-      { label: fieldLabel(block.value), value: fmt(r[block.value], block.format), color: colorOf(num(r[block.value]) ?? 0), money: block.format?.toLowerCase().includes('money') },
-      ...(block.secondary && block.secondary !== block.value ? [{ label: fieldLabel(block.secondary), value: fmt(r[block.secondary], block.secondaryFormat), money: !!block.secondaryFormat?.toLowerCase().includes('money') }] : []),
+      { label: valueHead, value: fmt(r[block.value], block.format), color: colorOf(num(r[block.value]) ?? 0, data.indexOf(r)), money: block.format?.toLowerCase().includes('money') },
+      ...(block.secondary && block.secondary !== block.value ? [{ label: secondaryHead ?? '', value: fmt(r[block.secondary], block.secondaryFormat), money: !!block.secondaryFormat?.toLowerCase().includes('money') }] : []),
       ...detailRows(block.details, r, fmt),
     ],
     note: Array.isArray(r.items) ? 'Click to see holdings' : undefined,
@@ -95,7 +104,8 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
     const y0 = ticks[0]
     const y1 = ticks[ticks.length - 1]
     const h = env.compact ? 200 : 240
-    const m = { t: 8, r: 4, b: 26, l: 48 }
+    const m = { t: 20, r: 4, b: 26, l: 48 }
+    const peak = values.reduce((best, v, i) => (Math.abs(v) > Math.abs(values[best]) ? i : best), 0)
     const iw = Math.max(0, width - m.l - m.r)
     const ih = h - m.t - m.b
     const Y = (v: number) => m.t + ih - ((v - y0) / (y1 - y0)) * ih
@@ -127,7 +137,13 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
                 return (
                   <g key={i}>
                     <rect x={m.l + band * i} y={m.t} width={band} height={ih} fill="transparent" onPointerMove={(e) => show(e, tipFor(r))} onPointerLeave={hide} onClick={() => click(r)} />
-                    <path d={path} fill={v === 0 ? 'var(--viz-mid)' : colorOf(v)} pointerEvents="none" />
+                    <path d={path} fill={v === 0 ? 'var(--viz-mid)' : colorOf(v, i)} pointerEvents="none" />
+                    {/* Selective direct label: the peak (and the latest bar), never every cap. */}
+                    {v !== 0 && (i === peak || i === data.length - 1) ? (
+                      <text x={x + bw / 2} y={v >= 0 ? top - 6 : top + bh + 13} textAnchor="middle" className={cn('viz-axis-text', blur(block.format))} style={{ fill: 'var(--foreground)', fontWeight: 500 }}>
+                        {fmt(v, block.format)}
+                      </text>
+                    ) : null}
                     {i % every === 0 ? (
                       <text x={x + bw / 2} y={h - 8} textAnchor="middle" className="viz-axis-text">
                         {labelOf(r)}
@@ -188,7 +204,7 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
                 </span>
                 <span
                   className={cn('absolute inset-y-2', pos ? 'rounded-r-[4px]' : 'rounded-l-[4px]')}
-                  style={{ left: pos ? zeroX : zeroX - w, width: w, background: v === 0 ? 'var(--viz-mid)' : colorOf(v) }}
+                  style={{ left: pos ? zeroX : zeroX - w, width: w, background: v === 0 ? "var(--viz-mid)" : colorOf(v, i) }}
                 />
                 <span
                   className="absolute top-1/2 flex -translate-y-1/2 items-baseline gap-1.5 whitespace-nowrap"
@@ -205,13 +221,28 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
       </div>
     )
   }
+  // Fixed value columns (sized to content type) so every bar track, the zero
+  // line and the column headers line up; headers say what each number is.
+  const sec = !!block.secondary && env.size !== 'S'
+  const cols = `${labelCol.px}px minmax(0,1fr) ${env.size === 'S' ? '4.5rem' : '5.75rem'}${sec ? ' 6.25rem' : ''}`
+  const heads = !env.size && (sec || !!block.valueLabel)
   return (
     <div ref={hostRef} className="relative">
-      <div ref={ref} className="space-y-1">
+      <div ref={ref} className="space-y-0.5">
+        {heads ? (
+          <div className="grid items-end gap-3 px-1 pb-1.5" style={{ gridTemplateColumns: cols }} aria-hidden>
+            <span />
+            <span />
+            <span className="viz-colhead text-right">{valueHead}</span>
+            {sec ? <span className="viz-colhead text-right">{secondaryHead}</span> : null}
+          </div>
+        ) : null}
         {data.map((r, i) => {
           const v = values[i]
           const pct = (Math.abs(v) / (signed ? posMax + negMax || 1 : maxAbs)) * 100
           const drillable = Array.isArray(r.items) || (typeof r.ticker === 'string' && !r.__other)
+          const sv = block.secondary ? num(r[block.secondary]) : null
+          const signedSec = block.secondaryFormat === 'signedPct' || block.secondaryFormat === 'signedMoney' || !block.secondaryFormat
           return (
             <button
               key={`${labelOf(r)}-${i}`}
@@ -220,33 +251,31 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
               onClick={() => click(r)}
               onPointerMove={(e) => show(e, tipFor(r))}
               onPointerLeave={hide}
-              className={cn('grid w-full items-center gap-3 rounded-md px-1 py-1 text-left text-sm', drillable && 'hover:bg-muted/50')}
-              // One label width for every row (sized to content) and a fixed value
-              // column, so each bar track and the zero line line up.
-              style={{ gridTemplateColumns: `${labelCol.px}px minmax(0,1fr) ${env.size === 'S' ? '4.5rem' : block.secondary ? '9.5rem' : '6rem'}` }}
+              className={cn('grid w-full items-center gap-3 rounded-md px-1 py-1.5 text-left text-sm', drillable && 'hover:bg-muted/50')}
+              style={{ gridTemplateColumns: cols }}
             >
               <span className="line-clamp-2 min-w-0 break-words font-medium leading-tight" title={labelOf(r)}>
                 {shownLabel(r)}
               </span>
-              <span className={cn('relative h-4', env.size === 'S' && 'invisible')}>
-                {signed ? <span className="absolute inset-y-[-3px] w-px bg-[var(--viz-axis)]" style={{ left: `${negShare * 100}%` }} /> : null}
+              <span className={cn('relative h-3.5', env.size === 'S' && 'invisible')}>
+                {signed ? <span className="absolute inset-y-[-4px] w-px bg-[var(--viz-axis)]" style={{ left: `${negShare * 100}%` }} /> : null}
                 <span
                   className={cn('absolute inset-y-0', v >= 0 ? 'rounded-r-[4px]' : 'rounded-l-[4px]')}
                   style={
                     signed
                       ? v >= 0
-                        ? { left: `${negShare * 100}%`, width: `${pct}%`, background: colorOf(v) }
-                        : { right: `${(1 - negShare) * 100}%`, width: `${pct}%`, background: colorOf(v) }
-                      : { left: 0, width: `${pct}%`, background: colorOf(v) }
+                        ? { left: `${negShare * 100}%`, width: `${pct}%`, background: colorOf(v, i) }
+                        : { right: `${(1 - negShare) * 100}%`, width: `${pct}%`, background: colorOf(v, i) }
+                      : { left: 0, width: `${pct}%`, background: colorOf(v, i) }
                   }
                 />
               </span>
-              <span className="flex items-baseline justify-end gap-2 text-right">
-                <span className={cn('tabular-nums', blur(block.format))}>{fmt(v, block.format)}</span>
-                {block.secondary && env.size !== 'S' ? (
-                  <span className={cn('w-14 text-xs tabular-nums', block.secondaryFormat === 'signedPct' || block.secondaryFormat === 'signedMoney' || !block.secondaryFormat ? ((num(r[block.secondary]) ?? 0) >= 0 ? 'text-positive' : 'text-negative') : 'text-muted-foreground')}>{fmt(r[block.secondary], block.secondaryFormat)}</span>
-                ) : null}
-              </span>
+              <span className={cn('text-right tabular-nums', emphasised(i) || signed ? 'text-foreground' : 'text-foreground/80', blur(block.format))}>{fmt(v, block.format)}</span>
+              {sec ? (
+                <span className={cn('text-right text-xs tabular-nums', signedSec && sv ? (sv > 0 ? 'text-positive' : 'text-negative') : 'text-muted-foreground')}>
+                  {fmt(r[block.secondary!], block.secondaryFormat)}
+                </span>
+              ) : null}
             </button>
           )
         })}
