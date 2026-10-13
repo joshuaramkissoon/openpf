@@ -10,8 +10,9 @@ import { refreshViews, useViews } from './views-store'
 export function ViewsNav({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
   const { views } = useViews()
   const route = useRoute()
-  const pinned = views.filter((v) => v.pinned)
-  const building = views.some((v) => v.current_version === 0)
+  // Failed builds live on the Views page (with Retry), not in the sidebar.
+  const pinned = views.filter((v) => v.pinned && (v.current_version > 0 || v.build?.status !== 'error'))
+  const building = views.some((v) => v.current_version === 0 && v.build?.status !== 'error')
 
   // A view mid-build has no title yet — poll quickly until it lands. Archie can
   // also queue views from chat at any time, so check back periodically too.
@@ -21,6 +22,13 @@ export function ViewsNav({ collapsed, onNavigate }: { collapsed?: boolean; onNav
     }, building ? 3000 : 15000)
     return () => window.clearInterval(t)
   }, [building])
+
+  // "Pin as view" from a chat chart.
+  useEffect(() => {
+    const onChange = () => void refreshViews()
+    window.addEventListener('openpf:views-changed', onChange)
+    return () => window.removeEventListener('openpf:views-changed', onChange)
+  }, [])
 
   const go = (path: string) => {
     navigate(path)
@@ -48,7 +56,7 @@ export function ViewsNav({ collapsed, onNavigate }: { collapsed?: boolean; onNav
         label="New view"
         active={route.path === '/views/new' || route.path === '/views'}
         collapsed={collapsed}
-        onClick={() => go(pinned.length ? '/views/new' : '/views')}
+        onClick={() => go('/views')}
       />
     </div>
   )

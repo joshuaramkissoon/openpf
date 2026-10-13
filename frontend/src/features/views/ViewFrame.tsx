@@ -45,6 +45,10 @@ const MAX_PARAMS_BYTES = 4096
 
 export type ViewRuntimeError = { message: string; stack?: string }
 
+function readThemeMode(): 'light' | 'dark' {
+  return document.documentElement.classList.contains('light') ? 'light' : 'dark'
+}
+
 function readThemeVars(): Record<string, string> {
   const cs = getComputedStyle(document.documentElement)
   const out: Record<string, string> = {}
@@ -104,6 +108,8 @@ export function ViewFrame({
   currency,
   privacy,
   onFix,
+  onHealthy,
+  onBroken,
   className,
 }: {
   viewId: string
@@ -113,6 +119,10 @@ export function ViewFrame({
   currency: 'GBP' | 'USD'
   privacy: PrivacyMode
   onFix?: (error: ViewRuntimeError) => void
+  /** Called once per document when it rendered and stayed error-free for a moment. */
+  onHealthy?: (version: number) => void
+  /** Called when the document errors or tries to leave its frame. */
+  onBroken?: (kind: 'error' | 'escaped') => void
   className?: string
 }) {
   const actions = useAppActions()
@@ -123,8 +133,9 @@ export function ViewFrame({
   const [reloadKey, setReloadKey] = useState(0)
   const [escaped, setEscaped] = useState(false)
   // Latest values for the message handler without re-binding it.
-  const live = useRef({ actions, onFix, viewId })
-  live.current = { actions, onFix, viewId }
+  const live = useRef({ actions, onFix, viewId, onBroken })
+  live.current = { actions, onFix, viewId, onBroken }
+  const [errored, setErrored] = useState(false)
   // State is captured once per render of the document; later writes go to the server.
   const stateRef = useRef(state)
   const currencyRef = useRef(currency)
@@ -140,14 +151,24 @@ export function ViewFrame({
 
   const srcDoc = useMemo(() => {
     if (fontCss == null) return null
-    return buildSrcDoc({ html, fontCss, init: { viewId, version, currency, privacy, state: stateRef.current, theme: readThemeVars() } })
+    return buildSrcDoc({ html, fontCss, init: { viewId, version, currency, privacy, state: stateRef.current, theme: readThemeVars(), mode: readThemeMode() } })
     // reloadKey forces a fresh document on "Reload".
   }, [html, fontCss, viewId, version, currency, privacy, reloadKey])
 
   useEffect(() => {
     setSized(false)
     setEscaped(false)
+    setErrored(false)
   }, [srcDoc])
+
+  // Healthy = sized, no error, still in its document after a short settle.
+  const healthyRef = useRef(onHealthy)
+  healthyRef.current = onHealthy
+  useEffect(() => {
+    if (!sized || errored || escaped) return
+    const t = window.setTimeout(() => healthyRef.current?.(version), 2500)
+    return () => window.clearTimeout(t)
+  }, [sized, errored, escaped, version])
 
   // Bridge.
   useEffect(() => {
@@ -227,6 +248,8 @@ export function ViewFrame({
           return
         case 'error':
           setSized(true)
+          setErrored(true)
+          live.current.onBroken?.('error')
           return
         default:
           return
@@ -239,7 +262,7 @@ export function ViewFrame({
   // Live theme sync (the app may toggle classes on <html>).
   useEffect(() => {
     const obs = new MutationObserver(() => {
-      iframeRef.current?.contentWindow?.postMessage({ __openpf: 1, event: 'theme', vars: readThemeVars() }, '*')
+      iframeRef.current?.contentWindow?.postMessage({ __openpf: 1, event: 'theme', vars: readThemeVars(), mode: readThemeMode() }, '*')
     })
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
     return () => obs.disconnect()
@@ -253,16 +276,15 @@ export function ViewFrame({
   }, [srcDoc])
   const onLoad = () => {
     loads.current += 1
-    if (loads.current > 1) setEscaped(true)
+    if (loads.current > 1 && !escaped) {
+      setEscaped(true)
+      live.current.onBroken?.('escaped')
+    }
   }
 
   if (escaped) {
-    return (
-      <div className="rounded-xl border border-negative/30 bg-negative/5 p-5 text-sm">
-        <p className="font-medium">This view tried to leave its sandbox and was stopped.</p>
-        <p className="mt-1 text-muted-foreground">Revert to an earlier version or ask Archie to rebuild it.</p>
-      </div>
-    )
+    // The parent page renders the recovery actions (reload / restore last good version).
+    return null
   }
 
   return (

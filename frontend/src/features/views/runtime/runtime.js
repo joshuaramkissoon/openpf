@@ -45,7 +45,7 @@
     var msg = event.data
     if (!msg || msg.__openpf !== 1) return
     if (msg.event === 'theme' && msg.vars) {
-      applyTheme(msg.vars)
+      applyTheme(msg.vars, msg.mode)
       return
     }
     var p = pending[msg.id]
@@ -56,13 +56,45 @@
     else p.reject(new Error(msg.error || 'request failed'))
   })
 
-  function applyTheme(vars) {
+  function applyTheme(vars, mode) {
     var root = document.documentElement
     for (var k in vars) {
       if (Object.prototype.hasOwnProperty.call(vars, k) && /^--[a-z0-9-]+$/.test(k)) root.style.setProperty(k, vars[k])
     }
+    if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode)
   }
-  if (INIT.theme) applyTheme(INIT.theme)
+  if (INIT.theme) applyTheme(INIT.theme, INIT.mode)
+
+  // ── navigation lockdown ─────────────────────────────────────────────────
+  // The sandbox already forbids popups, forms and top navigation, but a frame
+  // may still navigate *itself*. Swallow the common ways a view could leave its
+  // document (links, form submits, window.open, injected meta-refresh/base/
+  // frames). The parent's frame-src policy and load counter are the backstop.
+  document.addEventListener(
+    'click',
+    function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[href]') : null
+      if (a && (a.getAttribute('href') || '').charAt(0) !== '#') e.preventDefault()
+    },
+    true,
+  )
+  document.addEventListener('submit', function (e) { e.preventDefault() }, true)
+  try {
+    window.open = function () { return null }
+    HTMLFormElement.prototype.submit = function () {}
+    HTMLFormElement.prototype.requestSubmit = function () {}
+  } catch (_) {
+    /* non-writable in this engine — sandbox still blocks it */
+  }
+  new MutationObserver(function (records) {
+    records.forEach(function (r) {
+      r.addedNodes.forEach(function (n) {
+        if (n.nodeType !== 1) return
+        var bad = /^(META|BASE|IFRAME|FRAME|OBJECT|EMBED|FORM|PORTAL)$/.test(n.tagName) ? [n] : n.querySelectorAll ? n.querySelectorAll('meta,base,iframe,frame,object,embed,form,portal') : []
+        for (var i = 0; i < bad.length; i++) if (bad[i].parentNode) bad[i].parentNode.removeChild(bad[i])
+      })
+    })
+  }).observe(document.documentElement, { subtree: true, childList: true })
 
   // ── formatting ──────────────────────────────────────────────────────────
   var currency = INIT.currency === 'USD' ? 'USD' : 'GBP'
