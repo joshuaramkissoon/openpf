@@ -218,9 +218,9 @@ def detect(rows: list[dict[str, Any]], ctx: Context) -> list[dict[str, Any]]:
     recent = [r for r in rows if r.get("side") == "buy" and (_in_window(r, today, 90) or (r["source"] == "13f" and _in_window(r, today, 200)))]
     for tk, grp in _by_ticker(recent).items():
         groups = {r["actor_type"] for r in grp}
-        if len(groups) < 2:
-            continue
         actors = len({_actor_key(r) for r in grp})
+        if len(groups) < 2 or actors < 3:
+            continue
         names = {"insider": "insiders", "fund": "funds", "congress": "Congress"}
         caveats = []
         if "fund" in groups:
@@ -229,7 +229,7 @@ def detect(rows: list[dict[str, Any]], ctx: Context) -> list[dict[str, Any]]:
             caveats.append(CAVEAT_CONGRESS)
         out.append(_detection(
             "cross_group_buying", ctx=ctx, ticker=tk, window=90, actors=actors, rows=grp, caveats=caveats or [CAVEAT_FORM4],
-            score=min(80, (45 if len(groups) == 2 else 65) + 3 * max(0, actors - len(groups))),
+            score=min(80, (45 if len(groups) == 2 else 65) + 3 * max(0, actors - 3)),
             title=f"{tk}: {' + '.join(names[g] for g in sorted(groups))} buying",
             detail=f"{actors} separate buyers across {len(groups)} disclosure types in the last 90 days.",
         ))
@@ -278,11 +278,11 @@ def detect(rows: list[dict[str, Any]], ctx: Context) -> list[dict[str, Any]]:
         buys = [r for r in grp if r.get("side") == "buy"]
         sells = [r for r in grp if r.get("side") == "sell"]
         bits = []
-        for src, label in (("form4", "insider"), ("13f", "fund"), ("congress", "Congress")):
-            b = sum(1 for r in buys if r["source"] == src)
-            s = sum(1 for r in sells if r["source"] == src)
+        for src, label in (("form4", "insiders"), ("13f", "funds"), ("congress", "Congress members")):
+            b = len({_actor_key(r) for r in buys if r["source"] == src})
+            s = len({_actor_key(r) for r in sells if r["source"] == src})
             if b or s:
-                bits.append(f"{label}: {b} buy{'s' if b != 1 else ''}, {s} sell{'s' if s != 1 else ''}")
+                bits.append(f"{label}: {b} buying, {s} selling")
         caveats = []
         if any(r["source"] == "congress" for r in grp):
             caveats.append(CAVEAT_CONGRESS)

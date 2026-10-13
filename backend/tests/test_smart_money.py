@@ -93,6 +93,26 @@ def test_13f_quarter_diff_finds_new_and_exit():
     assert bac["side"] == "sell" and bac["kind"] == "exit"
 
 
+def test_13f_values_reported_in_thousands_are_normalised():
+    xml = """<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+      <infoTable><nameOfIssuer>ALPHABET INC</nameOfIssuer><cusip>02079K305</cusip><value>120200</value>
+        <shrsOrPrnAmt><sshPrnamt>500000</sshPrnamt><sshPrnamtType>SH</sshPrnamtType></shrsOrPrnAmt></infoTable>
+      <infoTable><nameOfIssuer>ALPHABET INC</nameOfIssuer><cusip>02079K305</cusip><value>999</value><putCall>Call</putCall>
+        <shrsOrPrnAmt><sshPrnamt>4000</sshPrnamt><sshPrnamtType>SH</sshPrnamtType></shrsOrPrnAmt></infoTable>
+    </informationTable>"""
+    h = edgar.parse_info_table(xml)
+    assert h["02079K305"]["value"] == pytest.approx(120_200_000)  # thousands → dollars; options ignored
+    assert h["02079K305"]["shares"] == 500000
+
+
+def test_tiny_fund_positions_are_noise():
+    changes = [{"cusip": "X", "name": "TINY CO", "kind": "new", "change_pct": None, "shares_prev": 0, "shares_cur": 10,
+                "value_prev": 0, "value_cur": 1_000}]
+    (row,) = edgar.changes_to_rows(changes, manager="F", cik=1, period=date(2026, 6, 30), filed=date(2026, 8, 14), url="u",
+                                   tickers={}, totals=(1e9, 1e9))
+    assert row["informative"] is False and "tiny" in row["noise_reason"]
+
+
 def test_sic_sector_mapping():
     assert edgar.sic_to_sector(3674) == "Technology"  # semiconductors
     assert edgar.sic_to_sector(7372) == "Technology"

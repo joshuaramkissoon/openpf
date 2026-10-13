@@ -235,6 +235,12 @@ def parse_info_table(xml_text: str) -> dict[str, dict[str, Any]]:
         row = out.setdefault(cusip, {"cusip": cusip, "name": (it.findtext("nameOfIssuer") or "").strip(), "shares": 0.0, "value": 0.0})
         row["shares"] += shares
         row["value"] += value
+    # Values are in dollars since 2023, but some filers still report thousands.
+    # A median implied price under $2/share across the book means thousands.
+    implied = sorted(r["value"] / r["shares"] for r in out.values() if r["shares"] > 0 and r["value"] > 0)
+    if implied and implied[len(implied) // 2] < 2.0:
+        for r in out.values():
+            r["value"] *= 1000.0
     return out
 
 
@@ -267,12 +273,19 @@ def diff_holdings(prev: dict[str, dict[str, Any]], cur: dict[str, dict[str, Any]
     return changes
 
 
+MIN_FUND_WEIGHT = 0.0025  # positions under 0.25% of a fund are rounding errors, not conviction
+
+
 def changes_to_rows(changes: list[dict[str, Any]], *, manager: str, cik: int, period: date | None, filed: date | None,
-                    url: str, tickers: dict[str, str | None]) -> list[dict[str, Any]]:
+                    url: str, tickers: dict[str, str | None], totals: tuple[float, float] | None = None) -> list[dict[str, Any]]:
     rows = []
+    prev_total, cur_total = totals or (0.0, 0.0)
     for ch in changes:
         side = "buy" if ch["kind"] in ("new", "add") else "sell"
         value = ch["value_cur"] if side == "buy" else ch["value_prev"]
+        total = cur_total if side == "buy" else prev_total
+        weight = value / total if total else None
+        tiny = weight is not None and weight < MIN_FUND_WEIGHT
         pct = ch.get("change_pct")
         label = {"new": "new position", "exit": "sold out"}.get(ch["kind"]) or f"{pct * 100:+.0f}% shares"
         rows.append({
@@ -294,10 +307,11 @@ def changes_to_rows(changes: list[dict[str, Any]], *, manager: str, cik: int, pe
             "disclosed_date": filed,
             "delay_days": (filed - period).days if filed and period else None,
             "url": url,
-            "informative": True,
-            "noise_reason": None,
+            "informative": not tiny,
+            "noise_reason": "tiny position (<0.25% of the fund)" if tiny else None,
             "provider": "sec",
-            "meta": {"cusip": ch["cusip"], "change_pct": pct, "shares_prev": ch["shares_prev"], "cik": cik},
+            "meta": {"cusip": ch["cusip"], "change_pct": pct, "shares_prev": ch["shares_prev"], "cik": cik,
+                     "weight": round(weight, 5) if weight is not None else None},
         })
     return rows
 
@@ -498,7 +512,8 @@ def fetch_13f_rows(db: Session, cik: int, ua: str, *, name_hint: str = "") -> tu
     tickers = map_cusips(db, list(dict.fromkeys(wanted)))
     folder = _filing_folder(cik, latest["acc"])
     rows = changes_to_rows(changes, manager=manager, cik=cik, period=_date(latest["report"]), filed=_date(latest["filed"]),
-                           url=f"{folder}/", tickers=tickers)
+                           url=f"{folder}/", tickers=tickers,
+                           totals=(sum(r["value"] for r in prev.values()), sum(r["value"] for r in cur.values())))
     total = sum(r["value"] for r in cur.values()) or 1.0
     snapshot = {
         "cik": cik, "name": manager, "period": latest["report"], "filed": latest["filed"],
