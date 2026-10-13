@@ -217,7 +217,7 @@ def handle_telegram_text(db: Session, text: str) -> str:
 
     if cmd == "/run":
         refresh_portfolio(db)
-        result = run_agent(db, include_watchlist=True, execute_auto=False)
+        result = run_agent(db, include_watchlist=True)
         return (
             "Agent run completed.\n"
             f"- Regime: {result['market_regime']}\n"

@@ -87,7 +87,7 @@ If ISP IP changes, update Trading 212 allowlist.
 ## 6) Operational Safety Defaults
 
 - Start with `BROKER_MODE=paper` even in live env.
-- Keep `AUTOPILOT_ENABLED=false` until intent quality is validated.
+- Archie only acts on his own under standing permissions you grant in Settings → Permissions; start with none.
 - Set conservative risk rails in Control Tower.
 
 ## 7) Failure Triage

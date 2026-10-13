@@ -15,6 +15,7 @@ from app.api import plays as plays_api
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
 from app.core.auth import ApiTokenMiddleware, OriginGuardMiddleware
 
+from app.api import autonomy as autonomy_api
 from app.api import recipes as recipes_api
 from app.api import smart_money as smart_money_api
 from app.api import views
@@ -64,6 +65,24 @@ def _warm_sandbox_history() -> None:
             logging.getLogger(__name__).warning("Sandbox history warm-up failed", exc_info=True)
 
     threading.Thread(target=_run, name="sandbox-warmup", daemon=True).start()
+
+
+def _backfill_track_record() -> None:
+    """Mark outcomes for every past proposal (prices allowing). Background:
+    it pulls price history and must never delay startup."""
+    import threading
+
+    def _run() -> None:
+        from app.core.database import SessionLocal
+        from app.services.track_record_service import mark_outcomes
+
+        try:
+            with SessionLocal() as db:
+                mark_outcomes(db, backfill=True)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning("Track record backfill failed", exc_info=True)
+
+    threading.Thread(target=_run, name="track-record-backfill", daemon=True).start()
 
 
 def _sandbox_enabled() -> bool:
@@ -181,6 +200,13 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).warning("Stuck-intent recovery skipped", exc_info=True)
     _start_scheduler_safely()
+    # Standing permissions are applied here in the backend (never inside an
+    # agent/MCP subprocess); the track record backfills once in the background.
+    from app.services import permissions_service
+
+    if os.environ.get("OPENPF_AUTONOMY_BACKGROUND", "1") != "0":
+        permissions_service.start_sweeper()
+        _backfill_track_record()
     # Builds Archie queues for agent-built Views (see views_builder.enqueue).
     import asyncio
 
@@ -193,6 +219,7 @@ async def lifespan(app: FastAPI):
     views_queue = asyncio.create_task(views_builder.queue_worker())
     yield
     views_queue.cancel()
+    permissions_service.stop_sweeper()
     await claude_chat_runtime.shutdown()
     stop_scheduler()
     from app.services.forecast_pool import shutdown as shutdown_forecast_pool
@@ -268,6 +295,7 @@ app.include_router(plays_api.router, prefix=settings.api_prefix)
 app.include_router(views.router, prefix=settings.api_prefix)
 app.include_router(recipes_api.router, prefix=settings.api_prefix)
 app.include_router(smart_money_api.router, prefix=settings.api_prefix)
+app.include_router(autonomy_api.router, prefix=settings.api_prefix)
 
 if _sandbox_enabled():
     from app.api import sandbox_t212

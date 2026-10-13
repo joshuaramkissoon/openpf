@@ -172,6 +172,7 @@ def propose_trade(
     stop_price: float | None = None,
     play_id: str | None = None,
     source: str = "agent",
+    category: str | None = None,
 ) -> dict[str, Any]:
     """Validate, size and record a ``proposed`` TradeIntent. Never executes.
 
@@ -281,8 +282,13 @@ def propose_trade(
     if hard:
         return {"ok": False, "violations": hard, "sizing": sizing, "caps": caps}
 
+    # "rebalance" is reserved for the deterministic rebalancer (a standing
+    # rebalance permission keys off it); proposals can't claim it.
+    source = (source or "agent")[:64]
+    if source.strip().lower() == "rebalance":
+        source = "agent"
     meta: dict[str, Any] = {
-        "source": (source or "agent")[:64],
+        "source": source,
         "account_kind": account_kind,
         "reference_price": price,
         "currency": currency,
@@ -303,6 +309,13 @@ def propose_trade(
         else:
             meta["play_id"] = play.id
             meta.setdefault("play_title", play.title)
+    # What kind of call this is (track record + standing permissions). An
+    # explicit category wins; otherwise it's inferred from source/play/rationale.
+    from app.services import intent_category
+
+    meta["category"] = intent_category.normalize(category) or intent_category.infer(
+        side=side, source=meta["source"], rationale=rationale, meta=meta
+    )
     if warnings:
         meta["warnings"] = warnings
 
@@ -351,6 +364,8 @@ def serialize_intent(intent: TradeIntent) -> dict[str, Any]:
         "play_id": meta.get("play_id"),
         "owner": "core" if meta.get("owner") == "core" else ("play" if meta.get("play_id") else None),
         "source": meta.get("source"),
+        "category": meta.get("category"),
+        "approved_by": getattr(intent, "approved_by", None),
         "rationale": intent.rationale,
         "failure_reason": intent.failure_reason,
     }

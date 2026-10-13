@@ -342,7 +342,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         },
         # Deterministic engine run (not sent to an LLM): detects cap breaches and
         # queues trim proposals into Execution. Disabled by default — enable it
-        # to put core-book rebalancing on autopilot.
+        # to run the core-book check weekly.
         "prompt": (
             "Deterministic portfolio rebalance check: aggregate holdings by ticker across accounts, "
             "flag any name over its concentration cap, and queue minimum-turnover trim proposals for "
@@ -1157,7 +1157,7 @@ def _run_task_impl(db: Session, task: ScheduledTask) -> tuple[str, dict[str, Any
         return "ok", {"result": result}, path, {}
 
     if kind == "portfolio_rebalance":
-        # Autopilot core-book check: detect concentration drift and queue trims
+        # Core-book check: detect concentration drift and queue trims
         # as proposed intents for the operator to approve. Never auto-executes.
         from app.services.portfolio_optimizer import propose_rebalance
 

@@ -72,7 +72,7 @@ def _message_item(row) -> ChatMessageItem:
 
 @router.post("/run", response_model=AgentRunResponse)
 def run(payload: AgentRunRequest, db: Session = Depends(get_db)) -> AgentRunResponse:
-    result = run_agent(db, include_watchlist=payload.include_watchlist, execute_auto=payload.execute_auto)
+    result = run_agent(db, include_watchlist=payload.include_watchlist)
     return AgentRunResponse(**result)
 
 
@@ -137,6 +137,15 @@ def intents(
     except Exception:  # noqa: BLE001 — labels are cosmetic; never break the queue
         pass
 
+    perm_labels: dict[str, str] = {}
+    try:
+        from app.services.permissions_service import permission_labels
+
+        perm_labels = permission_labels(db)
+    except Exception:  # noqa: BLE001
+        pass
+    from app.services import intent_category
+
     def _o(r, key, default=None):
         o = owners.get(r.id)
         return o.get(key, default) if o else default
@@ -166,6 +175,9 @@ def intents(
             play_id=(r.meta or {}).get("play_id") if isinstance(r.meta, dict) else None,
             play_title=(r.meta or {}).get("play_title") if isinstance(r.meta, dict) else None,
             approved_at=r.approved_at,
+            approved_by=r.approved_by,
+            permission_label=perm_labels.get(r.approved_by or ""),
+            category=intent_category.of_intent(r),
             executed_at=r.executed_at,
             broker_order_id=r.broker_order_id,
             execution_price=r.execution_price,

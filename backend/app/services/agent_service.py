@@ -11,7 +11,7 @@ from app.models.entities import AgentRun, Thesis, TradeIntent
 from app.services.analytics import signal_for_symbol
 from app.services.claude_agent_runtime import run_claude_analyst_cycle
 from app.services.config_store import ConfigStore
-from app.services.execution_service import approve_intent, execute_intent, supersede_open_proposals
+from app.services.execution_service import supersede_open_proposals
 from app.services.market_data import fetch_history
 from app.services.portfolio_service import get_portfolio_snapshot
 from app.services.regime_service import compute_regime
@@ -463,7 +463,7 @@ def _format_summary(
     return "\n".join(lines), score
 
 
-def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool = False) -> dict[str, Any]:
+def run_agent(db: Session, *, include_watchlist: bool = True) -> dict[str, Any]:
     from app.services import watchlist_service
 
     config = ConfigStore(db)
@@ -590,16 +590,9 @@ def run_agent(db: Session, *, include_watchlist: bool = True, execute_auto: bool
 
     db.commit()
 
-    if execute_auto and broker.get("autopilot_enabled"):
-        intents = db.execute(
-            select(TradeIntent).where(TradeIntent.run_id == run.id).order_by(desc(TradeIntent.expected_edge))
-        ).scalars().all()
-        for intent in intents[:3]:
-            try:
-                approve_intent(db, intent.id, note="autopilot approved", actor="autopilot")
-                execute_intent(db, intent.id)
-            except Exception:
-                continue
+    # Nothing here approves or executes: proposals wait for a human, or for a
+    # standing permission the user granted (permissions_service), which still
+    # goes through execution_service.execute_intent.
 
     try:
         from app.services.telegram_service import notify_agent_run

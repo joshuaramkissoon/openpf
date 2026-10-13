@@ -8,6 +8,7 @@ import { AllocationCard } from "@/components/portfolio/allocation-card"
 import { RebalanceCard } from "@/components/portfolio/rebalance-card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { AutonomyDigest } from "@/features/autonomy/home"
 import { BookByPlay, OwnerMenu, holdingKey, useBook } from "@/features/plays"
 import { useAppActions } from "@/lib/app-actions"
 import type { Route } from "@/lib/router"
@@ -57,6 +58,8 @@ function HomeOverview({ portfolio, proposals, config, brokerMode }: HomeProps) {
           <RiskChips snapshot={snapshot} positions={positions} config={config} />
         </div>
       </div>
+
+      <AutonomyDigest />
 
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
         <div className="min-w-0 lg:col-span-3">

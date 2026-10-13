@@ -33,7 +33,7 @@ def test_end_to_end_flow(client):
     assert payload['account']['total'] > 0
     assert len(payload['positions']) > 0
 
-    run = client.post('/api/agent/run', json={'include_watchlist': True, 'execute_auto': False})
+    run = client.post('/api/agent/run', json={'include_watchlist': True})
     assert run.status_code == 200
 
     intents = client.get('/api/agent/intents')

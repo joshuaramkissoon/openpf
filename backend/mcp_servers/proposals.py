@@ -43,9 +43,15 @@ mcp = FastMCP(
         "Trade proposals. You cannot place or cancel orders. To suggest a trade, call "
         "propose_trade: it validates the instrument, sizes the order, checks the risk "
         "rails and queues it for the user to approve. If it returns violations, resize "
-        "within the caps and try again rather than asking the user to loosen them."
+        "within the caps and try again rather than asking the user to loosen them. "
+        "get_track_record shows how your past proposals actually did — cite it honestly, "
+        "with its sample size. suggest_permission can ASK the user for a standing permission "
+        "when a category's record is good; it grants nothing."
     ),
 )
+
+
+_RESERVED_SOURCES = {"play", "rebalance"}
 
 
 def _fmt(payload: Any) -> str:
@@ -66,6 +72,7 @@ def propose_trade(
     stop_price: float = 0.0,
     play_id: str = "",
     source: str = "chat",
+    category: str = "",
 ) -> str:
     """Queue a trade proposal for the user to approve. Does NOT execute anything.
 
@@ -83,6 +90,8 @@ def propose_trade(
         play_id: Which play this proposal is for — a Play id, or "core" for long-term / no-thesis
             holdings. Always say: proposals with neither are flagged "not part of any play".
         source: Free-form origin tag (e.g. 'chat', 'scheduled:<task>').
+        category: What kind of call this is, for your track record: deploy_cash | rebalance |
+            play_tranche | news_reaction | trim_derisk | other. Inferred when omitted.
     """
     logger.info("propose_trade side=%s symbol=%s code=%s account=%s", side, symbol, instrument_code, account_kind)
     init_db()
@@ -101,7 +110,10 @@ def propose_trade(
             limit_price=limit_price or None,
             stop_price=stop_price or None,
             play_id=play_id or None,
-            source=source,
+            # 'play' and 'rebalance' tags are set only by the app's own play
+            # staging and rebalancer (standing permissions key off them).
+            source="chat" if (source or "").strip().lower() in _RESERVED_SOURCES else source,
+            category=category or None,
         )
         return _fmt(result)
     except Exception as exc:  # noqa: BLE001 — surface as a tool error payload
@@ -123,6 +135,45 @@ def list_proposals(status: str = "all", limit: int = 20) -> str:
     db = SessionLocal()
     try:
         return _fmt({"ok": True, "intents": proposal_service.list_proposals(db, limit=limit, status=status)})
+    finally:
+        db.close()
+
+
+@mcp.tool()
+def get_track_record() -> str:
+    """How your past proposals actually did, tracked forward from each proposal's reference
+    price at 1d / 1w / 1m / 3m (and at close) against the benchmark — including the ones the
+    user rejected or let expire ("if you'd taken it"). Per-category hit rates, "following Archie
+    vs what you did", and the most recent items. Always quote numbers with their sample size."""
+    init_db()
+    db = SessionLocal()
+    try:
+        from app.services.track_record_service import for_agent
+
+        return _fmt({"ok": True, **for_agent(db)})
+    finally:
+        db.close()
+
+
+@mcp.tool()
+def suggest_permission(kind: str, per_trade_cap_gbp: float = 0.0, note: str = "") -> str:
+    """ASK the user for a standing permission in one category. This only records a suggestion
+    card for the user to accept or dismiss in the app — it grants nothing, and you cannot grant,
+    widen or enable permissions yourself. Refused unless the category's track record supports it.
+
+    Args:
+        kind: play_tranche | rebalance | deploy_cash.
+        per_trade_cap_gbp: The per-trade cap you'd suggest (defaults from the record; never above
+            the user's single-order rail).
+        note: One or two sentences in your own words on why.
+    """
+    init_db()
+    db = SessionLocal()
+    try:
+        from app.services.permissions_service import record_suggestion
+
+        return _fmt(record_suggestion(db, kind=kind, per_trade_cap_gbp=per_trade_cap_gbp or None, note=note,
+                                      source="archie"))
     finally:
         db.close()
 

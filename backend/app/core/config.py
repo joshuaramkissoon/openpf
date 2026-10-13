@@ -88,7 +88,6 @@ class Settings(BaseSettings):
     # live in Settings → Broker (a saved broker_config row overrides this) and
     # configures an IP-allowed execution key.
     broker_mode: Literal["paper", "live"] = Field(default="paper", alias="BROKER_MODE")
-    autopilot_enabled: bool = Field(default=False, alias="AUTOPILOT_ENABLED")
 
     max_single_order_notional: float = Field(default=500.0, alias="MAX_SINGLE_ORDER_NOTIONAL")
     max_daily_notional: float = Field(default=1500.0, alias="MAX_DAILY_NOTIONAL")

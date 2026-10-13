@@ -161,6 +161,9 @@ class TradeIntent(Base):
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Who approved it: "human", or "permission:<id>" for a standing permission
+    # the user granted (permissions_service). NULL on rows from before this column.
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     execution_price: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -510,3 +513,12 @@ class PlayDraftJob(Base):
 # Smart-money disclosure tables live in their own module; importing them here
 # registers them with Base.metadata for init_db.
 from app.models.smart_money import Disclosure, DisclosureCache  # noqa: E402,F401
+
+# Track record + standing permissions live in their own module; importing it
+# here registers their tables wherever entities is imported.
+from app.models.autonomy import (  # noqa: E402,F401
+    PermissionEvent,
+    PermissionSuggestion,
+    ProposalOutcome,
+    StandingPermission,
+)

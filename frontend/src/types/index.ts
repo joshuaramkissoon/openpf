@@ -59,7 +59,6 @@ export interface RiskConfig {
 
 export interface BrokerConfig {
   broker_mode: 'paper' | 'live'
-  autopilot_enabled: boolean
   t212_base_env: 'demo' | 'live'
   scheduler_enabled?: boolean
 }
@@ -315,6 +314,10 @@ export interface TradeIntent {
   owner_label?: string | null
   owner_inferred?: boolean
   approved_at?: string | null
+  /** "human", or "permission:<id>" when a standing permission approved it. */
+  approved_by?: string | null
+  permission_label?: string | null
+  category?: string | null
   executed_at?: string | null
   broker_order_id?: string | null
   execution_price?: number | null
