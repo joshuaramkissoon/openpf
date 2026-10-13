@@ -29,6 +29,7 @@ from app.services.artifact_service import (
     extract_summary,
     summary_frontmatter_line,
 )
+from app.core.cron import cron_trigger
 from app.services.config_store import ConfigStore
 from app.services.leveraged_service import (
     _daily_entry_count,
@@ -444,7 +445,7 @@ def _aware_utc(value: datetime) -> datetime:
 def _next_run_utc(cron_expr: str, tz_name: str, now_utc: datetime | None = None) -> datetime:
     now = _aware_utc(now_utc or _utcnow())
     tz = ZoneInfo(tz_name)
-    trigger = CronTrigger.from_crontab(cron_expr, timezone=tz)
+    trigger = cron_trigger(cron_expr, timezone=tz)
     next_local = trigger.get_next_fire_time(previous_fire_time=None, now=now.astimezone(tz))
     if next_local is None:
         raise RuntimeError(f"invalid next run for cron '{cron_expr}'")
@@ -460,7 +461,7 @@ def fires_in_window(cron_expr: str, tz_name: str, start: datetime, end: datetime
     cron over a long window.
     """
     tz = ZoneInfo(tz_name)
-    trigger = CronTrigger.from_crontab(cron_expr, timezone=tz)
+    trigger = cron_trigger(cron_expr, timezone=tz)
     fires: list[datetime] = []
     # get_next_fire_time returns the first fire at-or-after its ``now`` arg, so we
     # advance a cursor past each hit. Starting one tick past ``start`` makes the

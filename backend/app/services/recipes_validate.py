@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from app.core.cron import cron_trigger
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$")
 ICON_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -186,9 +187,8 @@ _MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "O
 
 
 def _cron_trigger(cron: str, tz: str):
-    from apscheduler.triggers.cron import CronTrigger
 
-    return CronTrigger.from_crontab(cron, timezone=ZoneInfo(tz))
+    return cron_trigger(cron, timezone=ZoneInfo(tz))
 
 
 def _fires(cron: str, tz: str, start: datetime, end: datetime, cap: int = 2000) -> list[datetime]:
