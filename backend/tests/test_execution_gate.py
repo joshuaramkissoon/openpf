@@ -511,3 +511,115 @@ def test_crypto_intent_refused_when_key_was_swapped_after_verification(db):
     with pytest.raises(ExecutionError, match="crypto-guard"):
         execute_intent(db, intent.id)
     assert db.get(TradeIntent, intent.id).status == "approved"  # nothing sent; retryable once re-verified
+
+
+# ── manual trades from the stock sheet ───────────────────────────────────
+
+
+@pytest.fixture()
+def sheet_client(session_factory, fake_market, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import instruments as instruments_api
+    from app.core.database import get_db
+
+    monkeypatch.setattr(
+        instruments_api.instrument_insight_service,
+        "resolve",
+        lambda ticker, db: {"instrument_code": "AAPL_US_EQ", "ticker": "AAPL", "display_ticker": "AAPL", "sym": "AAPL"},
+    )
+    monkeypatch.setattr(execution_service, "_paper_fill_price", lambda symbol: 200.0)
+    monkeypatch.setattr(execution_service, "_latest_account_cash", lambda db, account_kind: 10_000.0)
+    app = FastAPI()
+    app.include_router(instruments_api.router, prefix="/api")
+
+    def _db():
+        s = session_factory()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    app.dependency_overrides[get_db] = _db
+    with session_factory() as s:
+        ConfigStore(s).set_broker({"broker_mode": "paper"})
+    yield TestClient(app)
+
+
+_USER_ACTION = {"kind": "manual_trade", "reviewed": True}
+
+
+def test_manual_trade_requires_the_explicit_user_action(sheet_client, session_factory):
+    body = {"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50}
+    for bad in [body, {**body, "user_action": {"kind": "manual_trade"}}, {**body, "user_action": {"kind": "proposal", "reviewed": True}},
+                {**body, "user_action": {"kind": "manual_trade", "reviewed": False}}]:
+        assert sheet_client.post("/api/instruments/AAPL/trade", json=bad).status_code == 422
+    with session_factory() as s:
+        assert s.query(TradeIntent).count() == 0
+
+
+def test_manual_trade_goes_through_the_gate_as_the_user(sheet_client, session_factory):
+    res = sheet_client.post(
+        "/api/instruments/AAPL/trade",
+        json={"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50, "user_action": _USER_ACTION},
+    )
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out["ok"] and out["intent"]["status"] == "executed" and out["fill_price"] == 200.0
+    with session_factory() as s:
+        intent = s.query(TradeIntent).one()
+        assert intent.approved_by == "user" and (intent.meta or {}).get("source") == "user"
+        events = [e.message for e in execution_service.list_events(s)]
+        assert "intent approved" in events and "paper execution completed" in events
+
+
+def test_manual_trade_preview_records_nothing(sheet_client, session_factory):
+    res = sheet_client.post("/api/instruments/AAPL/trade/preview", json={"side": "buy", "account_kind": "invest", "notional_gbp": 50})
+    out = res.json()
+    assert res.status_code == 200 and out["ok"] and out["sizing"]["quantity"] > 0
+    assert out["fees"]["commission_gbp"] == 0 and out["fees"]["fx_fee_rate"] > 0  # USD instrument
+    with session_factory() as s:
+        assert s.query(TradeIntent).count() == 0
+
+
+def test_manual_trade_rail_failure_is_refused_and_leaves_nothing_pending(sheet_client, session_factory):
+    with session_factory() as s:
+        store = ConfigStore(s)
+        store.set_risk({**store.get_risk(), "max_single_order_notional": 40.0})
+    res = sheet_client.post(
+        "/api/instruments/AAPL/trade",
+        json={"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50, "user_action": _USER_ACTION},
+    )
+    assert res.status_code == 400 and res.json()["detail"]["violations"]
+    with session_factory() as s:
+        assert s.query(TradeIntent).filter(TradeIntent.status.in_(["proposed", "approved"])).count() == 0
+
+
+def test_manual_trade_in_live_mode_needs_the_live_confirmation(sheet_client, session_factory, monkeypatch):
+    from app.services import manual_trade
+
+    monkeypatch.setattr(manual_trade, "broker_mode", lambda db: "live")
+    res = sheet_client.post(
+        "/api/instruments/AAPL/trade",
+        json={"side": "buy", "account_kind": "stocks_isa", "notional_gbp": 50, "user_action": _USER_ACTION},
+    )
+    assert res.status_code == 409 and res.json()["detail"]["code"] == "needs_live_confirmation"
+    with session_factory() as s:
+        assert s.query(TradeIntent).count() == 0
+
+
+def test_agents_have_no_route_to_the_manual_trade_endpoint(no_db_creds):
+    # No MCP tool in any context names the sheet's trade route or the manual-trade service…
+    for context in mcp_registry.ALL_CONTEXTS:
+        _, allowed = mcp_registry.build_mcp_servers(context)
+        assert not [t for t in allowed if re.search(r"manual|__place_|__(?:execute|place|make)_trade", t, re.IGNORECASE)], context
+    for path in mcp_registry.MCP_SERVER_DIR.glob("*.py"):
+        src = path.read_text()
+        assert "manual_trade" not in src and "/trade" not in src, path.name
+    # …and the agent's shell/web hooks block the endpoint on any host.
+    for url in ["http://localhost:8000/api/instruments/AAPL/trade", "http://backend:9999/api/instruments/AAPL/trade",
+                "https://my-openpf.example/api/instruments/NVDA/trade/preview"]:
+        assert _denied(_run(claude_sdk_config._web_fetch_guard({"tool_input": {"url": url}}, None, None))), url
+        assert _denied(_run(claude_sdk_config._bash_guard({"tool_input": {"command": f"curl -X POST {url} -d '{{}}'"}}, None, None))), url
+    assert _denied(_run(claude_sdk_config._bash_guard({"tool_input": {"command": "python -c 'from app.services import manual_trade'"}}, None, None)))

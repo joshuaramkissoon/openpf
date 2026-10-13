@@ -173,8 +173,12 @@ def propose_trade(
     play_id: str | None = None,
     source: str = "agent",
     category: str | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Validate, size and record a ``proposed`` TradeIntent. Never executes.
+
+    ``dry_run=True`` sizes and rail-checks without recording anything (the stock
+    sheet's trade review step).
 
     Returns ``{"ok": True, "intent": {...}, "warnings": [...], "caps": {...}}`` or
     ``{"ok": False, "error"|"violations": ..., "caps": {...}}`` — hard rail
@@ -299,6 +303,8 @@ def propose_trade(
     }
     if hard:
         return {"ok": False, "violations": hard, "sizing": sizing, "caps": caps}
+    if dry_run:
+        return {"ok": True, "sizing": {**sizing, "price_gbp": round(price_gbp, 6)}, "warnings": warnings, "caps": caps}
 
     # "rebalance" is reserved for the deterministic rebalancer (a standing
     # rebalance permission keys off it); proposals can't claim it.
