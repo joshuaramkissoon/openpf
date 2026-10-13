@@ -5,8 +5,8 @@ import { CalendarClock, FileText } from "lucide-react"
 
 import { getArtifact, getSchedulerTimeline, listArtifacts } from "@/api/client"
 import { Section, SectionLink } from "@/components/kit"
-import { RichMarkdown } from "@/components/RichMarkdown"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { ReportReader } from "@/components/rich/report-reader"
+import { humanizeTaskName } from "@/components/scheduled-jobs/labels"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAppActions } from "@/lib/app-actions"
 import type { ArtifactDetail, ArtifactItem, TimelineUpcoming } from "@/types"
@@ -100,15 +100,14 @@ export function TodayCard() {
               </button>
             ) : null}
           </div>
-          <Sheet open={open} onOpenChange={setOpen}>
-            <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
-              <SheetHeader>
-                <SheetTitle>{latest.title || "Report"}</SheetTitle>
-                <SheetDescription>{dayjs(latest.created_at).format("dddd D MMMM, HH:mm")}</SheetDescription>
-              </SheetHeader>
-              <div className="px-4 pb-6">{detail ? <RichMarkdown markdown={detail.content} /> : null}</div>
-            </SheetContent>
-          </Sheet>
+          <ReportReader
+            open={open}
+            onOpenChange={setOpen}
+            title={latest.title || "Report"}
+            kind={latest.task_name ? humanizeTaskName(latest.task_name) : latest.type || null}
+            date={dayjs(latest.created_at).format("dddd D MMMM, HH:mm")}
+            markdown={detail?.content ?? null}
+          />
         </div>
       ) : (
         <div className="space-y-2">
