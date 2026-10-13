@@ -467,8 +467,12 @@ def test_tidy_retitles_a_chart_that_names_the_wrong_dimension():
     spec, problems = validate_spec({"version": 1, "title": "Today", "blocks": [_sector_bars("Today's move by theme")]})
     assert not problems
     assert spec["blocks"][0]["title"] == "Today's move by sector"
-    spec, _ = validate_spec({"version": 1, "title": "Today", "blocks": [_sector_bars("Move across themes")]})
+    spec, _ = validate_spec({"version": 1, "title": "Today by theme", "blocks": [_sector_bars("Move across themes")]})
     assert spec["blocks"][0]["title"] == "Move across sectors"
+    assert spec["title"] == "Today by sector"
+    # A real theme grouping keeps its words.
+    spec, _ = validate_spec(GOOD)
+    assert spec["title"] == "Today by theme"
 
 
 def test_presets_have_no_duplicate_tables():

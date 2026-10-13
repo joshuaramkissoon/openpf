@@ -512,6 +512,24 @@ def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         fixed = title[: m.start(2)] + word + title[m.end(2) :]
         notes.append(f"retitled '{title}' to '{fixed}': the chart groups by {actual}")
         b["title"] = fixed
+    # The page title too, when every grouped block agrees on one dimension.
+    out = {**spec, "blocks": keep}
+    used = {
+        _DIMENSIONS[k]
+        for b in keep
+        for k in (_group_key(b), b.get("group") if b.get("type") == "treemap" else None)
+        if k in _DIMENSIONS
+    }
+    page = spec.get("title") or ""
+    m = re.search(rf"\b(by|per|across)\s+{_DIM_WORDS}\b", page, re.I)
+    if m and len(used) == 1:
+        actual = next(iter(used))
+        said = m.group(2).lower()
+        if not said.startswith(actual[:5]):
+            plural = said.endswith("s") and not said.endswith("ss")
+            word = _PLURAL.get(actual, actual + "s") if plural else actual
+            out["title"] = page[: m.start(2)] + word + page[m.end(2) :]
+            notes.append(f"retitled the page '{page}' to '{out['title']}'")
     if len(keep) == len(blocks) and not notes:
         return spec, []
-    return {**spec, "blocks": keep}, notes
+    return out, notes

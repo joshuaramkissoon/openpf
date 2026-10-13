@@ -262,16 +262,16 @@ export function RecipeDetailPage({ slug }: { slug: string }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:pl-[3.75rem]">
-          <p className="flex items-center gap-2 text-sm">
-            <span className={cn('relative flex size-2 shrink-0', !recipe.enabled && 'opacity-60')}>
+          <p className="text-sm leading-relaxed">
+            <span className={cn('relative mr-2 inline-flex size-2 align-middle', !recipe.enabled && 'opacity-60')}>
               {recipe.enabled ? <span className="recipe-breathe absolute inset-0 rounded-full bg-positive/50" /> : null}
               <span className={cn('relative size-2 rounded-full', recipe.enabled ? 'bg-positive' : 'bg-muted-foreground/50')} />
             </span>
             <span className={cn('font-medium', !recipe.enabled && 'text-muted-foreground')}>
               {recipe.enabled ? whenSentence(recipe) : `Paused · ${lower(whenSentence(recipe))}`}
             </span>
-            <span className="text-muted-foreground">· {deliverySentence(recipe)}</span>
-            {recipe.enabled && recipe.next_run_at ? <span className="text-muted-foreground/80">· next {nextRunLabel(recipe.next_run_at)}</span> : null}
+            <span className="text-muted-foreground"> · {deliverySentence(recipe)}</span>
+            {recipe.enabled && recipe.next_run_at ? <span className="text-muted-foreground/80"> · next {nextRunLabel(recipe.next_run_at)}</span> : null}
           </p>
           {!revising && !editing ? (
             <button
