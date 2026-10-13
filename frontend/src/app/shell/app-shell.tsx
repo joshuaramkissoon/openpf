@@ -34,6 +34,7 @@ import { HomePage } from "@/features/home"
 import { PlaysPage } from "@/features/plays"
 import { RecipesPage } from "@/features/recipes"
 import { SettingsPage } from "@/features/settings"
+import { SETTINGS_ENTRIES } from "@/features/settings/registry"
 import { ViewsPage } from "@/features/views"
 import { AppActionsProvider, type AppActions } from "@/lib/app-actions"
 import { useCryptoStatus } from "@/lib/crypto-status"
@@ -103,8 +104,7 @@ export function AppShell() {
   // Normalise unknown / bare routes once so deep links stay canonical.
   useEffect(() => {
     if (!KNOWN.has(section)) navigate("/home", { replace: true })
-    else if (section === "settings" && !route.segments[1]) navigate("/settings/general", { replace: true })
-  }, [section, route.segments])
+  }, [section])
 
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(() => loadPrivacyMode())
   useEffect(() => savePrivacyMode(privacyMode), [privacyMode])
@@ -232,8 +232,18 @@ function useCommands(actions: AppActions, cyclePrivacy: () => void, reload: (o?:
       go("proposals", "Proposals", "/activity/proposals", Activity, "intents approve"),
       go("orders", "Orders", "/activity/orders", ListOrdered, "broker"),
       go("automations", "Automation runs", "/activity/automations", CalendarClock, "scheduled jobs briefing reports log"),
-      go("settings", "Settings", "/settings/general", Settings, "keys broker risk"),
+      go("settings", "Settings", "/settings", Settings, "preferences accounts keys"),
       go("help", "Help", "/settings/help", HelpCircle, "guide"),
+      ...SETTINGS_ENTRIES.map(
+        (e): SpotlightCommand => ({
+          id: `setting:${e.id}`,
+          label: e.label,
+          group: "Settings",
+          icon: Settings,
+          keywords: e.keywords,
+          onSelect: () => navigate(e.path),
+        }),
+      ),
     ]
   }, [actions, cyclePrivacy, reload, resolved, setPreference])
 }

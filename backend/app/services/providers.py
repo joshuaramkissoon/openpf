@@ -21,14 +21,14 @@ _SECRET = True
 PROVIDERS: dict[str, dict[str, Any]] = {
     "t212": {
         "id": "t212", "type": "broker", "label": "Trading 212", "product": "Invest and Stocks ISA",
-        "modes": ["read", "trade"], "managed_in": "/settings/broker",
+        "modes": ["read", "trade"], "managed_in": "/settings/accounts?manage=t212",
         "availability": "UK and EU. Official public API (beta) for Invest and Stocks ISA accounts.",
-        "summary": "Your Invest and Stocks ISA accounts. Keys are managed under Broker & keys.",
+        "summary": "Your Invest and Stocks ISA accounts: a read key each, plus an optional IP-restricted trade key.",
         "read_steps": [
             "Trading 212 app → Settings → API (Beta) → Generate API key.",
             "Read-only: tick the Account data, Portfolio, History and Metadata permissions only. Leave Orders "
             "execute UNTICKED.",
-            "Paste the key and secret under Settings → Broker & keys → Read key, for each account (Invest, Stocks ISA).",
+            "Paste the key and secret under Settings → Accounts → Trading 212 → Read key, for each account (Invest, Stocks ISA).",
         ],
         "trade_steps": [
             "Create a second key with Orders execute ticked and restrict it to this machine's IP address.",
@@ -115,9 +115,12 @@ for _ex in EXCHANGES.values():
     PROVIDERS[_ex["id"]] = {
         "id": _ex["id"], "type": "crypto", "label": _ex["label"], "product": _ex["product"],
         "modes": ["read", "trade"], "availability": _ex["uk"],
-        "summary": f"Balances on {_ex['product']}. Start read-only; add a trade key later if you want OpenPF to "
-                   "place the crypto orders you approve.",
+        "summary": f"Balances on {_ex['product']}, read-only or read + trade. With a trade key OpenPF can buy and "
+                   "sell the crypto orders you approve; no key can ever withdraw.",
         "key_url": _ex["key_url"], "read_steps": _ex.get("read_steps") or [], "trade_steps": _ex["key_steps"],
+        "permissions": {mode: [{"label": label, "state": state} for label, state in rows]
+                        for mode, rows in (_ex.get("permissions") or {}).items()},
+        "upgrade": _ex.get("upgrade"),
         "notes": _ex["notes"], "fees": _ex["fees"], "quote": _ex["quote"],
         "fields": [
             {"key": "api_key", "label": "API key name" if _ex["id"] == "coinbase" else "API key", "secret": _SECRET,
@@ -167,19 +170,22 @@ def public_catalog() -> dict[str, Any]:
         item = {k: v for k, v in p.items() if k not in {"hosts"}}
         if sandbox:
             item["sandbox_values"] = sandbox_values(p["id"])
+            if p["id"] in EXCHANGES:
+                item["sandbox_trade_values"] = sandbox_values(p["id"], "trade")
         items.append(item)
     return {"groups": [{"id": g, "label": label} for g, label in GROUPS], "providers": items,
             "unavailable": UNAVAILABLE, "sandbox": sandbox}
 
 
-def sandbox_values(provider_id: str) -> dict[str, str]:
-    """The fake credentials a sandbox instance accepts (prefilled in the form)."""
+def sandbox_values(provider_id: str, mode: str = "read") -> dict[str, str]:
+    """The fake credentials a sandbox instance accepts (prefilled in the form).
+    Crypto trade mode gets the mock exchange's trade key (only the mock Kraken trades)."""
     from app.services.provider_clients import SANDBOX_TOKENS
 
     if provider_id in EXCHANGES:
-        from app.services.crypto_sandbox import SANDBOX_READ_CREDENTIALS
+        from app.services.crypto_sandbox import SANDBOX_CRYPTO_CREDENTIALS, SANDBOX_READ_CREDENTIALS
 
-        return dict(SANDBOX_READ_CREDENTIALS)
+        return dict(SANDBOX_CRYPTO_CREDENTIALS if mode == "trade" else SANDBOX_READ_CREDENTIALS)
     values = dict(SANDBOX_TOKENS.get(provider_id) or {})
     if provider_id == "alpaca":
         values["environment"] = "paper"

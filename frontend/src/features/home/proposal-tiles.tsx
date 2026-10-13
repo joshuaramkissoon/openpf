@@ -552,7 +552,7 @@ export function ProposalTile({
           <X className="size-3.5" />
         </IconAction>
         {readOnlyPlacement(intent) ? (
-          <ReadOnlyNote broker={readOnlyPlacement(intent)!} />
+          <ReadOnlyNote broker={readOnlyPlacement(intent)!} accountKind={intent.account_kind} />
         ) : (
         <div className="ml-auto flex items-center gap-1.5">
           {later ? (
@@ -700,7 +700,7 @@ export function HeldTile({
           <button
             type="button"
             className="whitespace-nowrap underline decoration-muted-foreground/40 underline-offset-2 transition-colors hover:text-foreground"
-            onClick={() => navigate(`/settings/risk?focus=${fields.join(",") || "max_daily_notional"}`)}
+            onClick={() => navigate(`/settings/safety?focus=${fields.join(",") || "max_daily_notional"}`)}
           >
             Change limits
           </button>
@@ -710,7 +710,7 @@ export function HeldTile({
       <footer className={cn("mt-auto flex items-center gap-1", compact ? "pt-2.5" : "pt-3")}>
         {readOnlyPlacement(intent) ? (
           // A read-only account (IBKR, SnapTrade, …): OpenPF can't place it, so the user does it there.
-          <ReadOnlyNote broker={readOnlyPlacement(intent)!} className="ml-0" />
+          <ReadOnlyNote broker={readOnlyPlacement(intent)!} accountKind={intent.account_kind} className="ml-0" />
         ) : placeMyself ? (
           <Button size="sm" variant="outline" className="h-7 gap-1.5 bg-card px-2.5 text-xs" disabled={working} onClick={placeMyself}>
             <Hand className="size-3.5" />

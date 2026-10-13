@@ -607,7 +607,7 @@ def execute_intent(
             raise ExecutionError(f"live execution is disabled for {resolved_account} (enable it in Settings)")
         if not exec_creds.get("t212_api_key") or not exec_creds.get("t212_api_secret"):
             raise ExecutionError(
-                f"no execution key configured for {resolved_account} (add it in Settings → Credentials)"
+                f"no execution key configured for {resolved_account} (add a trade key in Settings → Accounts → Trading 212)"
             )
         client = build_t212_client(config, account_kind=resolved_account, purpose="execute")  # type: ignore[arg-type]
         signed_qty = intent.quantity if intent.side == "buy" else -abs(intent.quantity)

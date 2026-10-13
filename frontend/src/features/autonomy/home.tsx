@@ -109,7 +109,7 @@ export function PermissionSuggestionRow({ s, onDismiss }: { s: PermissionSuggest
           {caveat ? `${caveat} ` : ""}Daily cap £{Math.round(s.daily_cap_gbp).toLocaleString()}; you can change or revoke it any time.
         </p>
         <div className="flex gap-2 pt-0.5">
-          <Button size="sm" className="h-7 text-xs" onClick={() => navigate(`/settings/permissions?suggestion=${s.id}`)}>
+          <Button size="sm" className="h-7 text-xs" onClick={() => navigate(`/settings/safety?section=permissions&suggestion=${s.id}`)}>
             Review &amp; grant
           </Button>
           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onDismiss}>

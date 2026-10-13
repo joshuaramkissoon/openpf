@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
+  ArrowLeftRight,
   ArrowUpRight,
+  Check,
   Eye,
+  Globe,
   KeyRound,
   Link2,
   Loader2,
   Plus,
   RefreshCw,
   ShieldAlert,
-  ShieldCheck,
   Trash2,
   X,
 } from "lucide-react"
@@ -41,12 +43,16 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { reloadAccounts } from "@/lib/accounts"
 import { parseApiError } from "@/lib/api-error"
-import { useAppActions } from "@/lib/app-actions"
 import { reloadCryptoStatus } from "@/lib/crypto-status"
+import { navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
+import type { AppConfig } from "@/types"
+import { T212KeysPanel } from "./t212-keys"
+import { Disclosure } from "./ui"
 
 /* ── small helpers ─────────────────────────────────────────────────────── */
 
@@ -137,6 +143,8 @@ function StatusLine({ c }: { c: Connection }) {
 function ConnectionRow({
   c,
   busy,
+  upgradeNote,
+  onManage,
   onSync,
   onReconnect,
   onRemove,
@@ -144,14 +152,16 @@ function ConnectionRow({
 }: {
   c: Connection
   busy: boolean
+  upgradeNote: string | null
+  onManage: () => void
   onSync: () => void
   onReconnect: (mode: ConnectionMode) => void
   onRemove: () => void
   onLink: () => void
 }) {
-  const { navigate } = useAppActions()
   const total = c.accounts.reduce((s, a) => s + (a.value_gbp ?? 0), 0)
-  const canUpgrade = c.can_trade_provider && c.mode === "read" && c.type === "crypto" && !c.sandbox
+  const readOnlyCrypto = c.can_trade_provider && c.mode === "read" && c.type === "crypto"
+  const canUpgrade = readOnlyCrypto && !c.sandbox
   return (
     <li className="group rounded-xl border border-border bg-card/40 transition-colors hover:border-foreground/15">
       <div className="flex flex-wrap items-start gap-3 p-4">
@@ -168,9 +178,9 @@ function ConnectionRow({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {c.managed_in ? (
-            <Button variant="outline" size="sm" onClick={() => navigate(c.managed_in!)}>
+            <Button variant="outline" size="sm" onClick={onManage}>
               <KeyRound className="size-3.5" />
-              Manage keys
+              Keys
             </Button>
           ) : (
             <>
@@ -178,11 +188,6 @@ function ConnectionRow({
                 <Button variant="ghost" size="sm" disabled={busy} onClick={onLink} title="Link another broker on SnapTrade">
                   <Link2 className="size-3.5" />
                   Link broker
-                </Button>
-              ) : null}
-              {canUpgrade ? (
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => onReconnect("trade")}>
-                  Enable trading
                 </Button>
               ) : null}
               <Button variant="ghost" size="sm" disabled={busy} onClick={() => onReconnect(c.mode)}>
@@ -236,6 +241,22 @@ function ConnectionRow({
           ) : null}
         </ul>
       ) : null}
+      {readOnlyCrypto ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/70 bg-muted/30 px-4 py-3">
+          <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground sm:pl-12">
+            <span className="font-medium text-foreground">Read-only.</span>{" "}
+            {c.sandbox
+              ? "Archie can suggest trades here but can't place them. In the sandbox only the mock Kraken account trades."
+              : `Archie can suggest trades here but can't buy or sell. Add a trade key to let him place the orders you approve. ${upgradeNote ?? ""}`}
+          </p>
+          {canUpgrade ? (
+            <Button size="sm" disabled={busy} onClick={() => onReconnect("trade")}>
+              <ArrowLeftRight className="size-3.5" />
+              Enable trading
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {c.trade_note && c.mode === "read" ? (
         <p className="border-t border-border/70 px-4 py-2 text-xs text-muted-foreground">
           <span className="pl-12">{c.trade_note}</span>
@@ -246,6 +267,118 @@ function ConnectionRow({
 }
 
 /* ── the add / reconnect panel ─────────────────────────────────────────── */
+
+const MODE_COPY: Record<ConnectionMode, { title: string; body: string; icon: typeof Eye }> = {
+  read: {
+    title: "Read only",
+    body: "OpenPF sees balances and holdings. Archie can suggest trades; you place them on the exchange.",
+    icon: Eye,
+  },
+  trade: {
+    title: "Read + trade",
+    body: "Archie can buy and sell here — only the orders you approve, inside your limits. The key can never withdraw.",
+    icon: ArrowLeftRight,
+  },
+}
+
+/** Read only vs Read + trade, as two equal, explicit choices. */
+function ModeChoice({ value, onChange }: { value: ConnectionMode; onChange: (m: ConnectionMode) => void }) {
+  return (
+    <div role="radiogroup" aria-label="What OpenPF can do with this account" className="grid gap-2 sm:grid-cols-2">
+      {(["read", "trade"] as ConnectionMode[]).map((m) => {
+        const { title, body, icon: Icon } = MODE_COPY[m]
+        const on = value === m
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(m)}
+            className={cn(
+              "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors",
+              on ? "border-foreground/40 bg-muted/60" : "border-border hover:border-foreground/20 hover:bg-muted/30",
+            )}
+          >
+            <span
+              aria-hidden
+              className={cn(
+                "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
+                on ? "border-foreground" : "border-muted-foreground/50",
+              )}
+            >
+              {on ? <span className="size-2 rounded-full bg-foreground" /> : null}
+            </span>
+            <span className="min-w-0 space-y-0.5">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                <Icon className="size-3.5 text-muted-foreground" />
+                {title}
+              </span>
+              <span className="block text-xs leading-relaxed text-muted-foreground">{body}</span>
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** The exchange's key boxes as a checklist: what to tick, what to leave off. */
+function PermissionChecklist({ provider, mode }: { provider: Provider; mode: ConnectionMode }) {
+  const rows = provider.permissions?.[mode]
+  if (!rows?.length) return null
+  // "Funds · Query Funds" → grouped under "Funds", as on the exchange's page.
+  const groups: [string, typeof rows][] = []
+  for (const r of rows) {
+    const group = r.label.includes(" · ") ? r.label.split(" · ")[0] : ""
+    const last = groups[groups.length - 1]
+    if (last && last[0] === group) last[1].push(r)
+    else groups.push([group, [r]])
+  }
+  return (
+    <div className="rounded-lg border border-border">
+      <p className="border-b border-border/70 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        On {provider.label}'s key page
+      </p>
+      {groups.map(([group, items]) => (
+        <div key={group || "all"}>
+          {group ? <p className="bg-muted/30 px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">{group}</p> : null}
+          <ul className="divide-y divide-border/50">
+            {items.map((r) => {
+              const name = r.label.includes(" · ") ? r.label.split(" · ").slice(1).join(" · ") : r.label
+              const never = r.state === "off" && /withdraw/i.test(r.label)
+              return (
+                <li key={r.label} className="flex items-center gap-2.5 px-3 py-1.5 text-sm">
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "grid size-4 shrink-0 place-items-center rounded-[4px] border",
+                      r.state === "on" ? "border-positive bg-positive text-background" : "border-muted-foreground/40",
+                      r.state === "optional" && "border-dashed",
+                    )}
+                  >
+                    {r.state === "on" ? <Check className="size-3" strokeWidth={3} /> : null}
+                  </span>
+                  <span className={cn("min-w-0 flex-1", r.state === "off" && "text-muted-foreground")}>{name}</span>
+                  <span
+                    className={cn(
+                      "shrink-0 text-[11px]",
+                      r.state === "on" && "font-medium text-positive",
+                      r.state === "off" && (never ? "font-medium text-negative" : "text-muted-foreground"),
+                      r.state === "optional" && "text-muted-foreground",
+                    )}
+                  >
+                    {r.state === "on" ? "Tick" : r.state === "optional" ? "Optional" : never ? "Never" : "Leave off"}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function GuidePanel({
   provider,
@@ -262,8 +395,11 @@ function GuidePanel({
   onDone: (msg: string, link?: string | null) => void
   onCancel: () => void
 }) {
-  const [mode, setMode] = useState<ConnectionMode>(provider.modes.includes(initialMode) ? initialMode : "read")
-  const [values, setValues] = useState<Record<string, string>>(() => ({ ...(sandbox ? provider.sandbox_values ?? {} : {}) }))
+  const canTrade = provider.modes.includes("trade")
+  const sandboxValues = (m: ConnectionMode) =>
+    sandbox ? { ...((m === "trade" ? provider.sandbox_trade_values : null) ?? provider.sandbox_values ?? {}) } : {}
+  const [mode, setMode] = useState<ConnectionMode>(canTrade && initialMode === "trade" ? "trade" : "read")
+  const [values, setValues] = useState<Record<string, string>>(() => sandboxValues(mode))
   const [working, setWorking] = useState(false)
   const [refusal, setRefusal] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
@@ -273,7 +409,14 @@ function GuidePanel({
 
   const steps = mode === "trade" ? provider.trade_steps ?? [] : provider.read_steps
   const ready = provider.fields.every((f) => f.options || values[f.key]?.trim())
-  const isT212 = provider.id === "t212"
+  const upgrading = Boolean(reconnect && reconnect.mode === "read" && mode === "trade")
+  const sandboxNoTrade = sandbox && mode === "trade" && !(provider.id === "kraken" && reconnect)
+
+  function pick(m: ConnectionMode) {
+    setMode(m)
+    setRefusal(null)
+    if (sandbox) setValues(sandboxValues(m))
+  }
 
   async function submit() {
     setWorking(true)
@@ -285,7 +428,7 @@ function GuidePanel({
         : await addConnection(provider.id, mode, fields)
       onDone(
         mode === "trade"
-          ? `${provider.label} connected for trading — orders still need your approval`
+          ? `${provider.label} connected for trading — Archie can now buy and sell there, on your approval`
           : `${provider.label} connected read-only`,
         res.link_url,
       )
@@ -302,7 +445,7 @@ function GuidePanel({
         <Monogram id={provider.id} label={provider.label} />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">
-            {reconnect ? `Reconnect ${provider.label}` : `Connect ${provider.label}`}
+            {upgrading ? `Enable trading on ${provider.label}` : reconnect ? `Reconnect ${provider.label}` : `Connect ${provider.label}`}
             <span className="font-normal text-muted-foreground"> · {provider.product}</span>
           </p>
           <p className="text-xs leading-relaxed text-muted-foreground">{provider.summary}</p>
@@ -312,160 +455,125 @@ function GuidePanel({
         </Button>
       </div>
 
-      <div className="grid gap-6 p-4 md:grid-cols-[1.1fr_1fr]">
-        <div className="space-y-4">
-          {provider.modes.length > 1 && !isT212 ? (
-            <div className="space-y-2">
-              <Segmented<ConnectionMode>
-                ariaLabel="Connection type"
-                value={mode}
-                onChange={(m) => {
-                  setMode(m)
-                  setRefusal(null)
-                }}
-                options={[
-                  { value: "read", label: "Read-only" },
-                  { value: "trade", label: "Trade" },
-                ]}
-              />
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                {mode === "read"
-                  ? "Start here. OpenPF sees balances and holdings; nothing can be bought, sold or moved. You can add a trade key later."
-                  : "A trade key lets OpenPF place the orders you approve. It must never be able to withdraw — OpenPF checks and refuses one that can."}
-              </p>
-            </div>
-          ) : null}
-
-          <div
-            className={cn(
-              "flex items-start gap-2.5 rounded-lg p-3 text-sm leading-relaxed",
-              mode === "trade" ? "bg-warning/10" : "bg-positive/5",
-            )}
-          >
-            {mode === "trade" ? (
-              <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
-            ) : (
-              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-positive" />
-            )}
-            <p>
-              {mode === "trade" ? (
-                <>
-                  <span className="font-medium">Trade, never withdraw.</span> Tick only the permissions below. {provider.notes}
-                </>
-              ) : (
-                <>
-                  <span className="font-medium">Read-only key.</span> Tick only the permissions in these steps — anything
-                  else stays off.
-                </>
-              )}
-            </p>
+      <div className="space-y-5 p-4">
+        {canTrade ? (
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">What should OpenPF be able to do?</p>
+            <ModeChoice value={mode} onChange={pick} />
           </div>
+        ) : provider.trade_note ? (
+          <p className="flex items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+            <Eye className="mt-0.5 size-3.5 shrink-0" />
+            {provider.trade_note}
+          </p>
+        ) : null}
 
-          <ol className="relative space-y-3 pl-8">
-            <span aria-hidden className="absolute bottom-2 left-[11px] top-2 w-px bg-border" />
-            {steps.map((s, i) => (
-              <li key={s} className="relative text-sm leading-relaxed">
-                <span className="absolute -left-8 top-0 grid size-[23px] place-items-center rounded-full border border-border bg-background font-mono text-[11px] text-muted-foreground">
-                  {i + 1}
-                </span>
-                {s}
-              </li>
-            ))}
-          </ol>
-          {provider.key_url ? (
-            <a
-              href={provider.key_url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 pl-8 text-xs text-primary hover:underline"
-            >
-              Open {provider.label} <ArrowUpRight className="size-3" />
-            </a>
-          ) : null}
-          <p className="text-[11px] leading-relaxed text-muted-foreground">{provider.availability}</p>
-        </div>
+        <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+          <Globe className="mt-0.5 size-3.5 shrink-0" />
+          {provider.availability}
+        </p>
 
-        {isT212 ? (
-          <div className="space-y-3 self-start rounded-lg border border-dashed border-border p-4 text-sm">
-            <p className="leading-relaxed text-muted-foreground">
-              Trading 212 keys live under Broker &amp; keys, with a separate read key and IP-restricted execution key per account.
-            </p>
-            <ManageT212 />
-          </div>
-        ) : (
-          <form
-            className="space-y-3 self-start"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void submit()
-            }}
-          >
-            {provider.fields.map((f) =>
-              f.options ? (
-                <div key={f.key} className="space-y-1.5">
-                  <Label>{f.label}</Label>
-                  <Segmented<string>
-                    ariaLabel={f.label}
-                    value={values[f.key] || f.options[0][0]}
-                    onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))}
-                    options={f.options.map(([value, label]) => ({ value, label }))}
-                  />
-                </div>
-              ) : (
-                <div key={f.key} className="space-y-1.5">
-                  <Label htmlFor={`conn-${f.key}`}>{f.label}</Label>
-                  {f.multiline ? (
-                    <Textarea
-                      id={`conn-${f.key}`}
-                      spellCheck={false}
-                      value={values[f.key] ?? ""}
-                      onChange={(e) => setValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
-                      placeholder={f.placeholder}
-                      className="min-h-24 font-mono text-xs"
-                    />
-                  ) : (
-                    <Input
-                      id={`conn-${f.key}`}
-                      type={f.secret ? "password" : "text"}
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={values[f.key] ?? ""}
-                      onChange={(e) => setValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
-                      placeholder={f.placeholder}
-                      className="font-mono text-xs"
-                    />
-                  )}
-                </div>
-              ),
-            )}
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Encrypted in this app's database, never shown again, never given to Archie.
-              {sandbox ? " Sandbox: these are fake fixture keys — nothing real is contacted." : ""}
-            </p>
-            {refusal ? (
-              <p role="alert" className="flex items-start gap-2 rounded-lg border border-negative/30 bg-negative/5 p-3 text-sm">
-                <ShieldAlert className="mt-0.5 size-4 shrink-0 text-negative" />
-                <span>{refusal}</span>
-              </p>
+        <div className="grid gap-6 md:grid-cols-[1.15fr_1fr]">
+          <div className="space-y-4">
+            {upgrading && provider.upgrade ? (
+              <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm leading-relaxed">{provider.upgrade}</p>
             ) : null}
-            <Button type="submit" size="sm" disabled={working || !ready}>
-              {working ? <Loader2 className="size-3.5 animate-spin" /> : <KeyRound className="size-3.5" />}
-              {working ? "Checking with " + provider.label + "…" : "Verify & connect"}
-            </Button>
-          </form>
-        )}
+
+            <ol className="relative space-y-3 pl-8">
+              <span aria-hidden className="absolute bottom-2 left-[11px] top-2 w-px bg-border" />
+              {steps.map((s, i) => (
+                <li key={s} className="relative text-sm leading-relaxed">
+                  <span className="absolute -left-8 top-0 grid size-[23px] place-items-center rounded-full border border-border bg-background font-mono text-[11px] text-muted-foreground">
+                    {i + 1}
+                  </span>
+                  {s}
+                </li>
+              ))}
+            </ol>
+            {provider.key_url ? (
+              <a
+                href={provider.key_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 pl-8 text-xs text-primary hover:underline"
+              >
+                Open {provider.label}'s API page <ArrowUpRight className="size-3" />
+              </a>
+            ) : null}
+          </div>
+
+          <div className="space-y-4 self-start">
+            <PermissionChecklist provider={provider} mode={mode} />
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void submit()
+              }}
+            >
+              {provider.fields.map((f) =>
+                f.options ? (
+                  <div key={f.key} className="space-y-1.5">
+                    <Label>{f.label}</Label>
+                    <Segmented<string>
+                      ariaLabel={f.label}
+                      value={values[f.key] || f.options[0][0]}
+                      onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))}
+                      options={f.options.map(([value, label]) => ({ value, label }))}
+                    />
+                  </div>
+                ) : (
+                  <div key={f.key} className="space-y-1.5">
+                    <Label htmlFor={`conn-${f.key}`}>{f.label}</Label>
+                    {f.multiline ? (
+                      <Textarea
+                        id={`conn-${f.key}`}
+                        spellCheck={false}
+                        value={values[f.key] ?? ""}
+                        onChange={(e) => setValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
+                        placeholder={f.placeholder}
+                        className="min-h-24 font-mono text-xs"
+                      />
+                    ) : (
+                      <Input
+                        id={`conn-${f.key}`}
+                        type={f.secret ? "password" : "text"}
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={values[f.key] ?? ""}
+                        onChange={(e) => setValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
+                        placeholder={f.placeholder}
+                        className="font-mono text-xs"
+                      />
+                    )}
+                  </div>
+                ),
+              )}
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Encrypted in this app's database, never shown again, never given to Archie.
+                {mode === "trade" ? " A key that can withdraw is refused." : ""}
+                {sandbox ? " Sandbox: fake fixture keys — nothing real is contacted." : ""}
+              </p>
+              {sandboxNoTrade ? (
+                <p className="rounded-lg bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+                  In the sandbox only the mock Kraken account trades — try buying there. Connect this one read-only.
+                </p>
+              ) : null}
+              {refusal ? (
+                <p role="alert" className="flex items-start gap-2 rounded-lg border border-negative/30 bg-negative/5 p-3 text-sm">
+                  <ShieldAlert className="mt-0.5 size-4 shrink-0 text-negative" />
+                  <span>{refusal}</span>
+                </p>
+              ) : null}
+              <Button type="submit" size="sm" disabled={working || !ready}>
+                {working ? <Loader2 className="size-3.5 animate-spin" /> : <KeyRound className="size-3.5" />}
+                {working ? `Checking with ${provider.label}…` : mode === "trade" ? "Verify & connect for trading" : "Verify & connect read-only"}
+              </Button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
-  )
-}
-
-function ManageT212() {
-  const { navigate } = useAppActions()
-  return (
-    <Button variant="outline" size="sm" onClick={() => navigate("/settings/broker")}>
-      <KeyRound className="size-3.5" />
-      Open Broker &amp; keys
-    </Button>
   )
 }
 
@@ -508,7 +616,7 @@ function ProviderPicker({
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm">{p.label}</span>
                         <span className="block truncate text-[11px] text-muted-foreground">
-                          {p.modes.includes("trade") ? "Read · trade on approval" : "Read-only"}
+                          {p.modes.includes("trade") ? "Read only, or read + trade" : "Read only"}
                         </span>
                       </span>
                       {isConnected ? <span className="text-[10px] text-positive">Connected</span> : null}
@@ -535,14 +643,28 @@ function ProviderPicker({
 
 /* ── the page ──────────────────────────────────────────────────────────── */
 
-/** Settings → Connections: every broker, exchange and aggregator in one list. */
-export function ConnectionsSettings() {
+/**
+ * Settings → Accounts: every broker, exchange and aggregator in one list.
+ * `?manage=t212` opens the Trading 212 keys; `?add=<provider>` opens that guide.
+ */
+export function AccountsSettings({
+  config,
+  onConfigChanged,
+  manage,
+  add,
+}: {
+  config: AppConfig | null
+  onConfigChanged: () => void
+  manage: string | null
+  add: string | null
+}) {
   const [catalog, setCatalog] = useState<ProviderCatalog | null>(null)
   const [connections, setConnections] = useState<Connection[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [picked, setPicked] = useState<{ provider: Provider; reconnect: Connection | null; mode: ConnectionMode } | null>(null)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<Connection | null>(null)
+  const t212Open = manage === "t212"
 
   const load = useCallback(async () => {
     try {
@@ -568,6 +690,32 @@ export function ConnectionsSettings() {
   const accountsCount = (connections ?? []).reduce((n, c) => n + c.accounts.length, 0)
   const readOnly = (connections ?? []).filter((c) => !c.capabilities.includes("trade")).length
   const total = (connections ?? []).reduce((s, c) => s + c.accounts.reduce((t, a) => t + (a.value_gbp ?? 0), 0), 0)
+
+  const setT212 = (open: boolean) => navigate(open ? "/settings/accounts?manage=t212" : "/settings/accounts", { replace: true })
+
+  /** Open a provider's guide. A connected one reopens in its CURRENT mode, so reconnecting never downgrades a trade key. */
+  const openProvider = useCallback(
+    (p: Provider) => {
+      if (p.id === "t212") {
+        setAdding(false)
+        setPicked(null)
+        navigate("/settings/accounts?manage=t212", { replace: true })
+        return
+      }
+      const existing = (connections ?? []).find((c) => c.provider === p.id && c.type === "crypto") ?? null
+      setAdding(true)
+      setPicked({ provider: p, reconnect: existing, mode: existing?.mode ?? "read" })
+    },
+    [connections],
+  )
+
+  // Deep link: ?add=binance opens that guide.
+  useEffect(() => {
+    if (!add || !catalog || connections === null) return
+    const p = catalog.providers.find((x) => x.id === add)
+    if (p) openProvider(p)
+    navigate(t212Open ? "/settings/accounts?manage=t212" : "/settings/accounts", { replace: true })
+  }, [add, catalog, connections, openProvider, t212Open])
 
   async function run(id: string, fn: () => Promise<{ connections: Connection[] }>, ok?: string) {
     setBusy(id)
@@ -596,24 +744,19 @@ export function ConnectionsSettings() {
 
   return (
     <div className="space-y-8">
-      {connections ? (
-        <p className="text-sm text-muted-foreground">
-          {connections.length === 0 ? (
-            "Nothing connected yet."
-          ) : (
-            <>
-              <span className="text-foreground">{connections.length}</span> connection{connections.length === 1 ? "" : "s"} ·{" "}
-              <span className="text-foreground">{accountsCount}</span> account{accountsCount === 1 ? "" : "s"} ·{" "}
-              <Money value={total} decimals={0} className="text-foreground" /> in one book
-              {readOnly ? ` · ${readOnly} read-only` : ""}
-            </>
-          )}
-        </p>
-      ) : null}
-
       <Section
-        title="Connected"
-        description="Holdings from every account flow into one book. Archie analyses all of them and can only trade where it says Trades on approval."
+        title={
+          connections && connections.length ? (
+            <span className="font-normal text-muted-foreground">
+              <span className="font-medium text-foreground">{connections.length}</span> connection{connections.length === 1 ? "" : "s"} ·{" "}
+              <span className="font-medium text-foreground">{accountsCount}</span> account{accountsCount === 1 ? "" : "s"} ·{" "}
+              <Money value={total} decimals={0} className="font-medium text-foreground" />
+              {readOnly ? ` · ${readOnly} read-only` : ""}
+            </span>
+          ) : (
+            "Connected"
+          )
+        }
         action={
           <Button
             size="sm"
@@ -624,25 +767,30 @@ export function ConnectionsSettings() {
             }}
           >
             {adding ? <X className="size-3.5" /> : <Plus className="size-3.5" />}
-            {adding ? "Close" : "Add connection"}
+            {adding ? "Close" : "Add account"}
           </Button>
         }
       >
         {connections === null ? (
-          <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading connections…
+          <div className="space-y-2.5">
+            <Skeleton className="h-24 w-full rounded-xl" />
+            <Skeleton className="h-16 w-full rounded-xl" />
           </div>
         ) : connections.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
-            Connect your first account. Read-only keys are enough to see everything in one place.
+          <div className="flex items-start gap-3 rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
+            <Link2 className="mt-0.5 size-4 shrink-0" />
+            <p>Connect your first account. Read-only is enough to see everything in one place; add trading where you want it.</p>
           </div>
         ) : (
           <ul className="space-y-2.5">
             {connections.map((c) => (
+              <Fragment key={c.id}>
               <ConnectionRow
                 key={c.id}
                 c={c}
                 busy={busy === c.id}
+                upgradeNote={providerById(c.provider)?.upgrade ?? null}
+                onManage={() => setT212(!t212Open)}
                 onSync={() => void run(c.id, () => syncConnection(c.id), `${c.label} synced`)}
                 onReconnect={(mode) => {
                   const p = providerById(c.provider)
@@ -653,23 +801,21 @@ export function ConnectionsSettings() {
                 onRemove={() => setRemoving(c)}
                 onLink={() => void openLink(c.id)}
               />
+              {c.provider === "t212" && t212Open ? (
+                <li>
+                  <T212KeysPanel config={config} onConfigChanged={onConfigChanged} onClose={() => setT212(false)} />
+                </li>
+              ) : null}
+              </Fragment>
             ))}
           </ul>
         )}
       </Section>
 
       {adding && catalog ? (
-        <Section title="Add a connection" description="Pick where your money is. Every provider starts read-only.">
+        <Section title="Add an account" description="Pick where your money is. You choose read-only or trading for each one.">
           <div className="space-y-5">
-            <ProviderPicker
-              catalog={catalog}
-              connected={connectedProviders}
-              picked={picked?.provider.id ?? null}
-              onPick={(p) => {
-                const existing = (connections ?? []).find((c) => c.provider === p.id && c.type === "crypto")
-                setPicked({ provider: p, reconnect: existing ?? null, mode: "read" })
-              }}
-            />
+            <ProviderPicker catalog={catalog} connected={connectedProviders} picked={picked?.provider.id ?? null} onPick={(p) => openProvider(p)} />
             {picked ? (
               <GuidePanel
                 key={`${picked.provider.id}:${picked.reconnect?.id ?? "new"}:${picked.mode}`}
@@ -693,14 +839,30 @@ export function ConnectionsSettings() {
         </Section>
       ) : null}
 
-      <Section title="How this stays safe">
-        <ul className="grid gap-x-6 gap-y-2 text-sm leading-relaxed text-muted-foreground sm:grid-cols-2">
-          <li>Keys are encrypted at rest, shown back only as the last few characters, and never reach Archie.</li>
-          <li>Keys that can withdraw or transfer are refused — for every provider, in every mode.</li>
-          <li>Read-only accounts can't execute: a suggestion there says “Place it in &lt;broker&gt;”.</li>
-          <li>Every order, anywhere, still needs your approval (or a standing permission you set).</li>
-        </ul>
-      </Section>
+      <div className="space-y-4">
+        <Disclosure label="How your keys stay safe">
+          <ul className="grid gap-x-6 gap-y-2 text-sm leading-relaxed text-muted-foreground sm:grid-cols-2">
+            <li>Keys are encrypted at rest, shown back only as the last few characters, and never reach Archie.</li>
+            <li>Keys that can withdraw or transfer are refused — for every provider, in every mode.</li>
+            <li>On a read-only account a suggestion says “Place it in &lt;broker&gt;” — OpenPF can't execute there.</li>
+            <li>Every order, anywhere, still needs your approval (or a standing permission you set) and passes your limits.</li>
+          </ul>
+        </Disclosure>
+        <Disclosure label="Before you buy crypto (UK)">
+          <ul className="list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted-foreground">
+            <li>
+              Crypto held on an exchange is <span className="text-foreground">not covered by the FSCS</span>. If the exchange fails or is
+              hacked, you may not get it back.
+            </li>
+            <li>
+              Selling, swapping or spending crypto is a disposal for <span className="text-foreground">Capital Gains Tax</span>. Keep a
+              record of every buy and sell.
+            </li>
+            <li>UK investors can also get crypto exposure through exchange-traded notes (ETNs) at a regular broker — a different product with its own fees and risks.</li>
+            <li>Crypto prices are far more volatile than shares; falls of more than 70% have happened more than once.</li>
+          </ul>
+        </Disclosure>
+      </div>
 
       <AlertDialog open={removing !== null} onOpenChange={(o) => !o && setRemoving(null)}>
         <AlertDialogContent>

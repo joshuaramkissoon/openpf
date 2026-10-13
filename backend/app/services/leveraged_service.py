@@ -881,7 +881,7 @@ def execute_signal(db: Session, signal_id: str, source: str = "manual") -> Lever
         if not exec_creds.get("exec_enabled", True):
             raise LeveragedError("live execution is disabled for stocks_isa (enable it in Settings)")
         if not exec_creds.get("t212_api_key") or not exec_creds.get("t212_api_secret"):
-            raise LeveragedError("no execution key configured for stocks_isa (add it in Settings → Credentials)")
+            raise LeveragedError("no execution key configured for stocks_isa (add a trade key in Settings → Accounts → Trading 212)")
         client = build_t212_client(store, account_kind="stocks_isa", purpose="execute")
         try:
             resp = client.place_market_order(signal.instrument_code, qty)

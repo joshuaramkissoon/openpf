@@ -5,7 +5,7 @@ holds one or more *accounts*; each account has an ``account_kind`` key that
 snapshots, holdings, the book and trade intents use:
 
 * Trading 212 — ``invest`` / ``stocks_isa``. Keys stay where they always were
-  (the ``credentials`` row, Settings → Broker & keys); the connection is a view
+  (the ``credentials`` row, Settings → Accounts → Trading 212); the connection is a view
   over them, so behaviour is unchanged.
 * The original crypto connection — ``crypto`` (the ``crypto_config`` row).
 * Connections added here — stored in the ``connections`` row with their secrets
@@ -284,7 +284,7 @@ def list_connections(db: Session) -> dict[str, Any]:
             "detail": f"{store.get_broker().get('t212_base_env', 'demo')} environment · "
                       f"{'execution key set' if any_trade else 'read key only'}",
             "mode": "trade" if any_trade else "read", "capabilities": ["read", "trade"] if any_trade else ["read"],
-            "can_trade_provider": True, "managed_in": "/settings/broker", "enabled": True,
+            "can_trade_provider": True, "managed_in": "/settings/accounts?manage=t212", "enabled": True,
             "status": _status_from_snapshots([a for a in configured], status.get(T212_ID)),
             "accounts": configured, "sandbox": is_sandbox(), "removable": False,
         })
@@ -375,7 +375,7 @@ def add_connection(db: Session, provider_id: str, fields: dict[str, Any], *, mod
     spec = catalog.provider(provider_id)
     if spec is None or provider_id == "t212":
         raise ConnectionError_("Pick a provider from the list." if spec is None else
-                               "Trading 212 keys are managed under Settings → Broker & keys.")
+                               "Trading 212 keys are managed under Settings → Accounts → Trading 212.")
     mode = (mode or "read").strip().lower()
     if mode not in spec["modes"]:
         raise ConnectionError_(f"OpenPF can't trade on {spec['label']} — connect it read-only.")
@@ -397,7 +397,7 @@ def add_connection(db: Session, provider_id: str, fields: dict[str, Any], *, mod
             if cfg["exchange"] == provider_id and cfg.get("id") != conn_id:
                 raise ConnectionError_(f"{spec['label']} is already connected — use Reconnect on it to change the key.")
         if is_sandbox() and mode == "trade":
-            raise ConnectionError_("In the sandbox only the original mock Kraken account trades; connect this one read-only.")
+            raise ConnectionError_("In the sandbox only the mock Kraken account trades (it's already connected for trading); connect this one read-only.")
         try:
             key, sec, perms, fees = crypto_service.verify_key(provider_id, secret.get("api_key", ""),
                                                               secret.get("api_secret", ""), mode)
@@ -567,7 +567,7 @@ def remove_connection(db: Session, conn_id: str) -> None:
 
     store = ConfigStore(db)
     if conn_id == T212_ID:
-        raise ConnectionError_("Trading 212 keys are managed under Settings → Broker & keys.")
+        raise ConnectionError_("Trading 212 keys are managed under Settings → Accounts → Trading 212.")
     if conn_id == CRYPTO_ACCOUNT:
         if is_sandbox():
             raise ConnectionError_("The sandbox's mock Kraken account can't be removed.")

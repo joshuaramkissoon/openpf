@@ -153,7 +153,7 @@ export function SidebarBody({
           label="Settings"
           active={section === "settings"}
           collapsed={collapsed}
-          onClick={() => go("/settings/general")}
+          onClick={() => go("/settings")}
         />
         {collapsed && onToggleCollapsed ? (
           <SidebarNavItem icon={PanelLeftOpen} label="Expand sidebar" collapsed onClick={onToggleCollapsed} />

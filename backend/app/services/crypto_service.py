@@ -598,7 +598,7 @@ def propose_crypto_trade(
         return _fail("crypto proposals are market orders (sized in GBP); drop limit/stop prices")
     account = resolve_account(store, account_kind)
     if not is_connected(store, account):
-        return _fail("no crypto exchange is connected — the user connects one (trade-only key) in Settings → Connections")
+        return _fail("no crypto exchange is connected — the user connects one (trade-only key) in Settings → Accounts")
     cfg = get_config(store, account)
     client = client_for(store, account)
     try:
