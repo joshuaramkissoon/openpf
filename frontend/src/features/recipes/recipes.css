@@ -1,0 +1,115 @@
+/* Recipe pages: calm, editorial. Motion is slow and small; everything respects reduced motion. */
+
+@keyframes recipe-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50% { transform: scale(2.2); opacity: 0; }
+}
+.recipe-breathe { animation: recipe-breathe 3.2s ease-in-out infinite; }
+
+@keyframes recipe-unfold {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.recipe-unfold { animation: recipe-unfold 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+/* Sample report: faint ruled paper + quiet text lines. */
+.recipe-paper {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in oklab, var(--primary) 7%, transparent), transparent 60%),
+    repeating-linear-gradient(to bottom, transparent 0 27px, color-mix(in oklab, var(--border) 45%, transparent) 27px 28px);
+  mask-image: linear-gradient(to right, black, transparent 85%);
+  opacity: 0.7;
+}
+.recipe-line {
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--muted-foreground) 16%, transparent);
+}
+@keyframes recipe-writing {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.recipe-writing .recipe-line {
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--muted-foreground) 14%, transparent) 30%,
+    color-mix(in oklab, var(--primary) 35%, transparent) 50%,
+    color-mix(in oklab, var(--muted-foreground) 14%, transparent) 70%);
+  background-size: 200% 100%;
+  animation: recipe-writing 2.4s linear infinite;
+}
+
+/* Steps: a numbered timeline joined by a hairline. */
+.recipe-steps { list-style: none; margin: 0; padding: 0; }
+@keyframes recipe-step-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+.recipe-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  column-gap: 0.875rem;
+  animation: recipe-step-in 320ms ease-out both;
+}
+.recipe-step::before {
+  content: '';
+  position: absolute;
+  left: calc(0.75rem - 0.5px);
+  top: 1.75rem;
+  bottom: 0.25rem;
+  width: 1px;
+  background: var(--border);
+}
+.recipe-step:last-child::before { display: none; }
+.recipe-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.recipe-step:first-child .recipe-step-n {
+  border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
+  color: var(--primary);
+}
+
+/* Runs: compact dots on a rail. */
+.recipe-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+.recipe-runs::before {
+  content: '';
+  position: absolute;
+  left: 2.5px;
+  top: 0.75rem;
+  bottom: 0.75rem;
+  width: 1px;
+  background: var(--border);
+}
+.recipe-run {
+  position: relative;
+  display: grid;
+  grid-template-columns: 6px 5.25rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.75rem;
+  padding: 0.4rem 0.25rem 0.4rem 0;
+  border-radius: 0.5rem;
+}
+button.recipe-run:enabled:hover { background: color-mix(in oklab, var(--accent) 45%, transparent); }
+.recipe-run-dot { box-shadow: 0 0 0 3px var(--background); }
+
+@media (prefers-reduced-motion: reduce) {
+  .recipe-breathe, .recipe-writing .recipe-line, .recipe-unfold, .recipe-step { animation: none; }
+}
