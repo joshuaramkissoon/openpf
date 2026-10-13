@@ -89,9 +89,10 @@ def suggestions(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/suggestions")
 def generate_suggestions(payload: SuggestRequest | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Archie groups Unsorted holdings into suggested plays / Core. Nothing is applied."""
+    """Theme rules group Unsorted holdings at once; a fast model refines them in the
+    background (poll GET for ``refining``). Nothing is applied."""
     try:
-        return bs.generate_suggestions(db, use_model=payload.use_model if payload else True)
+        return bs.generate_suggestions(db, use_model=payload.use_model if payload else True, background=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("suggestions failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail=PORTFOLIO_UNAVAILABLE) from exc

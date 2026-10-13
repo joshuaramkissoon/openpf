@@ -20,11 +20,16 @@ import type { Suggestion, Suggestions } from './types'
  * Core ("NVDA, AVGO, TSM already form an AI-infra bet at 18%"). The user
  * accepts, edits or dismisses each one — nothing applies on its own.
  */
+const POLL_MS = 1200
+const MAX_REFINE_MS = 30000
+
 export function SortHoldingsSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [data, setData] = useState<Suggestions | null>(null)
   const [thinking, setThinking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refinedAt, setRefinedAt] = useState(0)
 
+  // Rules answer at once; the server refines in the background. Never blocks.
   async function regroup() {
     setThinking(true)
     setError(null)
@@ -45,7 +50,7 @@ export function SortHoldingsSheet({ open, onOpenChange }: { open: boolean; onOpe
       .then((d) => {
         if (!active) return
         setData(d)
-        if (!d.items.length && d.unsorted.length) void regroup()
+        if (!d.items.length && d.unsorted.length && !d.refining) void regroup()
       })
       .catch(() => active && setError('Your holdings are unavailable right now.'))
     return () => {
@@ -53,6 +58,34 @@ export function SortHoldingsSheet({ open, onOpenChange }: { open: boolean; onOpe
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // While Archie refines, poll quietly and swap the refined groups in.
+  const refining = Boolean(open && data?.refining)
+  useEffect(() => {
+    if (!refining) return
+    let active = true
+    const started = Date.now()
+    let timer: ReturnType<typeof setTimeout>
+    const tick = async () => {
+      try {
+        const d = await getSuggestions()
+        if (!active) return
+        if (!d.refining || Date.now() - started > MAX_REFINE_MS) {
+          if (d.source === 'archie') setRefinedAt(Date.now())
+          setData({ ...d, refining: false })
+          return
+        }
+      } catch {
+        if (!active) return
+      }
+      timer = setTimeout(tick, POLL_MS)
+    }
+    timer = setTimeout(tick, POLL_MS)
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [refining])
 
   function settled(id: string) {
     setData((d) => (d ? { ...d, items: d.items.filter((i) => i.id !== id) } : d))
@@ -80,7 +113,7 @@ export function SortHoldingsSheet({ open, onOpenChange }: { open: boolean; onOpe
             <div className="space-y-4">
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-3.5 animate-spin" />
-                Reading your {data?.unsorted.length ?? ''} unsorted holdings…
+                Grouping your {data?.unsorted.length ?? ''} unsorted holdings…
               </p>
               {[0, 1, 2].map((i) => (
                 <Skeleton key={i} className="h-32 w-full rounded-xl" />
@@ -98,9 +131,11 @@ export function SortHoldingsSheet({ open, onOpenChange }: { open: boolean; onOpe
             </div>
           ) : (
             <>
-              {data.items.map((s) => (
-                <SuggestionCard key={s.id} s={s} onDone={() => settled(s.id)} />
-              ))}
+              <div key={refinedAt} className={cn('space-y-4', refinedAt > 0 && 'animate-in fade-in duration-500')}>
+                {data.items.map((s) => (
+                  <SuggestionCard key={s.id} s={s} onDone={() => settled(s.id)} />
+                ))}
+              </div>
               {data.items.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No groupings stood out. Move holdings one at a time from Home, or regroup.</p>
               ) : null}
@@ -114,8 +149,19 @@ export function SortHoldingsSheet({ open, onOpenChange }: { open: boolean; onOpe
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
-          <p className="text-[11px] text-muted-foreground">
-            {data?.source === 'archie' ? 'Grouped by Archie' : data?.source === 'rules' ? 'Grouped by theme rules — Archie was unavailable' : ''}
+          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground" aria-live="polite">
+            {refining ? (
+              <>
+                <Loader2 className="size-3 animate-spin" />
+                Archie is refining…
+              </>
+            ) : data?.source === 'archie' ? (
+              'Grouped by Archie'
+            ) : data?.source === 'rules' ? (
+              data.refine_error ? `Grouped by theme rules · ${data.refine_error}` : 'Grouped by theme rules'
+            ) : (
+              ''
+            )}
           </p>
           <Button variant="ghost" size="sm" onClick={() => void regroup()} disabled={thinking || !data?.unsorted.length}>
             <RefreshCw className={cn('size-3.5', thinking && 'animate-spin')} />
