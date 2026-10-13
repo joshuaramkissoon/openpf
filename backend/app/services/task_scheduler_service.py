@@ -637,6 +637,20 @@ def _recipe_plugins() -> list[dict[str, str]]:
     return recipe_plugins()
 
 
+# Models that were only ever stored on tasks as the old defaults. A task still
+# carrying one follows Settings -> Models ("Scheduled investigations") instead,
+# so moving the default off Opus actually reaches existing installs; a model the
+# user picked deliberately for a task is kept.
+_LEGACY_DEFAULT_MODELS = {"", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"}
+
+
+def scheduled_model(task_model: str | None) -> str:
+    from app.services import model_routing
+
+    m = (task_model or "").strip()
+    return model_routing.sdk_model("scheduled_agent") if m in _LEGACY_DEFAULT_MODELS else m
+
+
 def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str, dict[str, Any], dict]:
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
@@ -674,7 +688,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
                 f"{REPORT_FORMAT}"
             ),
         },
-        model=task.model or settings.claude_model,
+        model=scheduled_model(task.model),
         cwd=str(cwd),
         setting_sources=setting_sources,
         allowed_tools=allowed_tools,
@@ -686,7 +700,9 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         permission_mode="acceptEdits",
         env=mcp_registry.sdk_env(),
         mcp_servers=mcp_servers,
-        max_turns=settings.agent_max_turns,
+        # Scheduled runs are capped: a runaway investigation stops, it doesn't bill.
+        max_turns=min(settings.agent_max_turns, settings.scheduled_max_turns),
+        max_budget_usd=settings.scheduled_max_budget_usd or None,
         hooks=build_security_hooks(),
         agents=build_subagents(),
         plugins=_recipe_plugins(),
@@ -702,6 +718,7 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
         async for message in query(prompt=_prompt, options=options):
             if isinstance(message, ResultMessage):
                 cost_info = {
+                    "model": options.model,
                     "total_cost_usd": getattr(message, "total_cost_usd", None),
                     "duration_ms": getattr(message, "duration_ms", None),
                     "num_turns": getattr(message, "num_turns", None),
@@ -717,6 +734,13 @@ def _run_claude_prompt(task: ScheduledTask, goal_context: str = "") -> tuple[str
     # it for the task's JSON block; the output itself keeps it so any caller of
     # _cron_log_path (scheduled tasks, recipes) stores it as frontmatter.
     summary, without_summary = extract_summary(output)
+    if not summary and output.strip():
+        # The agent forgot the summary block: one fast call extracts it.
+        from app.services.report_digest import summarize_report
+
+        summary = summarize_report(output)
+        if summary:
+            output = output.rstrip() + "\n\n```summary\n" + json.dumps(summary, ensure_ascii=False) + "\n```\n"
     if summary:
         meta["summary"] = summary
     parsed = _extract_json_block(without_summary)
@@ -1286,7 +1310,7 @@ def run_task_now(db: Session, task_id: str) -> dict[str, Any]:
                 db,
                 source="scheduled",
                 source_id=task.name,
-                model=task.model or settings.claude_model,
+                model=cost_info.get("model") or task.model or settings.claude_model,
                 total_cost_usd=cost_info.get("total_cost_usd"),
                 duration_ms=cost_info.get("duration_ms"),
                 num_turns=cost_info.get("num_turns"),
@@ -1348,7 +1372,7 @@ def start_task_background(db: Session, task_id: str) -> dict[str, Any]:
                         bg_db,
                         source="scheduled",
                         source_id=bg_task.name,
-                        model=bg_task.model or settings.claude_model,
+                        model=cost_info.get("model") or bg_task.model or settings.claude_model,
                         total_cost_usd=cost_info.get("total_cost_usd"),
                         duration_ms=cost_info.get("duration_ms"),
                         num_turns=cost_info.get("num_turns"),

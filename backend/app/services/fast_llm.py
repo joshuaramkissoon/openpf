@@ -71,6 +71,7 @@ class ProviderUnavailable(RuntimeError):
 class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
+    cost_usd: float | None = None  # when the provider reports cost itself (Agent SDK)
 
 
 @dataclass
@@ -178,6 +179,8 @@ def price_for(provider: str, model: str) -> tuple[float, float] | None:
 
 
 def cost_of(provider: str, model: str, usage: Usage) -> float | None:
+    if usage.cost_usd is not None:
+        return round(usage.cost_usd, 6)
     p = price_for(provider, model)
     if p is None or (usage.input_tokens == 0 and usage.output_tokens == 0):
         return None
@@ -298,16 +301,22 @@ async def claude_sdk_chat(messages: list[dict[str, str]], *, schema: dict[str, A
         system += "\n\nReturn only the JSON object, no prose, no code fences."
     options = ClaudeAgentOptions(system_prompt=system, model=model, tools=[], allowed_tools=[], setting_sources=[], max_turns=1)
     out: list[str] = []
+    usage = Usage()
 
     async def run() -> None:
         async for msg in query(prompt=convo, options=options):
             if isinstance(msg, AssistantMessage):
                 out.extend(b.text for b in msg.content if isinstance(b, TextBlock))
-            elif isinstance(msg, ResultMessage) and getattr(msg, "is_error", False):
-                raise RuntimeError(str(getattr(msg, "result", "") or "Claude error"))
+            elif isinstance(msg, ResultMessage):
+                if getattr(msg, "is_error", False):
+                    raise RuntimeError(str(getattr(msg, "result", "") or "Claude error"))
+                u = getattr(msg, "usage", None) or {}
+                usage.input_tokens = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+                usage.output_tokens = int(u.get("output_tokens") or 0)
+                usage.cost_usd = getattr(msg, "total_cost_usd", None)
 
     await asyncio.wait_for(run(), timeout)
-    return "".join(out), Usage()
+    return "".join(out), usage
 
 
 _CALLS: dict[str, Callable[..., Any]] = {
