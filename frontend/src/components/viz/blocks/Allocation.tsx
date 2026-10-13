@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { num } from '../engine'
 import { Breadcrumb, catColor, EmptyNote, prettyLabel, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
 import type { AllocationBlock, Row } from '../types'
+import { detailRows } from './Bars'
 import { DrillList } from './DrillList'
 
 type Slice = { label: string; value: number; color: string; row: Row; other: boolean }
@@ -50,7 +51,8 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
       { label: 'Share', value: fmt(s.value / total, 'pct') },
       ...(num(s.row.day_change_pct) != null ? [{ label: 'Today', value: fmt(s.row.day_change_pct, 'signedPct') }] : []),
       ...(typeof s.row.count === 'number' ? [{ label: 'Holdings', value: String(s.row.count) }] : []),
-    ],
+      ...detailRows(block.details, s.row, fmt),
+    ].filter((x, i, arr) => arr.findIndex((y) => y.label === x.label) === i),
     note: Array.isArray(s.row.items) ? 'Click to see holdings' : undefined,
   })
 

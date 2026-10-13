@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { cn } from '@/lib/utils'
 import { num } from '../engine'
-import { Breadcrumb, EmptyNote, isSigned, prettyLabel, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
-import type { BarsBlock, Row } from '../types'
+import { Breadcrumb, EmptyNote, fieldLabel, isSigned, prettyLabel, shortLabel, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
+import type { BarsBlock, Detail, Row } from '../types'
 import { DrillList } from './DrillList'
 
 function niceTicks(min: number, max: number, count = 4): number[] {
@@ -26,6 +26,22 @@ function niceTicks(min: number, max: number, count = 4): number[] {
 }
 export { niceTicks }
 
+let measureCtx: CanvasRenderingContext2D | null | undefined
+/** Rendered width of a label in the bar list's type (14px, medium). */
+function textWidth(s: string): number {
+  if (measureCtx === undefined) measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null
+  if (!measureCtx) return s.length * 7.4
+  measureCtx.font = `500 14px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`
+  return measureCtx.measureText(s).width
+}
+
+/** Tooltip rows for a chart's extra `details` columns. */
+export function detailRows(details: Detail[] | undefined, r: Row, fmt: ReturnType<typeof useFmt>) {
+  return (details ?? [])
+    .filter((d) => r[d.field] != null && r[d.field] !== '')
+    .map((d) => ({ label: d.label || fieldLabel(d.field), value: d.format === 'text' || !d.format ? prettyLabel(r[d.field]) : fmt(r[d.field], d.format), money: !!d.format?.toLowerCase().includes('money') }))
+}
+
 export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const fmt = useFmt()
   const blur = useBlur()
@@ -34,10 +50,22 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const { tip, show, hide, hostRef } = useTooltip()
   const [drill, setDrill] = useState<Row | null>(null)
   const data = rows.filter((r) => num(r[block.value]) != null).slice(0, block.limit ?? 12)
+  // Label column sized to its content (never a fixed gutter): as wide as the
+  // longest label, capped at ~38% of the chart; long names shorten, then wrap.
+  const labelKey = data.map((r) => String(r[block.label])).join('|')
+  const labelCol = useMemo(() => {
+    if (!width) return { px: 112, short: false }
+    const cap = Math.max(88, Math.round(width * (env.size === 'S' ? 0.3 : 0.38)))
+    const full = Math.max(0, ...data.map((r) => textWidth(prettyLabel(r[block.label]))))
+    if (full + 6 <= cap) return { px: Math.max(40, Math.ceil(full + 6)), short: false }
+    const short = Math.max(0, ...data.map((r) => textWidth(shortLabel(prettyLabel(r[block.label])))))
+    return { px: Math.max(40, Math.min(cap, Math.ceil(short + 6))), short: true }
+  }, [width, labelKey, env.size]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!data.length || data.every((r) => num(r[block.value]) === 0)) return <EmptyNote>{block.empty ?? 'Nothing to show yet.'}</EmptyNote>
   const signed = isSigned(data, block.value)
   const colorOf = (v: number) => (signed ? (v >= 0 ? 'var(--viz-gain)' : 'var(--viz-loss)') : 'var(--viz-1)')
   const labelOf = (r: Row) => prettyLabel(r[block.label])
+  const shownLabel = (r: Row) => (labelCol.short ? shortLabel(labelOf(r)) : labelOf(r))
   const click = (r: Row) => {
     if (Array.isArray(r.items) && (r.items as Row[]).length) setDrill(r)
     else if (typeof r.ticker === 'string' && !r.__other) env.openTicker(r.ticker)
@@ -45,8 +73,9 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
   const tipFor = (r: Row) => ({
     title: String(r.name && r.name !== r[block.label] ? `${labelOf(r)} · ${r.name}` : labelOf(r)),
     rows: [
-      { label: block.title ?? block.value, value: fmt(r[block.value], block.format), color: colorOf(num(r[block.value]) ?? 0), money: block.format?.toLowerCase().includes('money') },
-      ...(block.secondary ? [{ label: block.secondary.replace(/_/g, ' '), value: fmt(r[block.secondary], block.secondaryFormat) }] : []),
+      { label: fieldLabel(block.value), value: fmt(r[block.value], block.format), color: colorOf(num(r[block.value]) ?? 0), money: block.format?.toLowerCase().includes('money') },
+      ...(block.secondary && block.secondary !== block.value ? [{ label: fieldLabel(block.secondary), value: fmt(r[block.secondary], block.secondaryFormat), money: !!block.secondaryFormat?.toLowerCase().includes('money') }] : []),
+      ...detailRows(block.details, r, fmt),
     ],
     note: Array.isArray(r.items) ? 'Click to see holdings' : undefined,
   })
@@ -136,15 +165,14 @@ export function Bars({ block, rows }: { block: BarsBlock; rows: Row[] }) {
               onClick={() => click(r)}
               onPointerMove={(e) => show(e, tipFor(r))}
               onPointerLeave={hide}
-              className={cn(
-                'grid w-full items-center gap-3 rounded-md px-1 py-1 text-left text-sm',
-                // Fixed value column so every row's bar track (and the zero line) lines up.
-                block.secondary ? 'grid-cols-[minmax(56px,128px)_1fr_9.5rem]' : 'grid-cols-[minmax(56px,128px)_1fr_6rem]',
-                env.size === 'S' && 'grid-cols-[minmax(40px,64px)_1fr_4.5rem]',
-                drillable && 'hover:bg-muted/50',
-              )}
+              className={cn('grid w-full items-center gap-3 rounded-md px-1 py-1 text-left text-sm', drillable && 'hover:bg-muted/50')}
+              // One label width for every row (sized to content) and a fixed value
+              // column, so each bar track and the zero line line up.
+              style={{ gridTemplateColumns: `${labelCol.px}px minmax(0,1fr) ${env.size === 'S' ? '4.5rem' : block.secondary ? '9.5rem' : '6rem'}` }}
             >
-              <span className="min-w-0 truncate font-medium">{labelOf(r)}</span>
+              <span className="line-clamp-2 min-w-0 break-words font-medium leading-tight" title={labelOf(r)}>
+                {shownLabel(r)}
+              </span>
               <span className={cn('relative h-4', env.size === 'S' && 'invisible')}>
                 {signed ? <span className="absolute inset-y-[-3px] w-px bg-[var(--viz-axis)]" style={{ left: `${negShare * 100}%` }} /> : null}
                 <span

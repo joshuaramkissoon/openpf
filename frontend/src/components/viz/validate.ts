@@ -68,5 +68,42 @@ export function validateVizSpec(input: unknown): ValidateResult {
     if (b.type === 'table' && (!Array.isArray(b.columns) || !b.columns.length)) return { ok: false, error: `Block ${i + 1} (table) has no columns.` }
     if (b.type === 'note' && typeof b.text !== 'string') return { ok: false, error: `Block ${i + 1} (note) has no text.` }
   }
-  return { ok: true, spec: { ...(raw as unknown as VizSpec), version: 1, data: data as VizSpec['data'], blocks: (raw.blocks as Block[]).map(withDefaults) } }
+  return { ok: true, spec: { ...(raw as unknown as VizSpec), version: 1, data: data as VizSpec['data'], blocks: dropDuplicateTables((raw.blocks as Block[]).map(withDefaults)) } }
+}
+
+const groupKey = (b: Block) => {
+  let key: string | undefined
+  for (const s of b.transform ?? []) if ('groupBy' in s) key = s.groupBy
+  return key
+}
+
+/**
+ * Mirror of the backend tidy pass (app/services/viz_spec.py): a table that
+ * lists the same rows as a chart is dropped, and its extra columns move into
+ * the chart's `details` (tooltip + table view).
+ */
+export function dropDuplicateTables(blocks: Block[]): Block[] {
+  const charts = blocks.filter((b) => b.type === 'bars' || b.type === 'allocation' || b.type === 'treemap')
+  const out: Block[] = []
+  for (const b of blocks) {
+    if (b.type === 'table') {
+      const twin = charts.find((c) => {
+        if (c.from !== b.from) return false
+        const tk = groupKey(b)
+        const ck = groupKey(c)
+        if (tk || ck) return !!tk && (tk === ck || (c.type === 'treemap' && c.group === tk))
+        return 'label' in c && b.columns.some((col) => col.field === c.label)
+      })
+      if (twin && (twin.type === 'bars' || twin.type === 'allocation' || twin.type === 'treemap')) {
+        const r = twin as unknown as Record<string, unknown>
+        const shown = new Set(['label', 'value', 'size', 'color', 'secondary', 'group'].map((k) => r[k]))
+        const details = [...(twin.details ?? [])]
+        for (const col of b.columns) if (!shown.has(col.field) && !details.some((d) => d.field === col.field) && details.length < 6) details.push(col)
+        twin.details = details
+        continue
+      }
+    }
+    out.push(b)
+  }
+  return out
 }

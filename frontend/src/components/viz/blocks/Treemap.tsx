@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 
 import { cn } from '@/lib/utils'
 import { num } from '../engine'
-import { Breadcrumb, colorCap, divergingFill, EmptyNote, inkOn, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
+import { Breadcrumb, colorCap, divergingFill, EmptyNote, fieldLabel, inkOn, Tooltip, useBlur, useFmt, useTooltip, useVizEnv, useWidth } from '../shared'
+import { detailRows } from './Bars'
 import type { Row, TreemapBlock } from '../types'
 
 type Rect = { x: number; y: number; w: number; h: number }
@@ -103,8 +104,9 @@ export function Treemap({ block, rows }: { block: TreemapBlock; rows: Row[] }) {
     rows: [
       { label: 'Value', value: fmt(sizeOf(r), block.format), money: true },
       { label: 'Share', value: fmt(sizeOf(r) / (groupTotal ?? total), 'pct') },
-      ...(block.color ? [{ label: block.color === 'day_change_pct' ? 'Today' : block.color, value: fmt(colorOf(r), block.colorFormat) }] : []),
+      ...(block.color ? [{ label: fieldLabel(block.color), value: fmt(colorOf(r), block.colorFormat) }] : []),
       ...(num(r.day_change) != null && block.color === 'day_change_pct' ? [{ label: 'Today', value: fmt(r.day_change, 'signedMoney'), money: true }] : []),
+      ...detailRows(block.details, r, fmt),
     ].filter((x, i, arr) => arr.findIndex((y) => y.label === x.label) === i),
   })
 

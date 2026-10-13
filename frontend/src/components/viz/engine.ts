@@ -228,7 +228,10 @@ async function enrich(rows: Row[], fields: string[], ctx: EngineCtx): Promise<Ro
       else if (f === 'asset_type') out.asset_type = assetType ?? 'Stock'
       else if (f === 'play') out.play = own?.title ?? 'Unsorted'
       else if (f === 'play_id') out.play_id = own?.id ?? null
-      else if (f === 'theme') out.theme = own?.title ?? sector
+      else if (f === 'theme') {
+        out.theme = own?.title ?? sector
+        out.__theme_play = !!own // false = fell back to the sector (keeps titles honest)
+      }
       else if (f === 'dividend_yield') out.dividend_yield = num(p.dividend_yield)
       else if (f === 'ex_dividend_date') out.ex_dividend_date = p.ex_dividend_date ?? null
     }

@@ -176,6 +176,59 @@ export function Breadcrumb({ trail, onBack }: { trail: string[]; onBack: (depth:
 
 const PRETTY: Record<string, string> = { stocks_isa: 'Stocks ISA', invest: 'Invest', all: 'All accounts', DEPOSIT: 'Deposit', WITHDRAW: 'Withdrawal', WITHDRAWAL: 'Withdrawal' }
 
+const FIELD_LABELS: Record<string, string> = {
+  day_change_pct: 'Today',
+  day_change: 'Today',
+  ppl: 'Gain',
+  ppl_pct: 'Return',
+  value: 'Value',
+  cost: 'Cost',
+  weight: 'Weight',
+  count: 'Holdings',
+  owned_count: 'Owned',
+  bench_count: 'On the bench',
+  exposure: 'Exposure',
+  amount: 'Amount',
+  quantity: 'Shares',
+  free_cash: 'Cash',
+  cash_share: 'Cash share',
+  total: 'Total',
+  invested: 'Invested',
+  dividend_yield: 'Yield',
+  ex_dividend_date: 'Ex-dividend',
+  momentum_63d: '3-month momentum',
+  volatility_30d: '30-day volatility',
+  exposure_currency: 'Currency',
+  instrument_currency: 'Currency',
+  asset_type: 'Asset type',
+  ticker: 'Holding',
+  abs_move: 'Size of move',
+  share: 'Share',
+  income: 'Income',
+}
+
+/** A person's word for a data field: never a raw name like "day change pct". */
+export function fieldLabel(field: string | undefined | null): string {
+  if (!field) return ''
+  if (FIELD_LABELS[field]) return FIELD_LABELS[field]
+  const words = field.replace(/_pct$/, ' %').replace(/_/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** Long category names, shortened for tight label columns. */
+const SHORT: Record<string, string> = {
+  'Communication Services': 'Communication',
+  'Consumer Defensive': 'Cons. Defensive',
+  'Consumer Cyclical': 'Cons. Cyclical',
+  'Financial Services': 'Financials',
+  'Basic Materials': 'Materials',
+  'Information Technology': 'Tech',
+  'Real Estate': 'Real Estate',
+}
+export function shortLabel(s: string): string {
+  return SHORT[s] ?? s
+}
+
 /** Human labels for raw enum values that show up as categories (accounts, cash types). */
 export function prettyLabel(v: unknown): string {
   const s = v == null ? '' : String(v)
