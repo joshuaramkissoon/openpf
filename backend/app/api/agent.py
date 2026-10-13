@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.database import SessionLocal
 from app.core.config import get_settings
+from app.services import model_routing
 from app.schemas.agent import (
     AgentRunItem,
     AgentRunRequest,
@@ -485,7 +486,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                             _cost_db,
                             source="chat",
                             source_id=session.id,
-                            model=settings.claude_model,
+                            model=model_routing.sdk_model("chat"),
                             total_cost_usd=reply.cost_usd,
                             duration_ms=reply.duration_ms,
                             num_turns=reply.num_turns,

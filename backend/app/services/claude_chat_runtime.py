@@ -16,7 +16,7 @@ from app.services.claude_sdk_config import (
     build_security_hooks, build_subagents, configure_sdk_auth, parse_setting_sources, resolve_sdk_cwd,
     runtime_info as sdk_runtime_info,
 )
-from app.services import mcp_registry
+from app.services import mcp_registry, model_routing
 from app.services.claude_sdk_config import recipe_plugins as recipes_plugins_option
 
 settings = get_settings()
@@ -434,7 +434,7 @@ class ClaudeChatRuntime:
                     "Do not claim a capability is unavailable before checking available tools."
                 ),
             },
-            model=settings.claude_chat_model,
+            model=model_routing.sdk_model("chat"),
             cwd=str(sdk_cwd),
             max_turns=settings.agent_chat_max_turns,
             max_budget_usd=settings.agent_chat_max_budget_usd or None,

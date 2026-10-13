@@ -307,7 +307,7 @@ def build_subagents() -> dict[str, Any]:
         ),
         prompt=_QUANT_PROMPT,
         tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash", *tool_ids("marketdata", "forecast", "fundamentals")],
-        model="claude-opus-4-8",
+        model=_deep_model(),
     )
 
     return {"researcher": researcher, "quant": quant}
@@ -554,6 +554,20 @@ def build_security_hooks() -> dict[str, Any]:
     }
 
 
+def _model_routing():
+    from app.services import model_routing
+
+    return model_routing
+
+
+def _deep_model() -> str:
+    """The quant subagent is the explicitly deep path (Opus by default)."""
+    try:
+        return _model_routing().sdk_model("deep")
+    except Exception:  # noqa: BLE001
+        return settings.claude_deep_model
+
+
 def runtime_info() -> dict[str, Any]:
     cwd = resolve_sdk_cwd()
     source_memory_file = project_root() / ".claude" / "CLAUDE.md"
@@ -568,6 +582,7 @@ def runtime_info() -> dict[str, Any]:
         "claude_chat_model": settings.claude_chat_model,
         "claude_agent_model": settings.claude_agent_model,
         "claude_memory_model": settings.claude_memory_model,
+        "models": {k: _model_routing().route(k)["model"] for k in ("chat", "scheduled_agent", "deep", "plays_draft")},
         "memory_file": str(runtime_memory_file),
         "memory_source_file": str(source_memory_file),
         "memory_strategy": settings.claude_memory_strategy,

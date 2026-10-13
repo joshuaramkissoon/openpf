@@ -21,6 +21,7 @@ from datetime import date
 from typing import Any
 
 from app.core.config import get_settings
+from app.services import model_routing
 from app.services import recipes_validate as rv
 from app.services.recipes_validate import RecipeValidationError
 
@@ -99,7 +100,7 @@ async def _ask_model(prompt: str) -> dict[str, Any] | None:  # pragma: no cover 
     settings = get_settings()
     options = ClaudeAgentOptions(
         system_prompt=_SYSTEM,
-        model=settings.recipes_model,
+        model=model_routing.sdk_model("recipes_author"),
         cwd=str(resolve_sdk_cwd()),
         setting_sources=[],
         tools=[],
@@ -118,7 +119,7 @@ async def _ask_model(prompt: str) -> dict[str, Any] | None:  # pragma: no cover 
                 from app.services import costs_service
 
                 with SessionLocal() as udb:
-                    costs_service.record(udb, source="recipes", source_id="author", model=settings.recipes_model,
+                    costs_service.record(udb, source="recipes", source_id="author", model=model_routing.sdk_model("recipes_author"),
                                          total_cost_usd=message.total_cost_usd, duration_ms=message.duration_ms,
                                          num_turns=message.num_turns)
             except Exception:  # noqa: BLE001

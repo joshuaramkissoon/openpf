@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.services import model_routing
 from app.models.entities import Alert, Play, PlayDraftJob, TradeIntent
 from app.schemas.plays import PlayDraftOut, PlayReviewOut
 
@@ -1456,7 +1457,7 @@ async def _draft(job: DraftJob) -> str:
         for attempt in range(2):
             raw = await _run_structured(
                 _draft_prompt(req, book, error), system=_DRAFT_SYSTEM, schema=schema,
-                model=settings.claude_plays_model, tools=_DRAFT_TOOLS, mcp=_mcp_servers(), max_turns=24,
+                model=model_routing.sdk_model("plays_draft"), tools=_DRAFT_TOOLS, mcp=_mcp_servers(), max_turns=24,
                 on_progress=job.add, usage_source="play_draft", usage_id=job.id,
             )
             try:
@@ -1544,7 +1545,7 @@ def run_llm_review(db: Session, play: Play) -> dict[str, Any]:
     }
     raw = asyncio.run(_run_structured(
         json.dumps(payload, default=str), system=_REVIEW_SYSTEM, schema=PlayReviewOut.model_json_schema(),
-        model=settings.claude_plays_review_model, tools=[], mcp={}, max_turns=3, on_progress=None,
+        model=model_routing.sdk_model("plays_review"), tools=[], mcp={}, max_turns=3, on_progress=None,
         usage_source="play_review", usage_id=play.id,
     ))
     out = PlayReviewOut.model_validate(raw or {})

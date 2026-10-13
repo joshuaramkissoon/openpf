@@ -310,7 +310,7 @@ _DEFAULT_TASKS: list[dict[str, Any]] = [
         "name": "lev_midday_check",
         "cron_expr": "0 12 * * 1-5",
         "timezone": "Europe/London",
-        "model": "claude-haiku-4-5",
+        "model": settings.claude_model,
         "enabled": True,
         "meta": {
             "task_kind": "leveraged_monitor",
