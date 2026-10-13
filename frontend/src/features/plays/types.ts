@@ -342,3 +342,68 @@ export type PlayPatch = Partial<{
   what_would_change_my_mind: string
   resize: boolean
 }>
+
+// ── Rebalance ────────────────────────────────────────────────────────────────
+
+export interface RebalanceLeg {
+  ticker: string
+  name: string
+  value_gbp: number
+  after_value_gbp?: number
+  current_weight: number
+  target_weight: number
+  after_weight: number
+  drift: number
+  action: 'buy' | 'sell' | 'hold'
+}
+
+export interface RebalanceTrade {
+  ticker: string
+  name: string
+  side: 'buy' | 'sell'
+  account_kind: PlayAccount
+  notional_gbp: number
+  shares: number | null
+  price_gbp: number | null
+  sell_all: boolean
+  instrument_code: string | null
+  currency: string | null
+  fee_gbp: number
+  note?: string | null
+  /** Over the per-order limit: a proposal is held back; placing it yourself is a warning. */
+  over_order_limit?: boolean
+}
+
+export interface RebalancePlan {
+  play_id: string
+  account_kind: PlayAccount
+  value_gbp: number
+  use_cash: boolean
+  min_drift: number
+  min_trade_gbp: number
+  free_cash_gbp: number
+  legs: RebalanceLeg[]
+  trades: RebalanceTrade[]
+  ignored: { ticker: string; drift: number; reason: string }[]
+  turnover_gbp: number
+  est_fees_gbp: number
+  cash_used_gbp: number
+  warnings: string[]
+  empty_reason?: string
+  /** live | paper | demo | sandbox — "Place them myself" needs a live confirm. */
+  broker_mode?: string
+}
+
+export interface RebalanceDone {
+  ticker: string
+  side: 'buy' | 'sell'
+  account_kind: string
+  notional_gbp: number
+  intent_id: string
+}
+
+export interface RebalanceFailed {
+  ticker: string
+  side: 'buy' | 'sell'
+  reason: string
+}

@@ -82,6 +82,20 @@ def search_instruments(
     return InstrumentSearchResponse(results=[InstrumentSearchRow(**r) for r in rows])
 
 
+@router.get("/names")
+def instrument_names(
+    symbols: str = Query("", description="comma-separated market symbols, e.g. BA.L,RHM.DE"),
+    account: str | None = Query(None, description="flag listings this account can't hold"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Company name, clean ticker, exchange, sector, price and whether Trading 212
+    lists each symbol. Names are cached; slow lookups finish in the background."""
+    from app.services import instrument_names as names
+
+    wanted = [s for s in symbols.split(",") if s.strip()][:40]
+    return {"items": names.describe(db, wanted, account_kind=account)}
+
+
 @router.get("/{ticker}/detail", response_model=InstrumentDetail)
 def instrument_detail(
     ticker: str,

@@ -219,13 +219,16 @@ def limit_blocks(risk: dict[str, Any], violations: list[str], requested: float, 
     return out
 
 
-def proposal_source(source: str | None, *, manual: bool = False) -> str:
+def proposal_source(source: str | None, *, manual: bool = False, rebalancer: bool = False) -> str:
     """The ``source`` tag a proposal may carry. "user" marks the user's own trade
     from the stock sheet (only the manual-trade service passes ``manual``);
-    "rebalance" is the deterministic rebalancer's. Neither can be claimed by a
-    proposal, so an agent can never dress one up as the user's own order."""
+    "rebalance" is the deterministic rebalancers' (only ``play_rebalance`` passes
+    ``rebalancer``; no agent tool can). Neither can be claimed by a proposal, so
+    an agent can never dress one up as the user's own order or the rebalancer's."""
     if manual:
         return MANUAL_SOURCE
+    if rebalancer:
+        return "rebalance"
     out = (source or "agent").strip()[:64] or "agent"
     return "agent" if out.lower() in {MANUAL_SOURCE, "rebalance"} else out
 
@@ -275,6 +278,7 @@ def propose_trade(
     hold_back: bool = False,
     manual: bool = False,
     count_open: bool = False,
+    rebalancer: bool = False,
 ) -> dict[str, Any]:
     """Validate, size and record a ``proposed`` TradeIntent. Never executes.
 
@@ -300,7 +304,7 @@ def propose_trade(
     from an agent tool). The notional and crypto-cap limits come back as
     warnings instead of violations, and the intent is marked as the user's.
     """
-    source = proposal_source(source, manual=manual)
+    source = proposal_source(source, manual=manual, rebalancer=rebalancer)
     if manual:
         hold_back = False
     day = not_before or utc_today()
@@ -308,7 +312,7 @@ def propose_trade(
     args = dict(
         side=side, account_kind=account_kind, rationale=rationale, symbol=symbol, instrument_code=instrument_code,
         order_type=order_type, limit_price=limit_price, stop_price=stop_price, play_id=play_id, source=source,
-        category=category, not_before=not_before, manual=manual,
+        category=category, not_before=not_before, manual=manual, rebalancer=rebalancer,
     )
     if dry_run:
         return _propose_one(db, quantity=quantity, notional_gbp=notional_gbp, daily_used=used, dry_run=True, **args)
@@ -507,8 +511,9 @@ def _propose_one(
     held_from: dict[str, Any] | None = None,
     dry_run: bool = False,
     manual: bool = False,
+    rebalancer: bool = False,
 ) -> dict[str, Any]:
-    source = proposal_source(source, manual=manual)
+    source = proposal_source(source, manual=manual, rebalancer=rebalancer)
     side = (side or "").strip().lower()
     order_type = (order_type or "market").strip().lower()
     account_kind = (account_kind or "").strip().lower()

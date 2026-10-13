@@ -597,7 +597,7 @@ function Drafting({ jobId }: { jobId: string }) {
       : kind === 'no_instruments'
         ? 'Nothing to buy on Trading 212'
         : kind === 'interrupted'
-          ? 'Drafting was interrupted'
+          ? 'OpenPF restarted mid-draft'
           : 'Archie could not finish this draft'
 
   async function retry() {
@@ -617,7 +617,7 @@ function Drafting({ jobId }: { jobId: string }) {
         aria-hidden
         className="pointer-events-none absolute inset-x-0 -top-24 -z-10 h-[30rem]"
         style={{
-          background: failed
+          background: failed && kind !== 'interrupted'
             ? 'radial-gradient(closest-side, color-mix(in oklab, var(--warning) 10%, transparent), transparent)'
             : 'radial-gradient(closest-side, color-mix(in oklab, var(--primary) 18%, transparent), transparent)',
         }}
@@ -631,13 +631,15 @@ function Drafting({ jobId }: { jobId: string }) {
         Plays
       </button>
       <div className="space-y-2.5">
-        <Eyebrow>{failed ? 'Drafting stopped' : 'Drafting your play'}</Eyebrow>
+        <Eyebrow>{failed ? (kind === 'interrupted' ? 'Nothing went wrong with your idea' : 'Drafting stopped') : 'Drafting your play'}</Eyebrow>
         <h1 className="text-3xl font-semibold tracking-tight">{failed ? heading : 'Archie is on it'}</h1>
         <p className="text-base text-muted-foreground">
           {failed
             ? missing
               ? 'It may have been cleared. Start again; a draft takes about a minute.'
-              : job?.error || 'Something went wrong. Try again.'
+              : kind === 'interrupted'
+                ? 'The draft stopped because OpenPF restarted. Retry picks up from the start; it takes about a minute.'
+                : job?.error || 'Something went wrong. Try again.'
             : 'Finding the names, checking prices and fundamentals, then sizing it to your book. Usually about a minute.'}
         </p>
       </div>

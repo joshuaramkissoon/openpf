@@ -11,6 +11,9 @@ import type {
   PlayAccount,
   PlayPatch,
   PlayPerformance,
+  RebalanceDone,
+  RebalanceFailed,
+  RebalancePlan,
   StageResult,
   Suggestions,
 } from './types'
@@ -135,4 +138,55 @@ export async function acceptSuggestion(id: string, edits: { title?: string; tick
 
 export async function dismissSuggestion(id: string) {
   await api.post(`/plays/suggestions/${id}/dismiss`)
+}
+
+// ── Instrument names + rebalance ─────────────────────────────────────────────
+
+export interface InstrumentName {
+  symbol: string
+  ticker: string
+  exchange: { code: string; venue: string } | null
+  name: string | null
+  legal_name?: string | null
+  sector?: string | null
+  industry?: string | null
+  price?: number | null
+  currency?: string | null
+  /** true listed · false not on Trading 212 · null couldn't check */
+  tradable: boolean | null
+  accounts: string[]
+  in_account?: boolean | null
+  instrument_code?: string | null
+  pending?: boolean
+}
+
+export async function getInstrumentNames(symbols: string[], account?: string) {
+  const { data } = await api.get<{ items: InstrumentName[] }>('/instruments/names', {
+    params: { symbols: symbols.join(','), account },
+    timeout: 20000,
+  })
+  return data.items
+}
+
+export async function previewRebalance(id: string, body: { weights?: Record<string, number>; use_cash?: boolean } = {}) {
+  const { data } = await api.post<RebalancePlan>(`/plays/${id}/rebalance/preview`, body, { timeout: 60000 })
+  return data
+}
+
+export async function proposeRebalance(id: string, useCash = false) {
+  const { data } = await api.post<{ plan: RebalancePlan; proposed: RebalanceDone[]; failed: RebalanceFailed[] }>(
+    `/plays/${id}/rebalance/propose`,
+    { use_cash: useCash },
+    { timeout: 120000 },
+  )
+  return data
+}
+
+export async function placeRebalance(id: string, opts: { liveConfirmed: boolean; useCash: boolean }) {
+  const { data } = await api.post<{ plan: RebalancePlan; placed: RebalanceDone[]; failed: RebalanceFailed[]; broker_mode: string }>(
+    `/plays/${id}/rebalance/place`,
+    { user_action: { kind: 'manual_trade', reviewed: true }, live_confirmed: opts.liveConfirmed, use_cash: opts.useCash },
+    { timeout: 180000 },
+  )
+  return data
 }

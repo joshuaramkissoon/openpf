@@ -7,7 +7,7 @@
  *   <OwnerMenu/>     a holding's owner as a quiet chip; click to move it
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
-import { ArrowRightLeft, Check, ChevronDown, Layers } from 'lucide-react'
+import { ArrowRightLeft, Check, ChevronDown, Layers, MoreHorizontal, PanelRightOpen } from 'lucide-react'
 import { ArchieIcon } from '@/components/kit'
 import { toast } from 'sonner'
 
@@ -124,11 +124,16 @@ export function OwnerMenu({
   accountKind,
   compact = false,
   asMove = false,
+  asMore = false,
+  onOpen,
   onMoved,
   className,
 }: {
   /** Inside a group the owner is already obvious — show a quiet "Move" trigger instead of the chip. */
   asMove?: boolean
+  /** A row's overflow menu: a "⋯" trigger, with "Open" above the move targets. */
+  asMore?: boolean
+  onOpen?: () => void
   ticker: string
   owner: HoldingOwner
   relatedTo?: { play_id: string; title: string; why: string }[]
@@ -165,7 +170,9 @@ export function OwnerMenu({
           className,
         )}
       >
-        {asMove ? (
+        {asMore ? (
+          <MoreHorizontal className="size-4" />
+        ) : asMove ? (
           <>
             <ArrowRightLeft className="size-3 shrink-0" />
             <span className="hidden sm:inline">Move</span>
@@ -181,7 +188,16 @@ export function OwnerMenu({
           </>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent align={asMore ? 'end' : 'start'} className="w-64" onClick={(e) => e.stopPropagation()}>
+        {asMore && onOpen ? (
+          <>
+            <DropdownMenuItem onClick={onOpen}>
+              <PanelRightOpen className="size-3.5" />
+              Open {ticker}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         {relatedTo.length ? (
           <>
             <DropdownMenuGroup>
@@ -197,7 +213,7 @@ export function OwnerMenu({
           </>
         ) : null}
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Belongs to</DropdownMenuLabel>
+          <DropdownMenuLabel>{asMore ? 'Move to' : 'Belongs to'}</DropdownMenuLabel>
           {plays.map((g) => (
             <DropdownMenuItem key={g.id} onClick={() => !isCurrent(g.play_id) && void move(g.play_id!, g.title)}>
               <Swatch kind="play" colorIndex={g.color_index} />

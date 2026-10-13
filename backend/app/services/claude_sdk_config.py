@@ -376,6 +376,10 @@ _NETWORK_DENY = [
         re.compile(r"/api/instruments/[^/\s'\"]+/(?:trade|propose)\b", re.IGNORECASE),
         "trading from the stock sheet is human-only — propose trades with propose_trade",
     ),
+    (
+        re.compile(r"/api/plays/[^/\s'\"]+/rebalance\b", re.IGNORECASE),
+        "rebalancing a play is human-only — propose trades with propose_trade",
+    ),
     (re.compile(r"trading212\.com", re.IGNORECASE), "direct Trading 212 API access is blocked — use the read-only trading212 tools"),
     (re.compile(r"\b(?:api(?:-futures)?\.kraken\.com|api\.coinbase\.com|api\.exchange\.coinbase\.com|api\d?\.binance\.com)\b",
                 re.IGNORECASE), "direct crypto exchange API access is blocked — use the read-only crypto tools"),
@@ -392,7 +396,7 @@ _BASH_TRADING_DENY = [
             r"|build_t212_client|get_account_exec_credentials|exec_api_(?:key|secret)|T212_EXEC|update_policy"
             r"|build_crypto_client|CcxtCryptoBroker|client_for|ccxt|CRYPTO_API_(?:KEY|SECRET)|crypto_config"
             r"|set_leveraged|auto_execute|execute_signal|ConfigStore|app_config|sqlite3?"
-            r"|secret_box|open_secret|OPENPF_SECRETS_KEY|build_provider_client|connections_service)\b",
+            r"|secret_box|open_secret|OPENPF_SECRETS_KEY|build_provider_client|connections_service|play_rebalance)\b",
             re.IGNORECASE,
         ),
         "trade execution, broker credentials and the app database are off-limits — propose trades with propose_trade",

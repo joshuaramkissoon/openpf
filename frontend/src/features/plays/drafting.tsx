@@ -12,7 +12,9 @@ import {
   X,
 } from 'lucide-react'
 
+import { AssetIcon } from '@/components/kit'
 import { cn } from '@/lib/utils'
+import { displayName, InstrumentChip, NamePopover, useInstrumentNames } from './names'
 import type { DraftJob, DraftProgress, DraftPhase } from './types'
 import { Eyebrow } from './ui'
 
@@ -111,12 +113,15 @@ export function DraftProgressView({ job, failed }: { job: DraftJob | null; faile
     return seen
   }, [phases])
   const visible = phases.filter((p) => p.state !== 'skipped' || p.id !== 'compare')
+  const account = job?.request?.account_kind ?? null
+  const dropped = new Set((job?.progress ?? []).flatMap((e) => (e as DraftProgress & { dropped?: string[] }).dropped ?? []))
+  const names = useInstrumentNames(basketEvent?.basket?.map((l) => l.ticker) ?? [])
 
   return (
     <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_17rem]">
       <ol className="relative" aria-label="Drafting progress">
         {visible.map((p, i) => (
-          <PhaseRow key={p.id} phase={p} last={i === visible.length - 1} />
+          <PhaseRow key={p.id} phase={p} last={i === visible.length - 1} account={account} />
         ))}
       </ol>
 
@@ -127,33 +132,46 @@ export function DraftProgressView({ job, failed }: { job: DraftJob | null; faile
         </div>
         {basketEvent?.basket ? (
           <ul className="space-y-2.5">
-            {basketEvent.basket.map((l, i) => (
+            {basketEvent.basket.map((l, i) => {
+              const n = names.get(l.ticker.toUpperCase())
+              const name = n?.name ?? l.name
+              const out = dropped.has(l.ticker) || n?.tradable === false
+              return (
               <li
                 key={l.ticker}
-                className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-500"
+                className={cn('animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-500', out && 'opacity-60')}
                 style={{ animationDelay: `${i * 70}ms` }}
               >
-                <div className="flex items-baseline justify-between gap-2 text-xs">
-                  <span className="min-w-0 truncate">
-                    <span className="font-mono font-medium text-foreground">{l.ticker}</span>
-                    {l.name ? <span className="ml-1.5 text-muted-foreground">{l.name}</span> : null}
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <NamePopover n={{ ...(n ?? { symbol: l.ticker, ticker: l.ticker, exchange: null, tradable: null, accounts: [] }), name: name ?? null }} account={account} className="flex min-w-0 items-center gap-2">
+                    <AssetIcon symbol={n?.ticker ?? l.ticker} size={18} />
+                    <span className="min-w-0 truncate">
+                      <span className={cn('font-medium text-foreground', out && 'line-through decoration-warning/60')}>{name ?? n?.ticker ?? l.ticker}</span>
+                      {name ? <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{n?.ticker ?? l.ticker}</span> : null}
+                      {n?.exchange && n.exchange.code !== 'US' ? (
+                        <span className="ml-1 font-mono text-[9px] text-muted-foreground">{n.exchange.code}</span>
+                      ) : null}
+                    </span>
+                  </NamePopover>
+                  <span className="shrink-0 font-mono text-muted-foreground tabular-nums">
+                    {out ? <span className="font-sans text-warning">not on T212</span> : `${Math.round((l.weight ?? 0) * 100)}%`}
                   </span>
-                  <span className="shrink-0 font-mono text-muted-foreground tabular-nums">{Math.round((l.weight ?? 0) * 100)}%</span>
                 </div>
-                <div className="mt-1 h-1 rounded-full bg-muted">
+                <div className="mt-1.5 ml-[26px] h-1 rounded-full bg-muted">
                   <div
                     className={cn('h-full rounded-full', l.role === 'hedge' ? 'bg-muted-foreground/60' : 'bg-foreground/70')}
                     style={{ width: `${Math.min(100, (l.weight ?? 0) * 100 * 2)}%` }}
                   />
                 </div>
               </li>
-            ))}
+              )
+            })}
           </ul>
         ) : candidates.length ? (
           <>
             <div className="flex flex-wrap gap-1.5">
               {candidates.map((t) => (
-                <TickerChip key={t} ticker={t} />
+                <InstrumentChip key={t} symbol={t} account={account} className="animate-in fade-in zoom-in-95 duration-500" />
               ))}
             </div>
             <p className="text-xs text-muted-foreground">Names Archie is weighing. The final basket appears here once it's chosen.</p>
@@ -168,7 +186,7 @@ export function DraftProgressView({ job, failed }: { job: DraftJob | null; faile
   )
 }
 
-function PhaseRow({ phase, last }: { phase: PhaseView; last: boolean }) {
+function PhaseRow({ phase, last, account }: { phase: PhaseView; last: boolean; account: string | null }) {
   const { state, Icon } = phase
   const live = state === 'active'
   return (
@@ -207,7 +225,7 @@ function PhaseRow({ phase, last }: { phase: PhaseView; last: boolean }) {
         {phase.tickers.length && state !== 'pending' ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {phase.tickers.map((t) => (
-              <TickerChip key={t} ticker={t} />
+              <InstrumentChip key={t} symbol={t} account={account} className="animate-in fade-in zoom-in-95 duration-500" />
             ))}
           </div>
         ) : null}
@@ -215,7 +233,7 @@ function PhaseRow({ phase, last }: { phase: PhaseView; last: boolean }) {
           <ul className="mt-1 space-y-0.5">
             {phase.notes.slice(-3).map((n, i) => (
               <li key={i} className="animate-in fade-in truncate text-xs text-muted-foreground duration-500">
-                {n.startsWith('Basket:') ? 'Picked the basket' : n}
+                {n.startsWith('Basket:') ? 'Picked the basket' : n.startsWith('Dropped ') ? droppedNote(n) : n === 'Interrupted' ? 'Stopped: OpenPF restarted' : n}
               </li>
             ))}
           </ul>
@@ -225,10 +243,9 @@ function PhaseRow({ phase, last }: { phase: PhaseView; last: boolean }) {
   )
 }
 
-function TickerChip({ ticker }: { ticker: string }) {
-  return (
-    <span className="animate-in fade-in zoom-in-95 rounded-md border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/85 duration-500">
-      {ticker}
-    </span>
-  )
+/** "Dropped RHM.DE, SAAB-B.ST: not on Trading 212" → company names. */
+function droppedNote(text: string) {
+  const m = text.match(/^Dropped (.+?): (.+)$/)
+  if (!m) return text
+  return `Dropped ${m[1].split(/,\s*/).map((t) => displayName(t)).join(', ')}: ${m[2]}`
 }
