@@ -6,6 +6,8 @@ import {
   MouseSensor,
   TouchSensor,
   closestCenter,
+  pointerWithin,
+  type CollisionDetection,
   useSensor,
   useSensors,
   type Announcements,
@@ -31,6 +33,12 @@ const LONG_PRESS_MS = 550
 // Tiles stay put while dragging (sizes differ, so shuffling them reads as chaos);
 // the drop target lights up and a light ghost follows the pointer.
 const noShuffle = () => null
+// The target is whatever tile is under the cursor (closest centre as a fallback
+// over gaps), so the drop lands where you're pointing.
+const pointerFirst: CollisionDetection = (args) => {
+  const hits = pointerWithin(args)
+  return hits.length ? hits : closestCenter(args)
+}
 
 /**
  * Home's customisable widgets: a 4/2/1-column grid of tiles (S/M/L). "Edit Home"
@@ -43,6 +51,11 @@ export function HomeWidgets({ ctx, editing, onEditingChange, beforeGrid }: { ctx
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
+  // While dragging, tiles reorder live (the grid reflows around the held tile);
+  // the new order is saved once, on drop.
+  const [dragOrder, setDragOrder] = useState<HomeWidget[] | null>(null)
+  const [overlaySize, setOverlaySize] = useState<{ width: number; height: number } | null>(null)
+  const lastSwap = useRef(0)
   const [fresh, setFresh] = useState<string | null>(null)
   const titles = useRef(new Map<string, string>())
 
@@ -92,18 +105,43 @@ export function HomeWidgets({ ctx, editing, onEditingChange, beforeGrid }: { ctx
     )
   }
 
-  const onDragStart = (e: DragStartEvent) => setActiveId(String(e.active.id))
-  const onDragOver = (e: DragOverEvent) => setOverId(e.over ? String(e.over.id) : null)
-  const onDragEnd = (e: DragEndEvent) => {
+  const shown = dragOrder ?? widgets
+  const onDragStart = (e: DragStartEvent) => {
+    setActiveId(String(e.active.id))
+    setDragOrder(widgets)
+    const r = e.active.rect.current.initial
+    setOverlaySize(r ? { width: r.width, height: r.height } : null)
+  }
+  const onDragOver = (e: DragOverEvent) => {
+    const { active, over } = e
+    setOverId(over ? String(over.id) : null)
+    if (!over || over.id === active.id) return
+    // Debounce swaps so tiles of different sizes don't ping-pong under the cursor.
+    const now = performance.now()
+    if (now - lastSwap.current < 140) return
+    setDragOrder((cur) => {
+      const list = cur ?? widgets
+      const from = list.findIndex((w) => w.id === active.id)
+      const to = list.findIndex((w) => w.id === over.id)
+      if (from < 0 || to < 0 || from === to) return list
+      lastSwap.current = now
+      return arrayMove(list, from, to)
+    })
+  }
+  const endDrag = () => {
     setActiveId(null)
     setOverId(null)
-    const { active, over } = e
-    if (!over || active.id === over.id) return
-    const from = widgets.findIndex((w) => w.id === active.id)
-    const to = widgets.findIndex((w) => w.id === over.id)
-    if (from < 0 || to < 0) return
-    change(arrayMove(widgets, from, to), `Moved ${titleOf(active.id)}`)
+    setOverlaySize(null)
+    setDragOrder(null)
   }
+  const onDragEnd = (e: DragEndEvent) => {
+    const order = dragOrder
+    endDrag()
+    if (!order) return
+    const moved = order.some((w, i) => w.id !== widgets[i]?.id)
+    if (moved) change(order, `Moved ${titleOf(e.active.id)}`)
+  }
+  const activeWidget = activeId ? widgets.find((w) => w.id === activeId) ?? null : null
   const remove = (w: HomeWidget) => change(widgets.filter((x) => x.id !== w.id), `Removed ${titleOf(w.id)}`)
   const resize = (w: HomeWidget, size: HomeWidgetSize) => {
     if (w.size === size) return
@@ -133,22 +171,19 @@ export function HomeWidgets({ ctx, editing, onEditingChange, beforeGrid }: { ctx
 
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        collisionDetection={pointerFirst}
         onDragStart={onDragStart}
         onDragOver={onDragOver}
         onDragEnd={onDragEnd}
-        onDragCancel={() => {
-          setActiveId(null)
-          setOverId(null)
-        }}
+        onDragCancel={endDrag}
         accessibility={{
           announcements,
           screenReaderInstructions: { draggable: 'To move this widget, press Space or Enter, use the arrow keys, then press Space again to drop it. Escape cancels.' },
         }}
       >
-        <SortableContext items={widgets.map((w) => w.id)} strategy={noShuffle} disabled={!editing}>
+        <SortableContext items={shown.map((w) => w.id)} strategy={noShuffle} disabled={!editing}>
           <div className={cn('grid grid-flow-row-dense grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4', editing && 'pb-24')}>
-            {widgets.map((w, i) => (
+            {shown.map((w, i) => (
               <SortableTile
                 key={w.id}
                 widget={w}
@@ -156,7 +191,7 @@ export function HomeWidgets({ ctx, editing, onEditingChange, beforeGrid }: { ctx
                 ctx={ctx}
                 editing={editing}
                 dragging={activeId === w.id}
-                target={!!activeId && overId === w.id && activeId !== w.id}
+                target={false}
                 fresh={fresh === w.id}
                 onTitle={(t) => titles.current.set(w.id, t)}
                 onRemove={() => remove(w)}
@@ -167,10 +202,18 @@ export function HomeWidgets({ ctx, editing, onEditingChange, beforeGrid }: { ctx
           </div>
         </SortableContext>
         <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
-          {activeId ? (
-            <div className="inline-flex cursor-grabbing items-center gap-2 rounded-full border border-border bg-popover px-3.5 py-2 text-sm font-medium shadow-xl shadow-black/25">
-              <GripVertical className="size-4 text-muted-foreground" />
-              {titleOf(activeId)}
+          {activeWidget ? (
+            // The real tile, at its real size, held exactly where you grabbed it.
+            <div
+              className="pointer-events-none cursor-grabbing overflow-hidden rounded-2xl shadow-2xl shadow-black/40 ring-1 ring-border"
+              style={overlaySize ? { width: overlaySize.width, height: overlaySize.height, transform: 'rotate(-0.6deg) scale(1.02)' } : undefined}
+            >
+              <WidgetBody
+                widget={activeWidget}
+                size={sizesFor(activeWidget as { kind: HomeWidget['kind']; ref?: string }).includes(activeWidget.size) ? activeWidget.size : sizesFor(activeWidget as { kind: HomeWidget['kind']; ref?: string }).slice(-1)[0]}
+                ctx={ctx}
+                editing
+              />
             </div>
           ) : null}
         </DragOverlay>
