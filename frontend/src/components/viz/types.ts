@@ -32,7 +32,11 @@ type Base = {
 }
 
 export type Trend = { from: string; field: string; x?: string }
-export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; caption?: string; trend?: Trend }
+/**
+ * `deltaLabel` names what a delta is relative to ("of your book", "on cost") — a % never stands alone.
+ * `name`: a field of the block's first row that says what the number is about ("country" → United States).
+ */
+export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; deltaLabel?: string; name?: string; caption?: string; trend?: Trend }
 export type MeterBlock = Base & { type: 'meter'; label: string; value: Measure; max: Measure | number; format?: VizFormat; mark?: Measure; markLabel?: string; caption?: string }
 export type KpiItem = { label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; hint?: string }
 export type KpisBlock = Base & { type: 'kpis'; items: KpiItem[] }
@@ -49,9 +53,18 @@ export type BarsBlock = Base & {
   limit?: number
   secondary?: string
   secondaryFormat?: VizFormat
+  /** Column headers over the values: what the number is, and what a % is a share of ("% of account"). */
+  valueLabel?: string
+  secondaryLabel?: string
+  /** Which bars carry the accent; the rest stay neutral. Default: the largest (horizontal), all (vertical). */
+  highlight?: 'max' | 'min' | 'first' | 'last' | 'all' | 'none'
   details?: Detail[]
 }
-export type TimeseriesBlock = Base & { type: 'timeseries'; x?: string; series: { field: string; label: string }[]; style?: 'area' | 'line'; format?: VizFormat }
+/**
+ * `zero`: start the y-axis at 0 (default for money levels — a small change must not look like a cliff).
+ * `curve`: 'step' for balances that change in jumps (cash); auto-detected when omitted.
+ */
+export type TimeseriesBlock = Base & { type: 'timeseries'; x?: string; series: { field: string; label: string }[]; style?: 'area' | 'line'; format?: VizFormat; zero?: boolean; curve?: 'linear' | 'step' }
 export type MultiplesBlock = Base & { type: 'multiples'; label: string; ticker?: string; range?: string; value?: string; valueFormat?: VizFormat }
 export type HeatgridBlock = Base & {
   type: 'heatgrid'

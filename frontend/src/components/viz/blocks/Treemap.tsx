@@ -103,7 +103,7 @@ export function Treemap({ block, rows }: { block: TreemapBlock; rows: Row[] }) {
     title: String(r.name ?? r[block.label] ?? ''),
     rows: [
       { label: 'Value', value: fmt(sizeOf(r), block.format), money: true },
-      { label: 'Share', value: fmt(sizeOf(r) / (groupTotal ?? total), 'pct') },
+      { label: groupTotal != null ? '% of group' : '% of total', value: fmt(sizeOf(r) / (groupTotal ?? total), 'pct') },
       ...(block.color ? [{ label: fieldLabel(block.color), value: fmt(colorOf(r), block.colorFormat) }] : []),
       ...(num(r.day_change) != null && block.color === 'day_change_pct' ? [{ label: 'Today', value: fmt(r.day_change, 'signedMoney'), money: true }] : []),
       ...detailRows(block.details, r, fmt),
@@ -116,8 +116,8 @@ export function Treemap({ block, rows }: { block: TreemapBlock; rows: Row[] }) {
       box,
     ).map((t) => {
       const c = divergingFill(colorOf(t.data), cap)
-      const fill = block.color ? c.fill : 'color-mix(in oklab, var(--viz-1) 70%, var(--viz-mid))'
-      const ink = block.color ? inkOn(c.strength) : '#ffffff'
+      const fill = block.color ? c.fill : 'color-mix(in oklab, var(--viz-neutral) 45%, var(--viz-mid))'
+      const ink = block.color ? inkOn(c.strength) : 'var(--foreground)'
       const w = t.w - GAP
       const h = t.h - GAP
       const label = String(t.data[block.label] ?? '')
@@ -217,7 +217,7 @@ export function Treemap({ block, rows }: { block: TreemapBlock; rows: Row[] }) {
 
   return (
     <div>
-      {groups ? <Breadcrumb trail={focus ? ['All', focus] : ['All']} onBack={() => setFocus(null)} /> : null}
+      {groups && focus ? <Breadcrumb trail={['All', focus]} onBack={() => setFocus(null)} /> : null}
       <div ref={hostRef} className="relative">
         <div ref={ref} className="relative w-full" style={{ height }} onPointerLeave={hide}>
           {width > 0 ? content : null}

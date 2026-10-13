@@ -1,15 +1,24 @@
 {
   "version": 1,
   "title": "Theme map",
-  "description": "Your book organised by play — what each theme owns, how it's doing today, and what's unsorted",
+  "description": "Is my book organised into plays? What each play owns, how it's doing today, and what's unsorted",
   "icon": "layout-grid",
   "data": {"pf": {"source": "portfolio"}, "plays": {"source": "plays"}},
   "blocks": [
     {
+      "type": "hero",
+      "label": "Held through a play",
+      "from": "pf.positions",
+      "value": {"agg": "sum", "field": "value", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "!=", "value": "Unsorted"}}], "per": {"agg": "sum", "field": "value"}},
+      "format": "pct",
+      "caption": "Share of your holdings owned by a play: a theme bet with a thesis, a basket and kill criteria. The rest is unsorted.",
+      "width": "two-thirds"
+    },
+    {
       "type": "kpis",
       "from": "pf.positions",
+      "width": "third",
       "items": [
-        {"label": "In plays", "value": {"agg": "sum", "field": "value", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "!=", "value": "Unsorted"}}], "per": {"agg": "sum", "field": "value"}}, "format": "pct", "hint": "of invested money"},
         {"label": "Plays", "value": {"from": "plays.plays", "agg": "count", "transform": [{"filter": {"field": "status", "op": "in", "value": ["active", "paused", "draft"]}}]}, "format": "int", "hint": "active, paused or draft"},
         {"label": "Unsorted", "value": {"agg": "count", "transform": [{"enrich": ["play"]}, {"filter": {"field": "play", "op": "=", "value": "Unsorted"}}]}, "format": "int", "hint": "holdings with no play"}
       ]
@@ -39,7 +48,7 @@
         {"field": "owned_count", "label": "Owned", "format": "int"},
         {"field": "bench_count", "label": "On the bench", "format": "int"}
       ],
-      "empty": "No plays yet — a play is a theme bet with a thesis, a basket and kill criteria. Create one from Plays."
+      "empty": "No plays yet. A play is a theme bet with a thesis, a basket and kill criteria; create one from Plays."
     }
   ]
 }

@@ -52,6 +52,10 @@ export function catColor(i: number, isOther = false) {
   return isOther || i >= CATEGORICAL.length ? 'var(--viz-other)' : CATEGORICAL[i]
 }
 
+/** One-series marks: the accent carries the point being made, everything else stays neutral. */
+export const ACCENT = 'var(--viz-accent)'
+export const NEUTRAL = 'var(--viz-neutral)'
+
 /** Diverging fill for a signed value: grey at 0 → gain/loss pole at |v| ≥ cap. */
 export function divergingFill(v: number | null, cap: number): { fill: string; strength: number } {
   if (v == null || !Number.isFinite(v) || cap <= 0) return { fill: 'var(--viz-mid)', strength: 0 }
@@ -154,7 +158,7 @@ export function Legend({ items }: { items: { label: string; color: string; line?
 }
 
 export function EmptyNote({ children }: { children: ReactNode }) {
-  return <div className="flex min-h-24 items-center justify-center px-4 py-6 text-center text-sm text-muted-foreground">{children}</div>
+  return <div className="flex min-h-20 max-w-[52ch] items-center py-4 text-[13px] leading-relaxed text-muted-foreground">{children}</div>
 }
 
 export function Breadcrumb({ trail, onBack }: { trail: string[]; onBack: (depth: number) => void }) {
@@ -176,7 +180,7 @@ export function Breadcrumb({ trail, onBack }: { trail: string[]; onBack: (depth:
   )
 }
 
-const PRETTY: Record<string, string> = { stocks_isa: 'Stocks ISA', invest: 'Invest', all: 'All accounts', DEPOSIT: 'Deposit', WITHDRAW: 'Withdrawal', WITHDRAWAL: 'Withdrawal' }
+const PRETTY: Record<string, string> = { stocks_isa: 'Stocks ISA', invest: 'Invest', crypto: 'Crypto', all: 'All accounts', DEPOSIT: 'Deposit', WITHDRAW: 'Withdrawal', WITHDRAWAL: 'Withdrawal' }
 
 const FIELD_LABELS: Record<string, string> = {
   day_change_pct: 'Today',
@@ -185,7 +189,7 @@ const FIELD_LABELS: Record<string, string> = {
   ppl_pct: 'Return',
   value: 'Value',
   cost: 'Cost',
-  weight: 'Weight',
+  weight: '% of book',
   count: 'Holdings',
   owned_count: 'Owned',
   bench_count: 'On the bench',
@@ -193,7 +197,7 @@ const FIELD_LABELS: Record<string, string> = {
   amount: 'Amount',
   quantity: 'Shares',
   free_cash: 'Cash',
-  cash_share: 'Cash share',
+  cash_share: '% of account',
   total: 'Total',
   invested: 'Invested',
   dividend_yield: 'Yield',
@@ -234,5 +238,10 @@ export function shortLabel(s: string): string {
 /** Human labels for raw enum values that show up as categories (accounts, cash types). */
 export function prettyLabel(v: unknown): string {
   const s = v == null ? '' : String(v)
-  return PRETTY[s] ?? s
+  if (PRETTY[s]) return PRETTY[s]
+  // Month keys ("2026-06") read as months ("Jun 26").
+  if (/^\d{4}-\d{2}$/.test(s)) return new Date(`${s}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })
+  // Raw lowercase enum values ("crypto", "kraken") read as names; tickers and sentences pass through.
+  if (/^[a-z][a-z_]{1,23}$/.test(s)) return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')
+  return s
 }

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "What moved today",
-  "description": "Today's move by theme and holding, the biggest contributors, and the headlines behind them",
+  "description": "What moved my portfolio today, and why? The day's move, where it came from, and the headlines behind it",
   "icon": "activity",
   "controls": {"account": true},
   "data": {
@@ -17,21 +17,23 @@
       "format": "signedMoney",
       "delta": {"agg": "sum", "field": "day_change", "per": {"from": "pf.account", "field": "invested"}},
       "deltaFormat": "signedPct",
-      "width": "two-thirds"
+      "deltaLabel": "on what's invested",
+      "caption": "The change in value of everything you hold since the last close.",
+      "width": "half"
     },
     {
       "type": "kpis",
       "from": "pf.positions",
-      "width": "third",
+      "width": "half",
       "items": [
-        {"label": "Up today", "value": {"agg": "count", "transform": [{"filter": {"field": "day_change_pct", "op": ">", "value": 0}}]}, "format": "int"},
-        {"label": "Down today", "value": {"agg": "count", "transform": [{"filter": {"field": "day_change_pct", "op": "<", "value": 0}}]}, "format": "int"}
+        {"label": "Rising", "value": {"agg": "count", "transform": [{"filter": {"field": "day_change_pct", "op": ">", "value": 0}}]}, "format": "int", "hint": "holdings up today"},
+        {"label": "Falling", "value": {"agg": "count", "transform": [{"filter": {"field": "day_change_pct", "op": "<", "value": 0}}]}, "format": "int", "hint": "holdings down today"}
       ]
     },
     {
       "type": "treemap",
       "title": "Where the move came from",
-      "subtitle": "Tile size is position value, colour is today's move. Click a theme to drill in, a holding to open it.",
+      "subtitle": "Tile size is what you hold, colour is today's move. Click a theme to drill in, a holding to open it.",
       "from": "pf.positions",
       "transform": [{"enrich": ["theme"]}],
       "label": "ticker",
@@ -44,7 +46,7 @@
     {
       "type": "bars",
       "title": "Biggest contributors",
-      "subtitle": "Today's change in value, largest moves first",
+      "subtitle": "Today's change in pounds, the largest moves either way",
       "from": "pf.positions",
       "transform": [{"compute": {"as": "abs_move", "op": "abs", "field": "day_change"}}, {"sort": {"by": "abs_move", "dir": "desc"}}, {"top": {"n": 10}}, {"sort": {"by": "day_change", "dir": "desc"}}],
       "label": "ticker",
@@ -65,7 +67,7 @@
         {"field": "source", "label": "Source", "format": "text"}
       ],
       "limit": 12,
-      "empty": "No headlines for today's movers — moves this size are often market-wide.",
+      "empty": "No headlines for today's movers. Moves this size are often market-wide.",
       "width": "half"
     }
   ]

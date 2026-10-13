@@ -80,7 +80,14 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
   }
 
   const legend = (
-    <ul className={cn('grid gap-x-6 gap-y-1', block.style === 'donut' && !env.size ? 'min-w-0 flex-1' : env.size === 'S' ? 'mt-3' : 'mt-4 sm:grid-cols-2')}>
+    <ul className={cn('grid gap-y-0.5', block.style === 'donut' && !env.size ? 'min-w-0 flex-1' : env.size === 'S' ? 'mt-3' : env.size ? 'mt-4 gap-x-6 sm:grid-cols-2' : 'mt-5')}>
+      {env.size ? null : (
+        <li className="flex items-end gap-2 px-1.5 pb-1" aria-hidden>
+          <span className="flex-1" />
+          <span className="viz-colhead">Value</span>
+          <span className="viz-colhead w-16 text-right">% of total</span>
+        </li>
+      )}
       {slices.slice(0, legendCap).map((s) => {
         const drillable = Array.isArray(s.row.items) || (typeof s.row.ticker === 'string' && !s.other)
         return (
@@ -94,7 +101,7 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
               <span className="size-2.5 shrink-0 rounded-[3px]" style={{ background: s.color }} />
               <span className="min-w-0 flex-1 truncate">{s.label}</span>
               {env.size ? null : <span className={cn('tabular-nums text-muted-foreground', blur(block.format))}>{fmt(s.value, block.format)}</span>}
-              <span className="w-12 text-right font-medium tabular-nums">{fmt(s.value / total, 'pct')}</span>
+              <span className={cn('text-right font-medium tabular-nums', env.size ? 'w-12' : 'w-16')}>{fmt(s.value / total, 'pct')}</span>
             </button>
           </li>
         )
@@ -140,7 +147,7 @@ export function Allocation({ block, rows }: { block: AllocationBlock; rows: Row[
             {fmt(total, 'moneyCompact')}
           </text>
           <text x="50%" y="59%" textAnchor="middle" className="fill-muted-foreground text-[11px]">
-            {slices.length} {slices.length === 1 ? 'slice' : 'slices'}
+            total
           </text>
         </svg>
         {legend}

@@ -6,6 +6,7 @@ import { catColor, EmptyNote, Legend, Tooltip, useBlur, useFmt, useTooltip, useV
 import type { Row, TimeseriesBlock } from '../types'
 import { niceTicks } from './Bars'
 import { Sparkline } from './Figures'
+import { isStepSeries } from './step'
 
 function toTime(v: unknown): number | null {
   if (typeof v === 'number') return v
@@ -40,7 +41,7 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
           <span className={cn('text-xl font-semibold tracking-tight', blur(block.format))}>{fmt(last, block.format === 'moneyCompact' ? 'money' : block.format)}</span>
           <span className={cn('text-xs tabular-nums', (change ?? 0) >= 0 ? 'text-positive' : 'text-negative')}>{fmt(change, 'signedPct')}</span>
         </div>
-        <Sparkline values={vals} height={env.size === 'S' ? 56 : 72} signed />
+        <Sparkline values={vals} height={env.size === 'S' ? 56 : 72} signed zero={block.zero ?? ((!block.format || block.format.includes('oney')) && Math.min(...vals) >= 0)} />
       </div>
     )
   }
@@ -51,7 +52,12 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
   const ih = h - m.t - m.b
   let lo = Math.min(...all)
   let hi = Math.max(...all)
-  if (block.style !== 'line' && series.length === 1 && lo > 0 && (hi - lo) / hi > 0.6) lo = 0
+  // Honest axes: an amount ("how much cash", "what it's worth") starts at zero,
+  // so a £400 step on £5,000 looks like the 8% it is, not a cliff. Opt out with
+  // `zero: false` for rates/indices where the level itself isn't the point.
+  const isAmount = !block.format || block.format === 'money' || block.format === 'moneyCompact' || block.format === 'num' || block.format === 'int'
+  const zero = block.zero ?? (isAmount && lo >= 0)
+  if (zero && lo > 0) lo = 0
   const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.05 || 1
   lo -= lo === 0 ? 0 : pad
   hi += pad
@@ -68,6 +74,7 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
   const nTicks = Math.max(2, Math.min(6, Math.floor(iw / 90)))
   const xTicks: number[] = Array.from({ length: nTicks }, (_, i) => t0 + ((t1 - t0) * i) / (nTicks - 1))
   const axisFmt = block.format?.includes('oney') ? 'moneyCompact' : block.format
+  const step = (block.curve ?? (isStepSeries(pts.map((p) => num(p.r[series[0].field]))) ? 'step' : 'linear')) === 'step'
 
   const onMove = (e: React.PointerEvent<SVGRectElement>) => {
     const box = (e.currentTarget as SVGRectElement).getBoundingClientRect()
@@ -116,7 +123,15 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
             {series.map((s, si) => {
               const valid = pts.filter((p) => num(p.r[s.field]) != null)
               if (valid.length < 2) return null
-              const d = valid.map((p, j) => `${j ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(num(p.r[s.field])!).toFixed(1)}`).join(' ')
+              // Balances move in jumps (a deposit lands on a day): draw steps, not ramps.
+              const d = valid
+                .map((p, j) => {
+                  const x = X(p.t).toFixed(1)
+                  const y = Y(num(p.r[s.field])!).toFixed(1)
+                  if (!j) return `M${x},${y}`
+                  return step ? `H${x} V${y}` : `L${x},${y}`
+                })
+                .join(' ')
               const area = block.style !== 'line' && si === 0
               return (
                 <g key={s.field}>
@@ -130,14 +145,24 @@ export function Timeseries({ block, rows }: { block: TimeseriesBlock; rows: Row[
               const s = series[0]
               const last = [...pts].reverse().find((p) => num(p.r[s.field]) != null)
               if (!last) return null
-              return <circle cx={X(last.t)} cy={Y(num(last.r[s.field])!)} r={4} fill={s.color} stroke="var(--card)" strokeWidth={2} />
+              const ly = Y(num(last.r[s.field])!)
+              return (
+                <g pointerEvents="none">
+                  <circle cx={X(last.t)} cy={ly} r={4} fill={s.color} stroke="var(--viz-surface)" strokeWidth={2} />
+                  {hover == null ? (
+                    <text x={X(last.t) - 8} y={ly < m.t + 16 ? ly + 18 : ly - 10} textAnchor="end" className={cn('viz-axis-text', blur(block.format))} style={{ fill: 'var(--foreground)', fontWeight: 500 }}>
+                      {fmt(last.r[s.field], block.format === 'moneyCompact' ? 'money' : block.format)}
+                    </text>
+                  ) : null}
+                </g>
+              )
             })()}
             {hover != null ? (
               <g pointerEvents="none">
                 <line x1={X(pts[hover].t)} x2={X(pts[hover].t)} y1={m.t} y2={m.t + ih} stroke="var(--viz-axis)" />
                 {series.map((s) => {
                   const v = num(pts[hover].r[s.field])
-                  return v == null ? null : <circle key={s.field} cx={X(pts[hover].t)} cy={Y(v)} r={4} fill={s.color} stroke="var(--card)" strokeWidth={2} />
+                  return v == null ? null : <circle key={s.field} cx={X(pts[hover].t)} cy={Y(v)} r={4} fill={s.color} stroke="var(--viz-surface)" strokeWidth={2} />
                 })}
               </g>
             ) : null}

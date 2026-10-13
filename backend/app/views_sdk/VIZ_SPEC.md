@@ -22,9 +22,46 @@ Where specs appear:
   (`POST /api/views/specs {spec}` → a saved view, instantly). `data` may be
   omitted in chat: the default query `pf` (= `portfolio`) is always available.
 
-Design intent: **visual first, detail on demand.** Lead with one hero number or
-a KPI strip, then the picture (treemap, allocation, ranked bars, a curve).
-Tables are the drill-down layer, not the page. 3–6 blocks is typical.
+Design intent: **one question, answered in order.** A view answers a single
+question ("Is idle cash costing me?"); say it as a question at the start of
+`description`, and cut any block that doesn't help answer it. Then compose:
+
+1. **The answer** — one `hero` (the number that answers the question) with a
+   `kpis` aside of 2–3 supporting figures beside it.
+2. **The why** — the one chart that explains the answer.
+3. **The detail, on demand** — a second chart, or a table of rows no chart
+   draws. 3–6 blocks is typical.
+
+**Grid.** Blocks sit on a 12-column grid (`full` 12 · `two-thirds` 8 · `half` 6
+· `third` 4) and every row adds up to 12: hero `two-thirds` + kpis `third` (or
+`half` + `half`), charts in pairs (`half` + `half`, `two-thirds` + `third`), a
+large treemap or time chart `full`. A short row is widened by the validator and
+the renderer, so a lone `half` simply becomes `full` — plan rows instead. The
+page draws on the canvas with hairline rules between rows and columns; a `kpis`
+block a third wide (or less) stacks vertically as the hero's aside.
+
+**Honest charts.** Amounts over time start at zero (the default for money; a
+£400 move on £5,000 must look like 8%, not a cliff). A balance that moves in
+jumps (cash, contributions) renders as steps (`curve: "step"`, auto-detected).
+A series that barely moves isn't worth a chart: state it in a kpi ("Cash a year
+ago"). Never chart the same series twice — the validator drops a hero `trend`
+that a `timeseries` on the page already draws. One or two slices of a whole is
+a number, not a donut.
+
+**Every number is labelled; every % names its basis.** A % alone is
+ambiguous: hero `deltaLabel` ("of your book", "on what you paid"), a kpi
+`hint` ("of dividends received"), bars `valueLabel` / `secondaryLabel`
+("% of account", "% of book"). The validator fills the basis when the measure
+makes it obvious (`per` the account total → "of your book"; a ratio over
+`total` by account → "% of account") and flags the rest.
+
+**Colour is meaning.** One-series bars are neutral with one accent on the point
+being made (`highlight`, default the largest); gain/loss colours only for
+signed values; categorical colours only for identity.
+
+**Formatting.** Money is whole pounds from £100 up (pennies only on small sums
+like a £3.88 dividend); use `signedMoney` / `signedPct` for change; percentages
+show 1 decimal (2 under 1%, none from 100%).
 
 **No repeats.** Never follow a chart with a `table` of the same rows (same
 `from` and the same `groupBy`, or the chart's label column). Every chart
@@ -112,13 +149,13 @@ Labels are what the user reads: never a raw field name.
 ## Blocks
 
 **`hero`** — the one number the page leads with (one per page).
-`{"type": "hero", "label": "Today", "value": Measure, "format": "signedMoney", "delta": Measure, "deltaFormat": "signedPct", "caption": "across 20 holdings", "trend": {"from": "hist.points", "field": "total"}?}`
-`trend` adds a sparkline under the number.
+`{"type": "hero", "label": "Today", "value": Measure, "format": "signedMoney", "delta": Measure, "deltaFormat": "signedPct", "deltaLabel": "on what's invested", "caption": "across 20 holdings", "trend": {"from": "hist.points", "field": "total"}?}`
+`deltaLabel` (≤ 40) follows the delta: what it's relative to. `name` (a field) names what the number is about from the block's first row — `{"label": "Largest country", "name": "country", "from": "pf.positions", "transform": [enrich, groupBy country, sort, top 1], …}` reads "Largest country · United States". `trend` adds a sparkline under the number — only when no chart on the page draws that series.
 
 **`meter`** — one amount against a limit, with an optional pace marker.
 `{"type": "meter", "label": "ISA allowance used", "from": "cf.tax_year", "value": {"field": "isa_used"}, "max": {"field": "isa_allowance"} | 20000, "mark": {"field": "year_elapsed_pct"}?, "markLabel": "Share of the tax year gone"?, "format": "money"}`
 
-**`kpis`** — 2–5 stat tiles.
+**`kpis`** — 2–5 supporting figures, each with a `hint` that says what it is (a % says what it is a share of). Beside a hero (≤ a third wide) they stack; full width they sit in a row.
 `{"type": "kpis", "items": [{"label": "Invested", "value": Measure, "format": "money", "delta": Measure?, "deltaFormat": "signedPct"?, "hint": "text"?}]}`
 
 **`treemap`** — part-to-whole by size, coloured by a signed measure. Best for "where is my money / what moved".
@@ -130,12 +167,12 @@ Labels are what the user reads: never a raw field name.
 `bar` (default) is a single 100% stacked bar with a legend; `donut` for ≤ 5 slices.
 
 **`bars`** — ranked magnitude or a signed contribution.
-`{"type": "bars", "from": "...", "label": "ticker", "value": "day_change", "format": "signedMoney", "orientation": "horizontal" (default) | "vertical", "limit": 10?, "secondary": "day_change_pct"?, "secondaryFormat": "signedPct"?}`
-Signed values diverge from a zero line (gains green, losses red); unsigned bars use one hue. Use `vertical` for time buckets (e.g. months).
+`{"type": "bars", "from": "...", "label": "ticker", "value": "day_change", "format": "signedMoney", "orientation": "horizontal" (default) | "vertical", "limit": 10?, "secondary": "day_change_pct"?, "secondaryFormat": "signedPct"?, "valueLabel": "Cash"?, "secondaryLabel": "% of account"?, "highlight": "max"?}`
+Signed values diverge from a zero line (gains green, losses red). Unsigned bars are neutral with the accent on `highlight` (`max` default for horizontal, `all` for vertical; also `min` `first` `last` `none`). `valueLabel` / `secondaryLabel` head the value columns — required when a % column needs its basis. Use `vertical` for time buckets (e.g. months); the peak and latest bars are labelled.
 
 **`timeseries`** — change over time.
 `{"type": "timeseries", "from": "hist.points", "x": "date", "series": [{"field": "total", "label": "Value"}, {"field": "invested", "label": "Invested"}], "style": "area" | "line", "format": "moneyCompact"}`
-≤ 4 series, one y-axis. A single `area` series reads best.
+≤ 4 series, one y-axis. A single `area` series reads best. `zero` (default on for amounts) starts the axis at 0; set `false` only for rates or prices where the level isn't the point. `curve: "step"` for balances (auto-detected when most points repeat).
 
 **`multiples`** — one small sparkline per row, same scale per tile.
 `{"type": "multiples", "from": "pf.positions", "transform": [{"top": {"n": 8}}], "label": "ticker", "ticker": "yf", "range": "3mo", "value": "day_change_pct"?, "valueFormat": "signedPct"?}`

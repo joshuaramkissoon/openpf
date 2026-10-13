@@ -481,3 +481,160 @@ def test_presets_have_no_duplicate_tables():
 
     for slug, spec in preset_specs().items():
         assert not spec_warnings(spec), slug
+
+
+def test_tidy_drops_a_hero_sparkline_the_page_already_charts():
+    raw = {
+        "version": 1,
+        "title": "Cash",
+        "data": {"hist": {"source": "history", "params": {"range": "1y"}}},
+        "blocks": [
+            {"type": "hero", "label": "Idle cash", "from": "pf.account", "value": {"field": "free_cash"}, "trend": {"from": "hist.points", "field": "free_cash"}, "width": "half"},
+            {"type": "timeseries", "title": "Cash over the year", "from": "hist.points", "series": [{"field": "free_cash", "label": "Cash"}], "width": "half"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert "trend" not in spec["blocks"][0]
+    # A sparkline of a series nothing else draws stays.
+    raw["blocks"][1]["series"] = [{"field": "total", "label": "Value"}]
+    spec, _ = validate_spec(raw)
+    assert spec["blocks"][0]["trend"]["field"] == "free_cash"
+
+
+def test_tidy_labels_what_a_percentage_is_a_share_of():
+    raw = {
+        "version": 1,
+        "title": "Cash",
+        "blocks": [
+            {"type": "hero", "label": "Idle cash", "from": "pf.account", "value": {"field": "free_cash"},
+             "delta": {"from": "pf.metrics", "field": "cash_ratio"}, "deltaFormat": "pct", "width": "half"},
+            {"type": "bars", "title": "Cash by account", "from": "pf.accounts", "label": "account", "value": "free_cash",
+             "transform": [{"compute": {"as": "cash_share", "op": "ratio", "a": "free_cash", "b": "total"}}],
+             "secondary": "cash_share", "secondaryFormat": "pct", "width": "half"},
+            {"type": "bars", "title": "Largest", "from": "pf.positions", "label": "ticker", "value": "weight", "format": "pct"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    hero, cash, largest = spec["blocks"]
+    assert hero["deltaLabel"] == "of your book"
+    assert cash["secondaryLabel"] == "% of account"
+    assert largest["valueLabel"] == "% of book"
+
+
+def test_tidy_warns_when_a_percentage_basis_cannot_be_inferred():
+    from app.services.viz_spec import spec_warnings
+
+    raw = {
+        "version": 1,
+        "title": "X",
+        "blocks": [{"type": "hero", "label": "Odd", "from": "pf.account", "value": {"field": "total"}, "delta": {"field": "ppl"}, "deltaFormat": "pct"}],
+    }
+    assert any("no basis" in w for w in spec_warnings(raw))
+
+
+def test_tidy_fills_short_rows_so_the_grid_has_no_voids():
+    def block(width):
+        return {"type": "note", "text": "x", "width": width}
+
+    widths = ["half", "full", "third", "third", "third", "third", "half"]
+    spec, _ = validate_spec({"version": 1, "title": "X", "blocks": [block(w) for w in widths]})
+    assert [b["width"] for b in spec["blocks"]] == ["full", "full", "third", "third", "third", "third", "two-thirds"]
+    spec, _ = validate_spec({"version": 1, "title": "X", "blocks": [block("third"), block("third")]})
+    assert [b["width"] for b in spec["blocks"]] == ["half", "half"]
+
+
+def test_tidy_drops_a_second_chart_of_the_same_rows_and_pairs_hero_with_kpis():
+    by_country = {"from": "pf.positions", "transform": [{"enrich": ["country"]}, {"groupBy": "country"}], "label": "country", "value": "value"}
+    raw = {
+        "version": 1,
+        "title": "Countries",
+        "blocks": [
+            {"type": "hero", "label": "Abroad", "from": "pf.positions", "value": {"agg": "sum", "field": "value"}},
+            {"type": "kpis", "from": "pf.positions", "items": [{"label": "Holdings", "value": {"agg": "count"}, "format": "int"}]},
+            {"type": "allocation", "title": "Mix", **by_country},
+            {"type": "bars", "title": "By country", **by_country},
+            {"type": "treemap", "title": "Holdings", "from": "pf.positions", "transform": [{"enrich": ["country"]}], "label": "ticker", "size": "value", "group": "country"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert [b["type"] for b in spec["blocks"]] == ["hero", "kpis", "allocation", "treemap"]
+    assert [b["width"] for b in spec["blocks"][:2]] == ["two-thirds", "third"]
+
+
+def test_tidy_charts_dividend_months_continuously():
+    raw = {
+        "version": 1,
+        "title": "Income",
+        "data": {"divs": {"source": "dividends"}},
+        "blocks": [{"type": "bars", "from": "divs.monthly", "label": "month", "value": "amount", "orientation": "vertical"}],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    b = spec["blocks"][0]
+    assert b["from"] == "divs.items" and b["transform"] == [{"month": {"field": "paid_on", "sum": "amount", "last": 12}}] and b["label"] == "label"
+
+
+def test_normalize_counts_the_dimension_a_kpi_names():
+    from app.services.viz_spec import normalize_spec
+
+    raw = {
+        "version": 1,
+        "title": "X",
+        "blocks": [{"type": "kpis", "from": "pf.positions", "transform": [{"enrich": ["country"]}], "items": [
+            {"label": "Countries", "value": {"agg": "count"}, "format": "int"},
+            {"label": "Holdings", "value": {"agg": "count"}, "format": "int"},
+        ]}],
+    }
+    spec, problems = validate_spec(normalize_spec(raw))
+    assert not problems
+    countries, holdings = spec["blocks"][0]["items"]
+    assert countries["value"]["transform"] == [{"enrich": ["country"]}, {"groupBy": "country"}]
+    assert "transform" not in holdings["value"]
+
+
+def test_normalize_carries_block_enrich_into_a_measure_transform():
+    from app.services.viz_spec import normalize_spec
+
+    raw = {
+        "version": 1,
+        "title": "X",
+        "blocks": [{"type": "kpis", "from": "pf.positions", "transform": [{"enrich": ["country"]}], "items": [
+            {"label": "Top 3 share", "value": {"agg": "sum", "field": "value", "transform": [{"groupBy": "country"}, {"top": {"n": 3}}], "per": {"agg": "sum", "field": "value"}}, "format": "pct"},
+        ]}],
+    }
+    spec, problems = validate_spec(normalize_spec(raw))
+    assert not problems
+    assert spec["blocks"][0]["items"][0]["value"]["transform"][0] == {"enrich": ["country"]}
+    # On a grouped block, a measure that refines rows keeps the grouping.
+    raw["blocks"][0]["transform"] = [{"enrich": ["country"]}, {"groupBy": "country"}]
+    raw["blocks"][0]["items"][0]["value"]["transform"] = [{"sort": {"by": "value"}}, {"top": {"n": 3}}]
+    spec, _ = validate_spec(normalize_spec(raw))
+    steps = spec["blocks"][0]["items"][0]["value"]["transform"]
+    assert [list(s)[0] for s in steps] == ["enrich", "groupBy", "sort", "top"]
+
+
+def test_normalize_enriches_a_table_column_that_needs_it():
+    from app.services.viz_spec import normalize_spec
+
+    raw = {"version": 1, "title": "X", "blocks": [{"type": "table", "from": "pf.positions", "columns": [{"field": "ticker", "label": "Holding"}, {"field": "country", "label": "Country"}]}]}
+    spec, problems = validate_spec(normalize_spec(raw))
+    assert not problems
+    assert spec["blocks"][0]["transform"][0] == {"enrich": ["country"]}
+
+
+def test_spec_accepts_honesty_and_labelling_fields():
+    raw = {
+        "version": 1,
+        "title": "X",
+        "data": {"hist": {"source": "history"}},
+        "blocks": [
+            {"type": "timeseries", "from": "hist.points", "series": [{"field": "free_cash", "label": "Cash"}], "zero": True, "curve": "step"},
+            {"type": "bars", "from": "pf.positions", "label": "ticker", "value": "value", "valueLabel": "Value", "highlight": "none"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert spec["blocks"][0]["curve"] == "step" and spec["blocks"][1]["highlight"] == "none"

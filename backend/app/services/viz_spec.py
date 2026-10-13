@@ -195,6 +195,8 @@ class HeroBlock(_Block):
     format: Format = "money"
     delta: Measure | None = None
     deltaFormat: Format = "signedPct"
+    deltaLabel: str | None = Field(default=None, max_length=40)  # what the delta is relative to: "of your book"
+    name: FieldName | None = None  # a field of the block's first row naming what the number is about ("country")
     caption: str | None = Field(default=None, max_length=200)
     trend: Trend | None = None
 
@@ -266,6 +268,9 @@ class BarsBlock(_Rows):
     limit: int = Field(default=12, ge=1, le=40)
     secondary: FieldName | None = None
     secondaryFormat: Format = "signedPct"
+    valueLabel: str | None = Field(default=None, max_length=30)  # column header over the values
+    secondaryLabel: str | None = Field(default=None, max_length=30)  # e.g. "% of account"
+    highlight: Literal["max", "min", "first", "last", "all", "none"] | None = None
     details: Details | None = None
 
 
@@ -280,6 +285,8 @@ class TimeseriesBlock(_Rows):
     series: list[Series] = Field(min_length=1, max_length=4)
     style: Literal["area", "line"] = "area"
     format: Format = "moneyCompact"
+    zero: bool | None = None  # y-axis from 0; default on for amounts
+    curve: Literal["linear", "step"] | None = None  # step for balances; auto when omitted
 
 
 class MultiplesBlock(_Rows):
@@ -428,6 +435,15 @@ def _fix_measure(m: Any) -> None:
     m["field"] = next((c for c in reversed(computed) if c), "value")
 
 
+_COUNT_DIMS = {"countries": "country", "country": "country", "sectors": "sector", "sector": "sector", "industries": "industry", "themes": "theme"}
+
+
+def _count_dimension(label: str) -> str | None:
+    """'Countries held' → country. Only a label that leads with the dimension."""
+    first = label.strip().lower().split(" ")[0] if label.strip() else ""
+    return _COUNT_DIMS.get(first)
+
+
 def normalize_spec(spec: Any) -> Any:
     """Fill in the obvious gaps fast models leave, before validation:
 
@@ -464,6 +480,54 @@ def normalize_spec(spec: Any) -> Any:
             if isinstance(item, dict):
                 _fix_measure(item.get("value"))
                 _fix_measure(item.get("delta"))
+        # A measure's own transform replaces the block's, so it loses the block's
+        # enrich (then "group by country" groups everything into Other). Carry
+        # the block's enrich fields over — enrich is idempotent.
+        block_enrich = [f for s in b.get("transform") or [] if isinstance(s, dict) for f in (s.get("enrich") or [])]
+        if block_enrich:
+            own = [b.get(k) for k in ("value", "delta")] + [it.get(k) for it in b.get("items") or [] if isinstance(it, dict) for k in ("value", "delta")]
+            for m in own:
+                if not isinstance(m, dict) or m.get("from") or not isinstance(m.get("transform"), list):
+                    continue
+                block_steps = [s for s in b.get("transform") or [] if isinstance(s, dict)]
+                grouped = any("groupBy" in s for s in m["transform"] if isinstance(s, dict))
+                if not grouped and any("groupBy" in s for s in block_steps):
+                    # "Top 3 share" on a block grouped by country means the top 3
+                    # countries: the measure refines the block's rows.
+                    m["transform"][:0] = [s for s in block_steps if s not in m["transform"]]
+                    continue
+                have = {f for s in m["transform"] if isinstance(s, dict) for f in (s.get("enrich") or [])}
+                missing = [f for f in block_enrich if f not in have]
+                if missing:
+                    m["transform"].insert(0, {"enrich": missing})
+        # "Countries: 22" that counts holdings: a count labelled by a dimension
+        # counts that dimension's groups.
+        counted = [(it.get("label"), it.get("value")) for it in b.get("items") or [] if isinstance(it, dict)]
+        if kind == "hero":
+            counted.append((b.get("label"), b.get("value")))
+        for label, m in counted:
+            if not isinstance(m, dict) or m.get("agg") != "count" or not isinstance(label, str):
+                continue
+            src = m.get("from") or b.get("from")
+            steps = m["transform"] if "transform" in m else ([] if m.get("from") else b.get("transform"))
+            if src != "pf.positions" or any(isinstance(s, dict) and "groupBy" in s for s in steps or []):
+                continue
+            dim = _count_dimension(label)
+            if dim:
+                base = list(steps or [])
+                if not any(isinstance(s, dict) and dim in (s.get("enrich") or []) for s in base):
+                    base.insert(0, {"enrich": [dim]})
+                m["transform"] = base + [{"groupBy": dim}]
+                if not m.get("from") and b.get("from"):
+                    m["from"] = b["from"]
+        if kind == "table" and b.get("from") == "pf.positions":
+            wanted = [c.get("field") for c in b.get("columns") or [] if isinstance(c, dict) and c.get("field") in ENRICH_FIELDS]
+            steps = b.setdefault("transform", [])
+            if wanted and isinstance(steps, list):
+                have = {f for s in steps if isinstance(s, dict) for f in (s.get("enrich") or [])}
+                missing = [f for f in wanted if f not in have]
+                if missing:
+                    steps.insert(0, {"enrich": missing})
     return spec
 
 
@@ -512,6 +576,195 @@ def spec_warnings(spec: dict[str, Any]) -> list[str]:
     return tidy_spec(spec)[1]
 
 
+_PCT = {"pct", "signedPct"}
+_SPAN = {"full": 12, "two-thirds": 8, "half": 6, "third": 4}
+_WIDTH = {v: k for k, v in _SPAN.items()}
+
+
+def _basis_of(m: Any) -> str | None:
+    """What a % measure is a share of, when its shape says so unambiguously."""
+    if not isinstance(m, dict):
+        return None
+    per = m.get("per")
+    if isinstance(per, dict):
+        field = per.get("field")
+        if field == "total":
+            return "of your book"
+        if field == "invested":
+            return "of what's invested"
+        if field == "cost":
+            return "on cost"
+        if field == "value" and per.get("agg") == "sum":
+            return "of holdings"
+        return None
+    if m.get("field") in ("cash_ratio", "cash_pct"):
+        return "of your book"
+    return None
+
+
+def _secondary_basis(block: dict[str, Any]) -> str | None:
+    field = block.get("secondary")
+    if field == "weight":
+        return "% of book"
+    for step in block.get("transform") or []:
+        comp = step.get("compute") if isinstance(step, dict) else None
+        if not isinstance(comp, dict) or comp.get("as") != field:
+            continue
+        if comp.get("op") == "share":
+            return "% of total"
+        if comp.get("op") == "ratio" and comp.get("b") == "total":
+            return "% of account" if block.get("label") == "account" else "% of total"
+    return None
+
+
+def _label_percentages(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """Every % says what it's a share of. Fill the basis when the measure's shape
+    gives it away; otherwise leave a note for the builder."""
+    for b in blocks:
+        kind = b.get("type")
+        if kind == "hero" and b.get("delta") and b.get("deltaFormat", "signedPct") in _PCT and not b.get("deltaLabel"):
+            basis = _basis_of(b["delta"])
+            if basis:
+                b["deltaLabel"] = basis
+                notes.append(f"labelled hero '{b.get('label')}' delta '{basis}' (a % must say what it's a share of)")
+            else:
+                notes.append(f"hero '{b.get('label')}': its % delta has no basis; add deltaLabel (e.g. \"of your book\")")
+        if kind == "bars":
+            # A share of the listed rows is a share of holdings, not of the book (which includes cash).
+            label = str(b.get("secondaryLabel") or "")
+            if "book" in label.lower() and _secondary_basis(b) == "% of total" and b.get("from") == "pf.positions":
+                b["secondaryLabel"] = "% of holdings"
+                notes.append(f"relabelled bars '{b.get('title') or b.get('value')}' % column '% of holdings' (a share of the rows shown, not of the book)")
+            if b.get("secondary") and b.get("secondaryFormat", "signedPct") == "pct" and not b.get("secondaryLabel"):
+                basis = _secondary_basis(b)
+                if basis:
+                    b["secondaryLabel"] = basis
+                    notes.append(f"labelled bars '{b.get('title') or b.get('value')}' % column '{basis}'")
+                else:
+                    notes.append(f"bars '{b.get('title') or b.get('value')}': the % column has no basis; add secondaryLabel (e.g. \"% of account\")")
+            if b.get("format") == "pct" and b.get("value") == "weight" and not b.get("valueLabel"):
+                b["valueLabel"] = "% of book"
+                notes.append(f"labelled bars '{b.get('title') or 'weight'}' values '% of book'")
+
+
+def _drop_duplicate_trends(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """A hero sparkline of a series the page already charts is the same picture twice."""
+    charted = {
+        (b.get("from"), s.get("field"))
+        for b in blocks
+        if b.get("type") == "timeseries"
+        for s in b.get("series") or []
+        if isinstance(s, dict)
+    }
+    for b in blocks:
+        trend = b.get("trend") if b.get("type") == "hero" else None
+        if isinstance(trend, dict) and (trend.get("from"), trend.get("field")) in charted:
+            del b["trend"]
+            notes.append(f"dropped hero '{b.get('label')}' sparkline: the page already charts {trend.get('field')} from {trend.get('from')}")
+
+
+def _fill_rows(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """Rows on the 12-column grid always fill: a short row widens instead of
+    leaving a void (equal blocks share it; otherwise the last takes the rest)."""
+    row: list[dict[str, Any]] = []
+    used = 0
+
+    def close() -> None:
+        nonlocal row, used
+        rest = 12 - used
+        if row and rest > 0:
+            spans = [_SPAN.get(b.get("width") or "full", 12) for b in row]
+            if len(set(spans)) == 1 and 12 % len(row) == 0 and 12 // len(row) in _WIDTH:
+                new = [12 // len(row)] * len(row)
+            else:
+                new = spans[:-1] + [spans[-1] + rest]
+            if all(n in _WIDTH for n in new):
+                for b, n in zip(row, new):
+                    b["width"] = _WIDTH[n]
+                names = ", ".join(str(b.get("title") or b.get("label") or b.get("type")) for b in row)
+                notes.append(f"widened a short row so it fills the grid: {names}")
+        row, used = [], 0
+
+    for b in blocks:
+        span = _SPAN.get(b.get("width") or "full", 12)
+        if used + span > 12:
+            close()
+        row.append(b)
+        used += span
+    close()
+
+
+def _chart_key(b: dict[str, Any]) -> tuple[Any, ...] | None:
+    """What a chart draws: its rows (source + grouping) and its measure."""
+    kind = b.get("type")
+    if kind not in _CHARTS:
+        return None
+    # A treemap draws its leaves (label) nested under its group headers.
+    group = (_group_key(b), b.get("label"), b.get("group")) if kind == "treemap" else (_group_key(b) or b.get("label"))
+    measure = b.get("size") if kind == "treemap" else b.get("value")
+    filters = json.dumps([s for s in b.get("transform") or [] if isinstance(s, dict) and "filter" in s], sort_keys=True)
+    return (b.get("from"), group, measure, filters)
+
+
+def _drop_duplicate_charts(blocks: list[dict[str, Any]], notes: list[str]) -> list[dict[str, Any]]:
+    """Two charts of the same rows and measure (an allocation and a bar list of
+    countries by value) are one picture drawn twice: keep the first."""
+    seen: dict[tuple[Any, ...], dict[str, Any]] = {}
+    out = []
+    for b in blocks:
+        key = _chart_key(b)
+        if key and key in seen:
+            first = seen[key]
+            notes.append(f"dropped {b.get('type')} '{b.get('title') or 'untitled'}': it draws the same rows as {first.get('type')} '{first.get('title') or 'untitled'}'")
+            continue
+        if key:
+            seen[key] = b
+        out.append(b)
+    return out
+
+
+def _continuous_months(spec: dict[str, Any], blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """``dividends.monthly`` lists only months that paid, so a bar chart of it
+    hides the empty ones; chart the payments through the zero-filled ``month``
+    transform instead."""
+    data = spec.get("data") or {}
+    for b in blocks:
+        src = str(b.get("from") or "")
+        name, _, path = src.partition(".")
+        if b.get("type") != "bars" or path != "monthly" or b.get("transform"):
+            continue
+        if (data.get(name) or {}).get("source") != "dividends":
+            continue
+        b["from"] = f"{name}.items"
+        b["transform"] = [{"month": {"field": "paid_on", "sum": "amount", "last": 12}}]
+        b["label"], b["value"] = "label", "amount"
+        notes.append(f"bars '{b.get('title') or 'by month'}' now uses the zero-filled month transform (no missing months)")
+
+
+def _name_top_hero(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """A hero over the top group ("largest country") names which one it is."""
+    for b in blocks:
+        if b.get("type") != "hero" or b.get("name"):
+            continue
+        steps = [s for s in b.get("transform") or [] if isinstance(s, dict)]
+        group = _group_key(b)
+        if group and any((s.get("top") or {}).get("n") == 1 for s in steps):
+            b["name"] = group
+            notes.append(f"hero '{b.get('label')}' now names its top {group}")
+
+
+def _compose_hero_row(blocks: list[dict[str, Any]], notes: list[str]) -> None:
+    """The answer row: a full-width hero followed by full-width kpis becomes
+    hero + aside (two-thirds + third, or half + half for 4+ figures)."""
+    for i, b in enumerate(blocks[:-1]):
+        nxt = blocks[i + 1]
+        if b.get("type") == "hero" and nxt.get("type") == "kpis" and (b.get("width") or "full") == "full" and (nxt.get("width") or "full") == "full":
+            many = len(nxt.get("items") or []) > 3
+            b["width"], nxt["width"] = ("half", "half") if many else ("two-thirds", "third")
+            notes.append(f"set hero '{b.get('label')}' beside its kpis ({b['width']} + {nxt['width']})")
+            return
+
+
 def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Fix a valid spec's layout smells. Returns ``(spec, notes)``.
 
@@ -520,6 +773,14 @@ def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
       chart's ``details`` so they show in the tooltip and the table view.
     * A chart titled "… by theme" that actually groups by sector (or any other
       mismatch) is retitled to name the dimension it really uses.
+    * A hero sparkline of a series a timeseries on the page already draws is
+      dropped (one series, drawn once).
+    * A % with no stated basis gets one when the measure's shape gives it away
+      (``per`` the account total -> "of your book"; a ratio over ``total`` by
+      account -> "% of account"); otherwise a note asks for it.
+    * Two charts drawing the same rows and measure: the second is dropped.
+    * A full-width hero followed by full-width kpis becomes hero + aside.
+    * A row that doesn't fill the 12-column grid is widened (no voids).
     """
     blocks = [dict(b) for b in spec.get("blocks") or []]
     notes: list[str] = []
@@ -581,6 +842,14 @@ def tidy_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             word = _PLURAL.get(actual, actual + "s") if plural else actual
             out["title"] = page[: m.start(2)] + word + page[m.end(2) :]
             notes.append(f"retitled the page '{page}' to '{out['title']}'")
+    _continuous_months(spec, keep, notes)
+    keep = _drop_duplicate_charts(keep, notes)
+    out["blocks"] = keep
+    _drop_duplicate_trends(keep, notes)
+    _label_percentages(keep, notes)
+    _name_top_hero(keep, notes)
+    _compose_hero_row(keep, notes)
+    _fill_rows(keep, notes)
     if len(keep) == len(blocks) and not notes:
         return spec, []
     return out, notes

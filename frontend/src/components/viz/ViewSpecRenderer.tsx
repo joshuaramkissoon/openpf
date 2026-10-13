@@ -7,14 +7,21 @@ import { cn } from '@/lib/utils'
 import { BlockView } from './BlockView'
 import type { EngineCtx } from './engine'
 import { VizEnvContext, type VizEnv, type WidgetSize } from './shared'
+import { packRows, tidyBlocks } from './validate'
 import type { Account, Block, VizSpec } from './types'
 import './viz.css'
 
-const WIDTH: Record<NonNullable<Block['width']>, string> = {
-  full: 'lg:col-span-12',
-  half: 'lg:col-span-6',
-  third: 'lg:col-span-4',
-  'two-thirds': 'lg:col-span-8',
+// Literal classes so Tailwind sees them.
+const LG_SPAN: Record<number, string> = {
+  3: 'lg:col-span-3',
+  4: 'lg:col-span-4',
+  5: 'lg:col-span-5',
+  6: 'lg:col-span-6',
+  7: 'lg:col-span-7',
+  8: 'lg:col-span-8',
+  9: 'lg:col-span-9',
+  10: 'lg:col-span-10',
+  12: 'lg:col-span-12',
 }
 
 const ACCOUNTS: { id: Account; label: string }[] = [
@@ -34,16 +41,22 @@ export function VizProvider({ compact = false, size = null, onEditBlock, childre
   return <VizEnvContext.Provider value={env}>{children}</VizEnvContext.Provider>
 }
 
-/** Renders a whole (already validated) viz spec as a page: controls row, then a 12-column block grid. */
+/**
+ * Renders a whole (already validated) viz spec as an editorial page: content
+ * sits on the canvas (no card per block), rows are packed to a full 12-column
+ * width, rows are separated by hairline rules and columns by hairline dividers.
+ * Narrative order is the spec's order: the answer, then why, then the detail.
+ */
 export function ViewSpecRenderer({ spec, compact = false, className, onEditBlock }: { spec: VizSpec; compact?: boolean; className?: string; onEditBlock?: (block: Block) => void }) {
   const { currency } = useDisplayPrefs()
   const [account, setAccount] = useState<Account>('all')
   const ctx: EngineCtx = { currency, account }
+  const rows = useMemo(() => packRows(tidyBlocks(spec.blocks)), [spec.blocks])
   return (
     <VizProvider compact={compact} onEditBlock={onEditBlock}>
-      <div className={cn('space-y-4', className)}>
+      <div className={cn('viz-page', className)}>
         {spec.controls?.account ? (
-          <div className="flex items-center gap-2" role="group" aria-label="Account">
+          <div className="mb-8 flex items-center gap-2" role="group" aria-label="Account">
             <div className="inline-flex rounded-lg bg-muted p-0.5">
               {ACCOUNTS.map((a) => (
                 <button
@@ -62,13 +75,26 @@ export function ViewSpecRenderer({ spec, compact = false, className, onEditBlock
             </div>
           </div>
         ) : null}
-        <div className={cn('grid grid-cols-1 gap-4', !compact && 'lg:grid-cols-12')}>
-          {spec.blocks.map((block, i) => (
-            <div key={i} className={cn('min-w-0', !compact && WIDTH[block.width ?? 'full'])}>
-              <BlockView spec={spec} block={block} ctx={ctx} />
-            </div>
-          ))}
-        </div>
+        {rows.map((row, ri) => (
+          <div
+            key={row[0].index}
+            className={cn('grid grid-cols-1', !compact && 'lg:grid-cols-12', ri > 0 && (compact ? 'mt-6 border-t border-border/70 pt-6' : 'mt-9 border-t border-border/70 pt-9'))}
+          >
+            {row.map((cell, ci) => (
+              <div
+                key={cell.index}
+                className={cn(
+                  'min-w-0',
+                  !compact && LG_SPAN[cell.span],
+                  ci > 0 && (compact ? 'mt-6 border-t border-border/70 pt-6' : 'max-lg:mt-8 max-lg:border-t max-lg:border-border/70 max-lg:pt-8 lg:border-l lg:border-border/70 lg:pl-9'),
+                  !compact && ci < row.length - 1 && 'lg:pr-9',
+                )}
+              >
+                <BlockView spec={spec} block={cell.block} ctx={ctx} span={compact ? 12 : cell.span} />
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
     </VizProvider>
   )
