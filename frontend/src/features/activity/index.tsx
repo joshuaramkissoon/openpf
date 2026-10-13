@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils"
 import type { AppConfig, PositionItem, TradeIntent } from "@/types"
 import type { BrokerMode } from "@/app/hooks/use-app-config"
 import type { ProposalsState } from "@/app/hooks/use-proposals"
-import { ProposalRow, railCheck } from "@/features/home/decision-rows"
+import { ProposalReceipt, ProposalTiles, useRecentlyResolved } from "@/features/home/proposal-tiles"
 import { proposalPrompt } from "@/features/home/decisions-card"
 import { TrackRecordTab } from "@/features/autonomy/track-record"
 
@@ -98,6 +98,7 @@ function ProposalsTab({
   const { askArchie, openTicker } = useAppActions()
   const [historyOpen, setHistoryOpen] = useState(false)
   const { pending, history } = proposals
+  const resolved = useRecentlyResolved(proposals)
 
   return (
     <div className="max-w-3xl space-y-8">
@@ -109,22 +110,20 @@ function ProposalsTab({
             No open proposals. Ask Archie for ideas, or wait for the next scheduled review.
           </div>
         ) : (
-          <div className="divide-y divide-border/70 rounded-xl border border-border px-5 py-4">
-            {pending.map((intent) => (
-              <ProposalRow
-                key={intent.id}
-                intent={intent}
-                rail={railCheck(intent, config, positions, total)}
-                brokerMode={brokerMode}
-                working={proposals.working === intent.id}
-                onPlace={(acct) => void proposals.approveAndExecute(intent, acct)}
-                onReject={() => void proposals.reject(intent.id)}
-                onAsk={() => askArchie(proposalPrompt(intent))}
-                onViewTicker={openTicker}
-              />
+          <ProposalTiles
+            intents={pending}
+            ctx={{ proposals, config, brokerMode, positions, total }}
+            onAsk={(i) => askArchie(proposalPrompt(i))}
+            onViewTicker={openTicker}
+          />
+        )}
+        {resolved.length ? (
+          <div className="mt-3 divide-y divide-border/50 rounded-lg border border-border/60 px-3 py-0.5">
+            {resolved.map((i) => (
+              <ProposalReceipt key={i.id} intent={i} onViewTicker={openTicker} />
             ))}
           </div>
-        )}
+        ) : null}
       </section>
 
       {history.length > 0 ? (

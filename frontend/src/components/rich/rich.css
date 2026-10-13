@@ -398,7 +398,7 @@
   font-size: 0.8125rem;
 }
 .rc-proposals-rows {
-  padding: 0.85rem 1rem;
+  padding: 0.6rem;
 }
 .rc-proposals-rows > * + * {
   border-top: 1px solid var(--rc-rule);
