@@ -176,7 +176,32 @@ Results of the first pass are below in **Eval results**.
 
 ## Eval results
 
-_(filled in after the first run — see below)_
+First pass, 13 Oct 2026: sandbox book (£82.7k, 20 names), chat model `claude-opus-4-8`, tool
+search on. **11/11 cases passed, with 65/65 checks. Total cost $2.21, and each case took 19–81 s.**
+
+| Case | Tools Archie called | Notes |
+|---|---|---|
+| deploy_5k | skill `deploy-cash-plan` → get_book_by_play → deploy_cash ×2 | Re-ran deploy_cash net of a £250 buffer from preferences |
+| nuclear_high_conviction | size_position | £2,480 (3.0%), new money £1,594, quoted exactly |
+| too_concentrated | skill `derisk-concentrated-book` → analyse_risk → what_if | Found MU and AMD at ~2× their weight in risk; tested halving them |
+| sell_half_nvda | what_if | |
+| risk_drivers | analyse_risk | |
+| selloff_loss | analyse_risk ×3 (cvar, drawdown, beta) | |
+| isa_or_invest | placement | |
+| rebalance_low_turnover | analyse_risk → rebalance_plan ×2 → what_if | |
+| kelly_pltr | size_position(kelly) → get_price_snapshot | Explained that the cap binds and advised against using Kelly |
+| same_bet | analyse_risk + marketdata get_correlation_matrix | |
+| rates_shock | skill `macro-shock-response` → **ToolSearch** → get_macro_snapshot → analyse_risk ×4 | Deferred loading worked: intel was found by search |
+
+What the run showed:
+- Skills fired unprompted on matching questions.
+- Tool search found a deferred server when it was needed.
+- No case had side effects.
+- Every quant call succeeded.
+- Replies quoted the tool numbers. The one lapse was in kelly_pltr, where Archie added a little
+  arithmetic of his own on top ("nudge the return to 8% and Kelly collapses to ~11%"; "28 shares
+  × $209"). A next step is a sensitivity field in the Kelly output, so that this number also
+  comes from the tool.
 
 ---
 
