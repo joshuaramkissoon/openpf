@@ -10,6 +10,10 @@ one. Defence in depth, all keyed off :func:`is_sandbox`:
   DB-stored keys are ignored (``ConfigStore``);
 * the T212 client and the trading212 MCP server refuse any host but the local
   sandbox broker, and ``execute_intent`` refuses a non-sandbox broker;
+* crypto: the exchange key is fixed to the in-process mock exchange's fake key
+  (env/DB keys ignored), ``build_crypto_client`` only ever returns the mock, and
+  the real CCXT client refuses to be constructed — or to send any request to
+  an exchange host — in a sandbox process (``crypto_client``);
 * startup asserts all of the above and fails closed (``main.lifespan``).
 """
 
@@ -65,11 +69,21 @@ def verify_isolation() -> list[str]:
             for purpose in ("read", "execute"):
                 client = build_t212_client(store, account_kind=kind, purpose=purpose)  # type: ignore[arg-type]
                 assert_sandbox_url(client.base_url)
+        from app.services import crypto_service
+        from app.services.crypto_sandbox import SANDBOX_CRYPTO_CREDENTIALS
+
+        ccfg = crypto_service.get_config(store)
+        if ccfg.get("api_key") != SANDBOX_CRYPTO_CREDENTIALS["api_key"] or not ccfg.get("sandbox"):
+            raise SandboxViolation("sandbox would use a real crypto exchange credential")
+        crypto_client = crypto_service.client_for(store)
+        if crypto_client is not None and not crypto_client.sandbox:
+            raise SandboxViolation("sandbox would reach a real crypto exchange")
     return [
         f"broker   : {url} (mock Trading 212 — no real money)",
         f"database : {settings.database_url}",
         f"runtime  : {runtime} (Archie artifacts + memory)",
         f"views    : {settings.views_data_dir}",
+        "crypto   : mock Kraken exchange (in-process — exchange hosts refused)",
     ]
 
 

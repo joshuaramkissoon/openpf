@@ -49,6 +49,8 @@ class PortfolioMetrics(BaseModel):
     top_position_weight: float
     estimated_beta: float
     estimated_volatility: float
+    # Share of the book held on the crypto exchange (0 when none connected).
+    crypto_weight: float = 0.0
 
 
 class PortfolioSnapshotResponse(BaseModel):

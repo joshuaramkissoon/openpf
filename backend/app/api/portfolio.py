@@ -32,7 +32,7 @@ def refresh(force: bool = Query(default=False), db: Session = Depends(get_db)) -
 
 @router.get("/snapshot", response_model=PortfolioSnapshotResponse)
 def snapshot(
-    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    account_kind: Literal["all", "invest", "stocks_isa", "crypto"] = Query(default="all"),
     display_currency: Literal["GBP", "USD"] | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> PortfolioSnapshotResponse:
@@ -42,7 +42,7 @@ def snapshot(
 
 @router.get("/history")
 def history(
-    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    account_kind: Literal["all", "invest", "stocks_isa", "crypto"] = Query(default="all"),
     display_currency: Literal["GBP", "USD"] | None = Query(default=None),
     days: int = Query(default=365, ge=1, le=8000),
     db: Session = Depends(get_db),
@@ -55,7 +55,7 @@ def history(
 
 @router.post("/history/backfill")
 def history_backfill(
-    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    account_kind: Literal["all", "invest", "stocks_isa", "crypto"] = Query(default="all"),
     db: Session = Depends(get_db),
 ) -> dict:
     """Reconstruct the historical equity curve from full T212 order/dividend
@@ -101,7 +101,7 @@ def cashflows_sync(
 
 @router.get("/rebalance")
 def rebalance_preview(
-    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    account_kind: Literal["all", "invest", "stocks_isa", "crypto"] = Query(default="all"),
     db: Session = Depends(get_db),
 ) -> dict:
     """Preview the autopilot rebalance plan (no intents created)."""
@@ -113,7 +113,7 @@ def rebalance_preview(
 
 @router.post("/rebalance/propose")
 def rebalance_propose(
-    account_kind: Literal["all", "invest", "stocks_isa"] = Query(default="all"),
+    account_kind: Literal["all", "invest", "stocks_isa", "crypto"] = Query(default="all"),
     db: Session = Depends(get_db),
 ) -> dict:
     """Compute a rebalance and queue its trades as PROPOSED intents for approval."""

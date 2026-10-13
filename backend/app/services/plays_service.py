@@ -525,7 +525,7 @@ class PlayInputError(ValueError):
     """Bad play input — the message is friendly and shown to the user as-is."""
 
 
-_ACCOUNTS = {"invest", "stocks_isa"}
+_ACCOUNTS = {"invest", "stocks_isa", "crypto"}
 MAX_LEGS = 12
 _TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9.\-_]{0,15}")
 
@@ -548,7 +548,7 @@ def validate_play_input(data: dict[str, Any], *, creating: bool = False) -> None
         if not 1 <= h <= 120:
             raise PlayInputError("Horizon must be between 1 and 120 months.")
     if data.get("account_kind") is not None and data["account_kind"] not in _ACCOUNTS:
-        raise PlayInputError("Account must be Invest or Stocks ISA.")
+        raise PlayInputError("Account must be Invest or Stocks ISA (or Crypto).")
     if data.get("budget_gbp") is not None:
         try:
             b = float(data["budget_gbp"])
@@ -586,7 +586,7 @@ _FIELD_MESSAGES = {
     "conviction": "Conviction must be low, medium or high.",
     "budget_gbp": "Budget must be a positive amount in £.",
     "horizon_months": "Horizon must be between 1 and 120 months.",
-    "account_kind": "Account must be Invest or Stocks ISA.",
+    "account_kind": "Account must be Invest or Stocks ISA (or Crypto).",
     "status": "Status must be draft, active, paused or closed.",
     "idea": "Keep the idea under 8,000 characters.",
     "tranche_index": "Pick a tranche from the plan.",
@@ -683,6 +683,10 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
         budget_override_gbp=override,
         horizon_months=play.horizon_months,
     )
+    if (play.meta or {}).get("origin") == "template:starter_crypto":
+        from app.services import crypto_play  # staged weekly DCA, sized against the crypto cap
+
+        sizing = crypto_play.template_sizing(play, sizing, book=book, risk=risk, override_gbp=override)
     sizing["budget_override"] = bool(override)
     sizing["staged"] = (play.sizing or {}).get("staged", [])
     prior = play.sizing or {}
@@ -817,7 +821,7 @@ def stage_tranche(
         except Exception:  # noqa: BLE001
             free_cash_gbp = None
     if free_cash_gbp is not None and free_cash_gbp < MIN_LEG_NOTIONAL_GBP:
-        acct = "Stocks ISA" if play.account_kind == "stocks_isa" else "Invest account"
+        acct = {"stocks_isa": "Stocks ISA", "crypto": "crypto exchange account"}.get(play.account_kind, "Invest account")
         raise PlayInputError(f"There's no free cash in your {acct} to fund this tranche. "
                              "Add funds or free some up, then stage it again.")
 

@@ -15,6 +15,7 @@ from app.api import plays as plays_api
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
 from app.core.auth import ApiTokenMiddleware, OriginGuardMiddleware
 
+from app.api import crypto as crypto_api
 from app.api import recipes as recipes_api
 from app.api import views
 from app.core.config import get_settings
@@ -262,6 +263,7 @@ app.include_router(instruments.router, prefix=settings.api_prefix)
 app.include_router(plays_api.router, prefix=settings.api_prefix)
 app.include_router(views.router, prefix=settings.api_prefix)
 app.include_router(recipes_api.router, prefix=settings.api_prefix)
+app.include_router(crypto_api.router, prefix=settings.api_prefix)
 
 if _sandbox_enabled():
     from app.api import sandbox_t212

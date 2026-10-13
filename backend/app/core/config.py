@@ -94,6 +94,15 @@ class Settings(BaseSettings):
     max_daily_notional: float = Field(default=1500.0, alias="MAX_DAILY_NOTIONAL")
     max_position_weight: float = Field(default=0.25, alias="MAX_POSITION_WEIGHT")
     duplicate_order_window_seconds: int = Field(default=90, alias="DUPLICATE_ORDER_WINDOW_SECONDS")
+    # Crypto cap: max share of the whole book held in crypto (0.05 = 5%).
+    max_crypto_pct_of_book: float = Field(default=0.05, alias="MAX_CRYPTO_PCT_OF_BOOK")
+
+    # Crypto exchange (CCXT): kraken | coinbase | binance. Prefer connecting in
+    # Settings → Crypto, which verifies the key is TRADE-ONLY (no withdrawals)
+    # before it is used; an env key is likewise unused until verified there.
+    crypto_exchange: str = Field(default="", alias="CRYPTO_EXCHANGE")
+    crypto_api_key: str = Field(default="", alias="CRYPTO_API_KEY")
+    crypto_api_secret: str = Field(default="", alias="CRYPTO_API_SECRET")
 
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
@@ -200,8 +209,9 @@ def _apply_sandbox_isolation(settings: "Settings") -> None:
     # Never pick up real broker keys from .env — blank every T212 credential so
     # only the mock broker's keys exist in this process.
     for name in type(settings).model_fields:
-        if name.startswith(("t212_", "archie_t212_")) and ("_key" in name or "_secret" in name):
+        if name.startswith(("t212_", "archie_t212_", "crypto_")) and ("_key" in name or "_secret" in name):
             setattr(settings, name, "")
+    settings.crypto_exchange = ""
     settings.t212_base_env = "sandbox"
 
     demo = demo_dir()

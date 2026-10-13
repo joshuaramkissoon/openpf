@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +59,8 @@ class TradeIntentItem(BaseModel):
     broker_order_id: str | None = None
     execution_price: float | None = None
     failure_reason: str | None = None
+    # Crypto proposals: exchange, market, fee + slippage estimates for the card.
+    crypto: dict[str, Any] | None = None
 
 
 class IntentDecisionRequest(BaseModel):

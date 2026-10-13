@@ -170,6 +170,7 @@ def intents(
             broker_order_id=r.broker_order_id,
             execution_price=r.execution_price,
             failure_reason=r.failure_reason,
+            crypto=(r.meta or {}).get("crypto") if isinstance(r.meta, dict) else None,
         )
         for r in rows
     ]

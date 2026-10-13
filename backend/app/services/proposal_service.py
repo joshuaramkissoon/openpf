@@ -198,8 +198,26 @@ def propose_trade(
         return _fail("side must be 'buy' or 'sell'")
     if order_type not in _ORDER_TYPES:
         return _fail(f"order_type must be one of {sorted(_ORDER_TYPES)}")
+    # Crypto routes to the connected exchange (crypto_service); same rails + cap.
+    from app.services import crypto_service
+
+    if account_kind == "crypto" or (not account_kind and crypto_service.is_crypto_symbol(symbol or instrument_code)):
+        if not rationale:
+            return _fail("rationale is required — say why, and what would invalidate the idea")
+        try:
+            qty_c, notional_c = _coerce_positive(quantity, "quantity"), _coerce_positive(notional_gbp, "notional_gbp")
+        except ProposalError as exc:
+            return _fail(str(exc))
+        if (qty_c is None) == (notional_c is None):
+            return _fail("pass exactly one of quantity (coins) or notional_gbp (GBP amount)")
+        return crypto_service.propose_crypto_trade(
+            db, side=side, rationale=rationale, symbol=symbol, instrument_code=instrument_code, quantity=qty_c,
+            notional_gbp=notional_c, order_type=order_type, play_id=play_id, source=source, caps=caps, risk=risk,
+        )
+    if account_kind in _ACCOUNTS and (hint := crypto_service.wrong_account_hint(symbol, instrument_code)):
+        return _fail(hint)
     if account_kind not in _ACCOUNTS:
-        return _fail("account_kind must be 'invest' or 'stocks_isa' (no default — say which account)")
+        return _fail("account_kind must be 'invest', 'stocks_isa' or 'crypto' (no default — say which account)")
     if not rationale:
         return _fail("rationale is required — say why, and what would invalidate the idea")
     if not (symbol or instrument_code):
@@ -350,6 +368,7 @@ def serialize_intent(intent: TradeIntent) -> dict[str, Any]:
         "account_kind": meta.get("account_kind"),
         "play_id": meta.get("play_id"),
         "owner": "core" if meta.get("owner") == "core" else ("play" if meta.get("play_id") else None),
+        "crypto": meta.get("crypto"),
         "source": meta.get("source"),
         "rationale": intent.rationale,
         "failure_reason": intent.failure_reason,
