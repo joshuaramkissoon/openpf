@@ -7,9 +7,9 @@
 
 .rc {
   --rc-measure: 68ch;
-  --rc-body: color-mix(in oklch, var(--foreground) 88%, transparent);
+  --rc-body: color-mix(in srgb, var(--foreground) 88%, transparent);
   --rc-soft: var(--muted-foreground);
-  --rc-rule: color-mix(in oklch, var(--foreground) 8%, transparent);
+  --rc-rule: color-mix(in srgb, var(--foreground) 8%, transparent);
   color: var(--rc-body);
   font-size: 0.9375rem; /* 15px */
   line-height: 1.68;
@@ -48,7 +48,7 @@
 .rc-link {
   color: var(--primary);
   text-decoration: underline;
-  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent);
   text-underline-offset: 3px;
 }
 .rc-link:hover {
@@ -112,7 +112,7 @@
   width: 0.3em;
   height: 0.3em;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  background: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
 }
 .rc-ol {
   list-style: decimal;
@@ -155,8 +155,8 @@
   padding: 0 0.42em;
   margin: 0 0.06em;
   border-radius: 0.4rem;
-  border: 1px solid color-mix(in oklch, var(--foreground) 12%, transparent);
-  background: color-mix(in oklch, var(--foreground) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
   color: var(--foreground);
   font-size: 0.82em;
   font-weight: 600;
@@ -167,8 +167,8 @@
   transition: border-color 120ms, background-color 120ms, color 120ms;
 }
 .rc-ticker:hover {
-  border-color: color-mix(in oklch, var(--primary) 55%, transparent);
-  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
 }
 .rc-proposal-chip {
@@ -177,7 +177,7 @@
   gap: 0.3em;
   padding: 0 0.45em;
   border-radius: 0.4rem;
-  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
   font-size: 0.85em;
   font-weight: 500;
@@ -191,7 +191,7 @@
   overscroll-behavior-x: contain;
   border: 1px solid var(--rc-rule);
   border-radius: 0.75rem;
-  background: color-mix(in oklch, var(--card) 60%, transparent);
+  background: color-mix(in srgb, var(--card) 60%, transparent);
   -webkit-overflow-scrolling: touch;
 }
 .rc-table-wrap.is-tall {
@@ -225,7 +225,7 @@
 }
 .rc-table td {
   padding: 0.55rem 0.85rem;
-  border-bottom: 1px solid color-mix(in oklch, var(--foreground) 5%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 5%, transparent);
   vertical-align: top;
   color: var(--rc-body);
 }
@@ -233,7 +233,7 @@
   border-bottom: 0;
 }
 .rc-table tbody tr:hover td {
-  background: color-mix(in oklch, var(--foreground) 2.5%, transparent);
+  background: color-mix(in srgb, var(--foreground) 2.5%, transparent);
 }
 .rc-table td:first-child {
   color: var(--foreground);
@@ -264,15 +264,15 @@
   padding: 0.85rem 1rem;
   max-width: calc(var(--rc-measure) + 2rem);
   border-radius: 0.75rem;
-  border: 1px solid color-mix(in oklch, var(--tone) 22%, transparent);
-  background: color-mix(in oklch, var(--tone) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 22%, transparent);
+  background: color-mix(in srgb, var(--tone) 7%, transparent);
 }
 .rc-callout.is-risk {
   --tone: var(--warning);
 }
 .rc-callout.is-note {
   --tone: var(--muted-foreground);
-  background: color-mix(in oklch, var(--foreground) 3%, transparent);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
   border-color: var(--rc-rule);
 }
 .rc-callout-icon {
@@ -310,7 +310,7 @@
   border: 1px solid var(--rc-rule);
   border-radius: 0.75rem;
   overflow: hidden;
-  background: color-mix(in oklch, var(--muted) 55%, transparent);
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
 }
 .rc-codeblock-head {
   display: flex;
@@ -342,7 +342,7 @@
   padding: 1rem;
   border: 1px solid var(--rc-rule);
   border-radius: 0.75rem;
-  background: color-mix(in oklch, var(--card) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
 }
 .rc-skel-card {
   height: 14rem;
@@ -358,13 +358,13 @@
 .rc-viz-skel-bars > span {
   flex: 1;
   border-radius: 0.35rem 0.35rem 0.15rem 0.15rem;
-  background: color-mix(in oklch, var(--foreground) 8%, transparent);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
   animation: rc-pulse 1.6s ease-in-out infinite;
 }
 .rc-skel {
   display: inline-block;
   border-radius: 0.3rem;
-  background: color-mix(in oklch, var(--foreground) 8%, transparent);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
   animation: rc-pulse 1.6s ease-in-out infinite;
 }
 @keyframes rc-pulse {
@@ -380,9 +380,9 @@
   line-height: 1.5;
 }
 .rc-proposals.is-pending {
-  border: 1px solid color-mix(in oklch, var(--primary) 32%, transparent);
-  background: color-mix(in oklch, var(--primary) 5%, var(--card));
-  box-shadow: 0 1px 0 color-mix(in oklch, var(--foreground) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  background: color-mix(in srgb, var(--primary) 5%, var(--card));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 .rc-proposals.is-resolved {
   border: 1px solid var(--rc-rule);
@@ -394,7 +394,7 @@
   align-items: center;
   gap: 0.45rem;
   padding: 0.7rem 1rem;
-  border-bottom: 1px solid color-mix(in oklch, var(--primary) 18%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
   font-size: 0.8125rem;
 }
 .rc-proposals-rows {
@@ -419,7 +419,7 @@
   white-space: nowrap;
 }
 .rc-receipt + .rc-receipt {
-  border-top: 1px solid color-mix(in oklch, var(--foreground) 5%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 5%, transparent);
 }
 
 /* ── Collapsing ──────────────────────────────────────────────────────── */
@@ -452,8 +452,8 @@
   margin: 0 0 1.4rem;
   padding: 1rem 1.15rem;
   border-radius: 0.85rem;
-  background: color-mix(in oklch, var(--primary) 7%, var(--card));
-  border: 1px solid color-mix(in oklch, var(--primary) 20%, transparent);
+  background: color-mix(in srgb, var(--primary) 7%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
   color: var(--foreground);
   font-size: 0.97rem;
   line-height: 1.6;
@@ -468,7 +468,7 @@
   color: var(--primary);
 }
 .rc-tldr.is-quiet {
-  background: color-mix(in oklch, var(--foreground) 3%, transparent);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
   border-color: var(--rc-rule);
 }
 .rc-tldr-headline {
@@ -489,7 +489,7 @@
   gap: 0.55rem;
   margin: 0.75em 0 0;
   padding-top: 0.65em;
-  border-top: 1px solid color-mix(in oklch, var(--primary) 18%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
   font-size: 0.92rem;
 }
 .rc-tldr-action-label {
@@ -530,7 +530,7 @@
 .rc-toc-n {
   min-width: 1ch;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
 }
 .rc-section + .rc-section,
 .rc-report > .rc-p + .rc-section {
