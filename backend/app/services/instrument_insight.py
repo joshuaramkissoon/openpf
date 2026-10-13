@@ -490,12 +490,29 @@ def _play_relation(play: Play, keys: set[str]) -> tuple[str, dict[str, Any] | No
 def _plays(db: Session, ident: dict[str, Any], book: dict[str, Any]) -> list[dict[str, Any]]:
     keys = _keys_for(ident)
     rows = db.execute(select(Play).where(Play.status.in_(["active", "paused", "draft"])).order_by(desc(Play.updated_at))).scalars().all()
+    # Explicit ownership (Home's book-by-play) beats basket membership: a holding
+    # moved into a play is owned by it, and a basket play that doesn't own it only
+    # relates to it.
+    owner_play: str | None = None
+    try:
+        from app.services.book_service import explicit_rows
+
+        for (_acct, ticker), row in explicit_rows(db).items():
+            if _ticker_in(ticker, keys):
+                owner_play = row.play_id if row.owner_kind == "play" else ""
+                break
+    except Exception:  # noqa: BLE001 — ownership is a nicety; never break the sheet
+        owner_play = None
     out: list[dict[str, Any]] = []
     for p in rows:
         rel = _play_relation(p, keys)
+        if owner_play and p.id == owner_play:
+            rel = ("owner", rel[1] if rel else None)
         if not rel:
             continue
         relation, leg = rel
+        if relation == "owner" and owner_play is not None and p.id != owner_play:
+            relation = "related"
         play_share = _f(p.budget_pct_of_book)
         if not play_share and p.budget_gbp and book.get("total_gbp"):
             play_share = float(p.budget_gbp) / float(book["total_gbp"])
