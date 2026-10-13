@@ -683,22 +683,34 @@ _SUGGEST_SCHEMA = {
 }
 
 
-def _model_suggestions(unsorted: list[dict[str, Any]], plays: list[Play], total: float) -> list[dict[str, Any]]:
-    import asyncio
-    import json
-
-    from app.core.config import get_settings
-
-    payload = {
+def _suggest_payload(unsorted: list[dict[str, Any]], plays: list[Play]) -> dict[str, Any]:
+    return {
         "unsorted": [{"ticker": h["ticker"], "name": h["name"], "weight_of_book": round(h["weight"], 4)} for h in unsorted],
         "existing_plays": [{"play_id": p.id, "title": p.title, "legs": [l.get("ticker") for l in p.legs or []]}
                            for p in plays if p.status in DERIVING_STATUSES],
     }
-    raw = asyncio.run(asyncio.wait_for(ps._run_structured(
-        json.dumps(payload), system=_SUGGEST_SYSTEM, schema=_SUGGEST_SCHEMA, model=get_settings().claude_plays_model,
-        tools=[], mcp={}, max_turns=3, on_progress=None, usage_source="play_suggest", usage_id="book",
-    ), timeout=120))
-    return list((raw or {}).get("suggestions") or [])
+
+
+def _model_suggestions(unsorted: list[dict[str, Any]], plays: list[Play], total: float) -> list[dict[str, Any]]:
+    """One fast structured call (Together → Claude Haiku via the API). No agent loop,
+    no CLI spawn: a few seconds, not half a minute."""
+    import json
+
+    from app.services import fast_llm
+
+    payload = _suggest_payload(unsorted, plays)
+    res = fast_llm.complete_json_sync(
+        "play_suggest", system=_SUGGEST_SYSTEM, user=json.dumps(payload), schema=_SUGGEST_SCHEMA,
+        max_tokens=2500, usage_id="book",
+    )
+    return list((res.data or {}).get("suggestions") or [])
+
+
+def refine_available() -> bool:
+    """Is any fast model configured to refine the rule-based groups?"""
+    from app.services import fast_llm, model_routing
+
+    return any(fast_llm.available(p) for p, _ in model_routing.fast_chain("play_suggest"))
 
 
 def clean_suggestions(items: list[dict[str, Any]], unsorted: list[dict[str, Any]], db: Session) -> list[dict[str, Any]]:
@@ -750,41 +762,96 @@ def _store(db: Session) -> Any:
     return ConfigStore(db)
 
 
+REFINE_STALE_S = 45  # a refinement older than this is treated as dead
+
+
+def _refining(stored: dict[str, Any]) -> bool:
+    since = stored.get("refining_since")
+    if not since:
+        return False
+    try:
+        return (_now() - datetime.fromisoformat(since)).total_seconds() < REFINE_STALE_S
+    except ValueError:
+        return False
+
+
 def get_suggestions(db: Session, *, book: dict[str, Any] | None = None) -> dict[str, Any]:
     stored = _store(db).get(SUGGESTIONS_KEY, {"items": []})
     unsorted, full = unsorted_holdings(db, book=book)
     return {"generated_at": stored.get("generated_at"), "source": stored.get("source"),
+            "refining": _refining(stored), "refine_error": stored.get("refine_error"),
             "items": _decorate(stored.get("items") or [], unsorted),
             "unsorted": unsorted, "unsorted_weight": full["unsorted_weight"]}
 
 
-def _save(db: Session, items: list[dict[str, Any]], source: str) -> None:
+def _save(db: Session, items: list[dict[str, Any]], source: str, *, refining: bool = False) -> str:
     for it in items:
         it.setdefault("id", uuid.uuid4().hex[:10])
         it.setdefault("status", "open")
-    _store(db).set(SUGGESTIONS_KEY, {"generated_at": _now().isoformat(), "source": source, "items": items})
+    gen = uuid.uuid4().hex[:10]
+    _store(db).set(SUGGESTIONS_KEY, {"generated_at": _now().isoformat(), "source": source, "items": items, "gen": gen,
+                                     "refining_since": _now().isoformat() if refining else None})
+    return gen
 
 
-def generate_suggestions(db: Session, *, use_model: bool = True, book: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Group Unsorted holdings into suggested plays / Core. Uses Claude when it's
-    available, else (or on any failure) a deterministic theme map. Never applies anything."""
+def apply_refinement(db: Session, gen: str, unsorted: list[dict[str, Any]]) -> bool:
+    """Swap the rule-based groups for the model's, unless the user has moved on
+    (regrouped, or accepted/dismissed a card) since. Returns True when swapped."""
+    store = _store(db)
+    try:
+        items = clean_suggestions(_model_suggestions(unsorted, owning_plays(db), 0.0), unsorted, db)
+        error = None if items else "Archie didn't find better groupings."
+    except Exception as exc:  # noqa: BLE001 — no model / timeout → keep the rules
+        logger.info("play suggestion refinement kept the rules: %s", exc)
+        items, error = [], "Archie couldn't refine these just now."
+    stored = store.get(SUGGESTIONS_KEY, {"items": []})
+    if stored.get("gen") != gen:
+        return False
+    untouched = all(i.get("status", "open") == "open" for i in stored.get("items") or [])
+    if items and untouched:
+        _save(db, items, "archie")
+        return True
+    stored["refining_since"] = None
+    stored["refine_error"] = error if not items else None
+    store.set(SUGGESTIONS_KEY, stored)
+    return False
+
+
+def _refine_in_background(gen: str, unsorted: list[dict[str, Any]]) -> None:
+    import threading
+
+    def run() -> None:
+        from app.core.database import SessionLocal
+
+        try:
+            with SessionLocal() as db:
+                apply_refinement(db, gen, unsorted)
+        except Exception:  # noqa: BLE001
+            logger.warning("play suggestion refinement crashed", exc_info=True)
+
+    threading.Thread(target=run, name="play-suggest-refine", daemon=True).start()
+
+
+def generate_suggestions(db: Session, *, use_model: bool = True, book: dict[str, Any] | None = None,
+                         background: bool = False) -> dict[str, Any]:
+    """Group Unsorted holdings into suggested plays / Core. Never applies anything.
+
+    The theme rules answer instantly and are saved first. When a fast model is
+    configured, it then refines them — inline, or with ``background=True`` in a
+    thread while the caller returns the rule-based groups at once (the UI polls
+    ``refining`` and swaps the refined groups in)."""
     unsorted, full = unsorted_holdings(db, book=book)
     if not unsorted:
         _save(db, [], "none")
         return get_suggestions(db, book=book)
-    items: list[dict[str, Any]] = []
-    source = "rules"
-    if use_model:
-        try:
-            items = clean_suggestions(_model_suggestions(unsorted, owning_plays(db), full["total_gbp"]), unsorted, db)
-            source = "archie"
-        except Exception as exc:  # noqa: BLE001 — no model / no login / timeout → rules
-            logger.info("play suggestions fell back to rules: %s", exc)
-            items = []
-    if not items:
-        items = clean_suggestions(deterministic_suggestions(unsorted), unsorted, db)
-        source = "rules"
-    _save(db, items, source)
+    rules = clean_suggestions(deterministic_suggestions(unsorted), unsorted, db)
+    refine = use_model and (not background or refine_available())
+    gen = _save(db, rules, "rules", refining=refine)
+    if refine:
+        if background:
+            _refine_in_background(gen, unsorted)
+        else:
+            apply_refinement(db, gen, unsorted)
     return get_suggestions(db, book=book)
 
 

@@ -291,6 +291,9 @@ export interface Suggestion {
 export interface Suggestions {
   generated_at: string | null
   source: 'archie' | 'rules' | 'none' | null
+  /** A fast model is refining the rule-based groups in the background. */
+  refining?: boolean
+  refine_error?: string | null
   items: Suggestion[]
   unsorted: { ticker: string; name: string; value_gbp: number; weight: number; accounts: string[] }[]
   unsorted_weight: number

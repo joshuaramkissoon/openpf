@@ -120,7 +120,7 @@ export async function getSuggestions() {
 }
 
 export async function generateSuggestions(useModel = true) {
-  const { data } = await api.post<Suggestions>('/plays/suggestions', { use_model: useModel }, { timeout: 180000 })
+  const { data } = await api.post<Suggestions>('/plays/suggestions', { use_model: useModel }, { timeout: 60000 })
   return data
 }
 
