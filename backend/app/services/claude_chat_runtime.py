@@ -239,6 +239,12 @@ def proposal_ids_from_tool_result(tool_name: str, text: str) -> list[str]:
         payload = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return []
+    # FastMCP wraps a tool's string return as structured output: {"result": "<json>"}.
+    if isinstance(payload, dict) and set(payload) == {"result"} and isinstance(payload["result"], str):
+        try:
+            payload = json.loads(payload["result"])
+        except (json.JSONDecodeError, TypeError):
+            return []
     if not isinstance(payload, dict):
         return []
     ids: list[str] = []

@@ -110,6 +110,12 @@ def test_ids_from_stage_play_tranche():
     assert proposal_ids_from_tool_result("mcp__proposals__propose_trade", "not json") == []
 
 
+def test_ids_from_fastmcp_wrapped_result():
+    """The CLI delivers MCP string returns wrapped as {"result": "<json>"}."""
+    inner = json.dumps({"ok": True, "intent": {"id": "int-9"}})
+    assert proposal_ids_from_tool_result("mcp__proposals__propose_trade", json.dumps({"result": inner})) == ["int-9"]
+
+
 def test_scheduled_reports_share_the_report_frame():
     """Scheduled reports open with TL;DR + Key numbers so the report reader can
     show a TL;DR card and key-numbers strip."""
