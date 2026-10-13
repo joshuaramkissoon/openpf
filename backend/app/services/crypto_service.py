@@ -451,10 +451,13 @@ def propose_crypto_trade(
     db: Session, *, side: str, rationale: str, symbol: str | None, instrument_code: str | None,
     quantity: float | None, notional_gbp: float | None, order_type: str, play_id: str | None, source: str,
     caps: dict[str, Any], risk: dict[str, Any], not_before: Any = None, daily_used: float | None = None,
-    into: TradeIntent | None = None, held_from: dict[str, Any] | None = None,
+    into: TradeIntent | None = None, held_from: dict[str, Any] | None = None, manual: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    from app.services.execution_service import rail_violations, utc_today
-    from app.services.proposal_service import _SOFT_VIOLATIONS, _store, limit_blocks, serialize_intent
+    from app.services.execution_service import MANUAL_DUPLICATE_WINDOW_SECONDS, rail_violations, utc_today
+    from app.services.proposal_service import _store, limit_blocks, proposal_source, serialize_intent, split_rails
+
+    source = proposal_source(source, manual=manual)
 
     def _fail(message: str) -> dict[str, Any]:
         return {"ok": False, "error": message, "caps": caps}
@@ -488,15 +491,17 @@ def propose_crypto_trade(
     market = est["market"]
     violations = rail_violations(db, symbol=asset, side=side, quantity=qty, estimated_notional=estimated_notional,
                                  risk=risk, account_kind=CRYPTO_ACCOUNT, instrument_code=market,
-                                 not_before=not_before, daily_used=daily_used)
-    hard = [v for v in violations if v not in _SOFT_VIOLATIONS]
-    warnings = [v for v in violations if v in _SOFT_VIOLATIONS]
+                                 not_before=not_before, daily_used=daily_used,
+                                 duplicate_window_seconds=MANUAL_DUPLICATE_WINDOW_SECONDS if manual else None)
+    hard, warnings = split_rails(violations, manual=manual)
     sizing = {"symbol": asset, "instrument_code": market, "quantity": qty, "reference_price": est["price"],
               "currency": quote_ccy(est["quote"]), "estimated_notional_gbp": estimated_notional,
               "fee_gbp": est.get("fee_gbp"), "slippage_gbp": est.get("slippage_gbp"), "name": CRYPTO_ASSETS[asset]}
     if hard:
         return {"ok": False, "violations": hard, "sizing": sizing, "caps": caps,
                 "blocked": limit_blocks(risk, hard, estimated_notional, float(daily_used or 0.0), not_before or utc_today())}
+    if dry_run:
+        return {"ok": True, "sizing": {**sizing, "price_gbp": round(price_gbp, 6)}, "warnings": warnings, "caps": caps}
 
     meta: dict[str, Any] = {
         "source": (source or "agent")[:64], "account_kind": CRYPTO_ACCOUNT, "reference_price": est["price"],
@@ -520,6 +525,8 @@ def propose_crypto_trade(
         meta["warnings"] = warnings
     if held_from:
         meta["held"] = {**held_from, "staged": True}
+    if manual:
+        meta["manual_trade"] = True
     intent = TradeIntent(
         status="proposed", broker_mode=str(store.get_broker().get("broker_mode", "paper")), symbol=asset,
         instrument_code=market, side=side, order_type="market", quantity=qty, estimated_notional=estimated_notional,

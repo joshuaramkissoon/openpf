@@ -39,7 +39,10 @@ SANDBOX_CRYPTO_CREDENTIALS = {"api_key": SANDBOX_KEY, "api_secret": SANDBOX_SECR
 FIXTURE_PRICES_GBP = {"BTC": 62000.0, "ETH": 2300.0, "SOL": 140.0, "XRP": 1.9, "ADA": 0.55,
                       "LINK": 13.0, "LTC": 70.0, "DOT": 3.2}
 
-SEED_CASH_GBP = 420.0
+# Generous fake cash, and it tops itself up (``top_up``): a demo should never
+# block on money that doesn't exist.
+SEED_CASH_GBP = 2500.0
+TOP_UP_STEP_GBP = 500.0
 # Two small starter-DCA fills: (asset, quantity, days ago, price multiple of today's)
 SEED_FILLS: list[tuple[str, float, int, float]] = [("BTC", 0.0009, 21, 0.97), ("BTC", 0.0009, 14, 1.02),
                                                     ("ETH", 0.012, 14, 0.95)]
@@ -172,6 +175,33 @@ def deposits() -> list[dict[str, Any]]:
         return list(_load().get("deposits") or [])
 
 
+def _top_up_locked(state: dict[str, Any], needed_gbp: float) -> float:
+    bal = state["balances"]
+    have = float(bal.get("GBP", 0.0))
+    if needed_gbp <= have + 1e-9:
+        return 0.0
+    # Round up to whole steps, with a step of headroom for the next demo order.
+    added = math.ceil((needed_gbp - have) / TOP_UP_STEP_GBP) * TOP_UP_STEP_GBP + TOP_UP_STEP_GBP
+    bal["GBP"] = round(have + added, 4)
+    state.setdefault("deposits", []).append({
+        "id": f"sbx-crypto-topup-{uuid.uuid4().hex[:8]}", "currency": "GBP", "amount": added,
+        "timestamp": _iso(datetime.utcnow()), "status": "ok", "note": "demo cash added",
+    })
+    logger.info("sandbox crypto: demo cash added £%.0f", added)
+    return added
+
+
+def top_up(needed_gbp: float) -> float:
+    """Make sure the fake GBP balance covers ``needed_gbp``; returns what was added
+    (recorded as a deposit, so returns stay honest)."""
+    with _lock:
+        state = _load()
+        added = _top_up_locked(state, needed_gbp)
+        if added:
+            _save(state)
+        return added
+
+
 def ticker(asset: str) -> dict[str, float]:
     px = price_gbp(asset)
     spread = px * 0.0004  # a tight GBP book for a liquid pair
@@ -193,8 +223,7 @@ def place_market_order(asset: str, side: str, amount: float) -> dict[str, Any]:
         cost = amount * px
         fee = round(cost * fee_rate, 4)
         if side == "buy":
-            if cost + fee > float(bal.get("GBP", 0.0)) + 1e-9:
-                raise SandboxExchangeError("EOrder:Insufficient funds")
+            _top_up_locked(state, cost + fee)  # fake money: never refuse a demo buy for cash
             bal["GBP"] = round(float(bal.get("GBP", 0.0)) - cost - fee, 4)
         else:
             if amount > float(bal.get(asset, 0.0)) + 1e-10:

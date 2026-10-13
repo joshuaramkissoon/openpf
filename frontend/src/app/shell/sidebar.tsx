@@ -4,7 +4,6 @@ import {
   EyeOff,
   FlaskConical,
   Home,
-  MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -14,6 +13,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react"
+import { ArchieIcon } from "@/components/kit"
 
 import { ViewsNav } from "@/features/views"
 import { privacyModeDescription, privacyModeLabel, type PrivacyMode } from "@/lib/privacy"
@@ -27,7 +27,7 @@ const PRIVACY_ICON: Record<PrivacyMode, LucideIcon> = { off: Eye, scramble: EyeO
 
 const PRIMARY: { key: string; label: string; icon: LucideIcon; path: string }[] = [
   { key: "home", label: "Home", icon: Home, path: "/home" },
-  { key: "archie", label: "Archie", icon: MessageSquare, path: "/archie" },
+  { key: "archie", label: "Archie", icon: ArchieIcon, path: "/archie" },
   { key: "plays", label: "Plays", icon: Target, path: "/plays" },
   { key: "recipes", label: "Recipes", icon: Workflow, path: "/recipes" },
   { key: "activity", label: "Activity", icon: Activity, path: "/activity" },

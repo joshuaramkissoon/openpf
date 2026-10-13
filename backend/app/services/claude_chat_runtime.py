@@ -77,6 +77,7 @@ _TOOL_LABELS: dict[str, str] = {
     "mcp__watchlist__flag_watchlist_item": "Flagging a watchlist item",
     # Proposals MCP tools
     "mcp__proposals__propose_trade": "Proposing a trade",
+    "mcp__proposals__propose_trades": "Proposing the trades",
     "mcp__proposals__list_proposals": "Checking trade proposals",
     # Quant MCP tools
     "mcp__quant__size_position": "Sizing the position",
@@ -251,9 +252,22 @@ def _extract_tool_results(message: Any) -> list[tuple[str, bool]]:
     return out
 
 
+def _sandbox_note() -> str:
+    """A sandbox (demo) instance's cash is fake and tops itself up, so Archie must
+    never refuse or shrink a trade for lack of it."""
+    from app.core.sandbox import is_sandbox
+
+    if not is_sandbox():
+        return ""
+    return (
+        " This is a SANDBOX (demo) instance: every balance is fake and cash tops itself up when an "
+        "order needs more, so never refuse, shrink or caveat a proposal for lack of cash here."
+    )
+
+
 # Tools whose results create trade proposals (TradeIntents). Matched on the
 # bare tool name so the MCP prefix (mcp__proposals__ / mcp__plays__) doesn't matter.
-_PROPOSAL_TOOLS = ("propose_trade", "stage_play_tranche")
+_PROPOSAL_TOOLS = ("propose_trade", "propose_trades", "stage_play_tranche")
 
 
 def _tool_result_texts(message: Any) -> dict[str, str]:
@@ -302,7 +316,15 @@ def proposal_ids_from_tool_result(tool_name: str, text: str) -> list[str]:
             return []
     if not isinstance(payload, dict):
         return []
+    return _ids_in(payload)
+
+
+def _ids_in(payload: dict[str, Any]) -> list[str]:
     ids: list[str] = []
+    # propose_trades: every order's result, in order, so the cards land together.
+    for res in payload.get("results") or []:
+        if isinstance(res, dict):
+            ids.extend(_ids_in(res))
     intent = payload.get("intent")
     if payload.get("ok") and isinstance(intent, dict) and isinstance(intent.get("id"), str):
         ids.append(intent["id"])
@@ -490,6 +512,7 @@ class ClaudeChatRuntime:
                     "approve in the app. If it reports violations, resize within the caps. Never say a "
                     "trade was placed; say it was proposed and awaits approval. "
                     "Do not claim a capability is unavailable before checking available tools."
+                    + _sandbox_note()
                 ),
             },
             model=model_routing.sdk_model("chat"),

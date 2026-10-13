@@ -1,6 +1,7 @@
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
-import { ExternalLink, Sparkles, X } from "lucide-react"
+import { ExternalLink, X } from "lucide-react"
+import { ArchieIcon } from "@/components/kit"
 
 import type { Alert } from "@/api/client"
 import { cn } from "@/lib/utils"
@@ -94,7 +95,7 @@ export function SignalRow({
           ) : null}
           {more > 0 ? <span className="text-muted-foreground">+{more} more</span> : null}
           <button type="button" onClick={() => onAsk(a)} className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground">
-            <Sparkles className="size-3" />
+            <ArchieIcon className="size-3" />
             Ask Archie
           </button>
           {url ? (

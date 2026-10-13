@@ -7,7 +7,8 @@
  *   <OwnerMenu/>     a holding's owner as a quiet chip; click to move it
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
-import { ArrowRightLeft, Check, ChevronDown, Layers, Sparkles } from 'lucide-react'
+import { ArrowRightLeft, Check, ChevronDown, Layers } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 import { toast } from 'sonner'
 
 import {
@@ -231,5 +232,5 @@ export function OwnerMenu({
 
 /** Archie's sparkle used for "sort with Archie" style actions. */
 export function ArchieMark({ className }: { className?: string }) {
-  return <Sparkles className={cn('size-3.5', className)} />
+  return <ArchieIcon className={cn('size-3.5', className)} />
 }

@@ -42,10 +42,13 @@ mcp = FastMCP(
     instructions=(
         "Trade proposals. You cannot place or cancel orders. To suggest a trade, call "
         "propose_trade: it validates the instrument, sizes the order, checks the risk "
-        "rails and queues it for the user to approve. When an ask is over the per-order or "
+        "rails and queues it for the user to approve. For two or more orders at once "
+        "('buy NVDA, PLTR and MU'), call propose_trades ONCE with every order: the cards "
+        "appear together and the daily limit is counted across the batch. When an ask is over the per-order or "
         "daily limit it proposes the part that fits and holds back the rest on a card the "
         "user can stage for tomorrow or take to their limits — never loosen limits, and "
-        "don't re-propose the held-back part yourself. "
+        "don't re-propose the held-back part yourself. Write every rationale to the user "
+        "('you', 'your book'), never 'the user'. "
         "get_track_record shows how your past proposals actually did — cite it honestly, "
         "with its sample size. suggest_permission can ASK the user for a standing permission "
         "when a category's record is good; it grants nothing."
@@ -53,7 +56,15 @@ mcp = FastMCP(
 )
 
 
-_RESERVED_SOURCES = {"play", "rebalance"}
+# 'play' and 'rebalance' tags are set only by the app's own play staging and
+# rebalancer (standing permissions key off them); 'user' only by the user's own
+# trades from the stock sheet (which may place past the limits). Never by an agent.
+_RESERVED_SOURCES = {"play", "rebalance", "user"}
+
+
+def _source(source: str) -> str:
+    s = (source or "").strip()
+    return "agent" if not s or s.lower() in _RESERVED_SOURCES else s
 
 
 def _day(for_day: str):
@@ -93,7 +104,8 @@ def propose_trade(
         account_kind: 'invest', 'stocks_isa' or 'crypto' — required, never assumed. 'crypto' routes
             to the connected exchange (symbol 'BTC', 'ETH', …; market orders sized by notional_gbp;
             the result carries fee + slippage estimates and the crypto cap is enforced).
-        rationale: Why, plus what would invalidate the idea.
+        rationale: Why, plus what would invalidate the idea. Shown on the card the user approves:
+            write it TO the user ("you", "your ISA"), never "the user's"; one or two short sentences.
         symbol: Ticker (e.g. 'AAPL'); or pass instrument_code instead.
         instrument_code: Exact Trading 212 code (e.g. 'AAPL_US_EQ'), preferred when known.
         quantity: Shares (fractional ok). Pass this OR notional_gbp, not both.
@@ -132,9 +144,7 @@ def propose_trade(
             limit_price=limit_price or None,
             stop_price=stop_price or None,
             play_id=play_id or None,
-            # 'play' and 'rebalance' tags are set only by the app's own play
-            # staging and rebalancer (standing permissions key off them).
-            source="chat" if (source or "").strip().lower() in _RESERVED_SOURCES else source,
+            source=_source(source),
             category=category or None,
             not_before=_day(for_day),
             hold_back=bool(hold_back_over_limit),
@@ -142,6 +152,38 @@ def propose_trade(
         return _fmt(result)
     except Exception as exc:  # noqa: BLE001 — surface as a tool error payload
         logger.exception("propose_trade failed")
+        return _fmt({"ok": False, "error": str(exc)})
+    finally:
+        db.close()
+
+
+@mcp.tool()
+def propose_trades(orders: list[dict[str, Any]], source: str = "chat", hold_back_over_limit: bool = True) -> str:
+    """Queue SEVERAL trade proposals in one call: use this whenever the user asks for two or more
+    orders at once ("buy 500 NVDA, 1000 PLTR and 400 BTC"). Does NOT execute anything. The orders are
+    checked together (each counts the earlier ones against the daily limit) and every result comes
+    back at once, so the user sees all the cards together instead of one by one.
+
+    Args:
+        orders: One object per order, with the same fields as propose_trade: side, account_kind,
+            rationale, and symbol or instrument_code, and quantity or notional_gbp; optionally
+            order_type, limit_price, stop_price, play_id, category, for_day ('today' | 'tomorrow').
+            Rationale goes on the card: address the user ("you"), never "the user". Max 12.
+        source: Free-form origin tag (e.g. 'chat', 'scheduled:<task>').
+        hold_back_over_limit: As in propose_trade, per order: the part over a limit is held back on
+            its own card; say which limit cut it in one line, and don't re-propose it.
+    """
+    logger.info("propose_trades n=%s", len(orders) if isinstance(orders, list) else "?")
+    init_db()
+    db = SessionLocal()
+    try:
+        days = [_day(str((o or {}).get("for_day") or "")) if isinstance(o, dict) else None for o in (orders or [])]
+        result = proposal_service.propose_batch(
+            db, orders, source=_source(source), hold_back=bool(hold_back_over_limit), not_before_by_order=days,
+        )
+        return _fmt(result)
+    except Exception as exc:  # noqa: BLE001 — surface as a tool error payload
+        logger.exception("propose_trades failed")
         return _fmt({"ok": False, "error": str(exc)})
     finally:
         db.close()

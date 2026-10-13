@@ -105,7 +105,10 @@ SEED_POSITIONS: list[tuple[str, str, float]] = [
     ("invest", "MU", 10.0), ("invest", "NET", 9.0), ("invest", "RKLB", 45.0),
     ("invest", "OKLO", 14.0), ("invest", "COIN", 4.0),
 ]
-SEED_CASH_GBP = {"invest": 1840.0, "stocks_isa": 3215.0}
+# Generous fake cash, and it tops itself up (``top_up``): a demo should never
+# block on money that doesn't exist.
+SEED_CASH_GBP = {"invest": 6000.0, "stocks_isa": 9000.0}
+TOP_UP_STEP_GBP = 500.0
 
 _lock = threading.RLock()
 _price_cache: dict[str, tuple[float, float]] = {}
@@ -446,6 +449,31 @@ def _positive(value: Any) -> bool:
     return math.isfinite(out) and out > 0
 
 
+def _top_up_locked(acct: dict[str, Any], account: str, needed_gbp: float) -> float:
+    have = float(acct["cash"])
+    if needed_gbp <= have + 1e-6:
+        return 0.0
+    added = math.ceil((needed_gbp - have) / TOP_UP_STEP_GBP) * TOP_UP_STEP_GBP + TOP_UP_STEP_GBP
+    acct["cash"] = round(have + added, 2)
+    acct["transactions"].insert(0, {
+        "type": "DEPOSIT", "amount": added, "currency": "GBP", "dateTime": _iso(datetime.utcnow()),
+        "reference": f"sbx-demo-cash-{account}-{uuid.uuid4().hex[:6]}",
+    })
+    logger.info("sandbox broker: demo cash added £%.0f to %s", added, account)
+    return added
+
+
+def top_up(account: str, needed_gbp: float) -> float:
+    """Make sure the fake account's cash covers ``needed_gbp``; returns what was
+    added (a DEPOSIT transaction, so contribution-netted returns stay honest)."""
+    with _lock:
+        state = _load()
+        added = _top_up_locked(state["accounts"][account], account, needed_gbp)
+        if added:
+            _save(state)
+        return added
+
+
 def place_order(account: str, scope: str, kind: str, body: dict[str, Any]) -> dict[str, Any]:
     if scope != "execute":
         raise SandboxError(403, "read key cannot place orders")
@@ -482,8 +510,7 @@ def place_order(account: str, scope: str, kind: str, body: dict[str, Any]) -> di
         notional = abs(qty) * px / fx
         pos = acct["positions"].get(code, {"quantity": 0.0, "avg_price": px, "opened_at": _iso(now)})
         if side == "BUY":
-            if notional > acct["cash"] + 1e-6:
-                raise SandboxError(400, "insufficient funds")
+            _top_up_locked(acct, account, notional)  # fake money: never refuse a demo buy for cash
             new_qty = pos["quantity"] + qty
             pos["avg_price"] = (pos["quantity"] * pos["avg_price"] + qty * px) / new_qty
             pos["quantity"] = round(new_qty, 6)

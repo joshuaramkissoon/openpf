@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ExternalLink, Landmark, Sparkles } from 'lucide-react'
+import { ExternalLink, Landmark } from 'lucide-react'
+import { ArchieIcon } from '@/components/kit'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAppActions } from '@/lib/app-actions'
@@ -160,7 +161,7 @@ export function SmartMoneyLine({
                 onClick={() => askArchie(smartMoneyPrompt(data.ticker, data.line))}
                 className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
               >
-                <Sparkles className="size-3" />
+                <ArchieIcon className="size-3" />
                 Ask Archie
               </button>
               {data.attribution ? (

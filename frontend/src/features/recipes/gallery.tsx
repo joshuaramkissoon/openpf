@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { ArrowUp, ChevronRight, Cog, Plus, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowUp, ChevronRight, Cog, Plus, ShieldCheck } from 'lucide-react'
 
 import { listRecipes, setRecipeEnabled } from '@/api/recipes'
 import { ScheduledJobsWorkspace } from '@/components/ScheduledJobsWorkspace'
-import { PageHeader } from '@/components/kit'
+import { ArchieIcon, PageHeader } from '@/components/kit'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -66,7 +66,7 @@ export function AskComposer({ autoFocus = false, initial = '', onSubmit, busy = 
       className="rounded-xl border border-border bg-card p-1.5 transition-colors focus-within:border-primary/50 focus-within:ring-3 focus-within:ring-primary/15"
     >
       <div className={cn('flex gap-2', size === 'lg' ? 'items-start' : 'items-end')}>
-        <Sparkles className={cn('ml-2 size-4 shrink-0 text-primary', size === 'lg' ? 'mt-2.5' : 'mb-2.5')} />
+        <ArchieIcon className={cn('ml-2 size-4 shrink-0 text-primary', size === 'lg' ? 'mt-2.5' : 'mb-2.5')} />
         <textarea
           autoFocus={autoFocus}
           value={prompt}

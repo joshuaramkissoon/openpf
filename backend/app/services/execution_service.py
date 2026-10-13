@@ -311,6 +311,71 @@ def _paper_fill_price(symbol: str) -> float:
         return 0.0
 
 
+# The limits the user sets so Archie's proposals stay inside them. On a trade the
+# user places by hand (``rails_mode="advisory"``) they are warnings, not refusals.
+# Everything else (duplicates, cash, selling more than held, no exchange key) stays hard.
+_ADVISORY_RAILS = (
+    "risk-guard: order exceeds max single-order notional",
+    "risk-guard: order exceeds max daily notional",
+    "crypto-guard: crypto would be",
+    "crypto-guard: no portfolio snapshot",
+)
+# A hand-placed order only needs protecting from a double click, not from the
+# user deliberately buying the same thing again a minute later.
+MANUAL_DUPLICATE_WINDOW_SECONDS = 15
+MANUAL_SOURCE = "user"
+MANUAL_ACTOR = "user"
+
+
+def _sandbox() -> bool:
+    from app.core.sandbox import is_sandbox
+
+    return is_sandbox()
+
+
+def _sandbox_top_up(db: Session, intent: TradeIntent, account_kind: str) -> None:
+    """Sandbox only: make sure the mock broker/exchange holds enough fake cash for
+    this buy, logging "demo cash added" on the intent when it had to."""
+    if intent.side != "buy":
+        return
+    need = float(intent.estimated_notional or 0.0) * 1.02  # fees + price drift since sizing
+    try:
+        if broker_router.is_crypto(account_kind):
+            from app.services import crypto_sandbox
+
+            added = crypto_sandbox.top_up(need)
+        else:
+            from app.services import sandbox_broker
+
+            added = sandbox_broker.top_up(account_kind, need)
+    except Exception:  # noqa: BLE001 — the mock tops up at fill time anyway
+        logger.warning("sandbox top-up failed for intent %s", intent.id, exc_info=True)
+        return
+    if added:
+        _log_event(db, intent.id, "info", "demo cash added", {"amount_gbp": added, "account_kind": account_kind})
+
+
+def is_advisory_rail(violation: str) -> bool:
+    return violation.startswith(_ADVISORY_RAILS)
+
+
+def split_advisory(violations: list[str]) -> tuple[list[str], list[str]]:
+    """(hard, advisory) for a trade the user places by hand."""
+    return [v for v in violations if not is_advisory_rail(v)], [v for v in violations if is_advisory_rail(v)]
+
+
+def is_manual_intent(intent: TradeIntent) -> bool:
+    """Created by the manual-trade service for the user and approved as the user.
+    Only such an intent may execute with advisory limits. Agents can't create
+    one: proposals coerce source "user" away and never set ``manual_trade``."""
+    meta = intent.meta or {}
+    return (
+        meta.get("source") == MANUAL_SOURCE
+        and meta.get("manual_trade") is True
+        and intent.approved_by == MANUAL_ACTOR
+    )
+
+
 def rail_violations(
     db: Session,
     *,
@@ -324,6 +389,7 @@ def rail_violations(
     instrument_code: str | None = None,
     not_before: date | None = None,
     daily_used: float | None = None,
+    duplicate_window_seconds: int | None = None,
 ) -> list[str]:
     """Every execution rail an order of this shape would trip right now.
 
@@ -338,7 +404,8 @@ def rail_violations(
     risk = risk or ConfigStore(db).get_risk()
     out: list[str] = []
 
-    cutoff = datetime.utcnow() - timedelta(seconds=int(risk["duplicate_order_window_seconds"]))
+    window = int(risk["duplicate_order_window_seconds"]) if duplicate_window_seconds is None else duplicate_window_seconds
+    cutoff = datetime.utcnow() - timedelta(seconds=window)
     dup_q = select(TradeIntent.id).where(
         TradeIntent.created_at >= cutoff,
         TradeIntent.symbol == symbol,
@@ -366,7 +433,8 @@ def rail_violations(
     if daily_used + estimated_notional > float(risk["max_daily_notional"]):
         out.append("risk-guard: order exceeds max daily notional")
 
-    if side == "buy":
+    # A sandbox's cash is fake and tops itself up at order time (``_sandbox_top_up``).
+    if side == "buy" and not _sandbox():
         cash = _latest_account_cash(db, account_kind)
         if cash is None or estimated_notional > cash:
             out.append("risk-guard: insufficient available cash")
@@ -392,12 +460,19 @@ def execute_intent(
     account_kind: str | None = None,
     approve: bool = False,
     approved_via: str = "ui",
+    rails_mode: str = "enforce",
 ) -> TradeIntent:
     """Execute an APPROVED intent. This is the single gate for live orders.
 
     ``approve=True`` is a human-UI convenience: it approves a ``proposed``
     intent and executes it in one call, recording a human approval in the audit
     log. Agent code paths must never pass it — the agent can only propose.
+
+    ``rails_mode="advisory"``: the user's own trade from the stock sheet. The
+    notional and crypto-cap limits (which bind Archie's proposals) become
+    warnings recorded on the intent; every other check stays hard. Honoured only
+    for an intent the manual-trade service created and the user approved
+    (``is_manual_intent``); anything else is checked as usual.
     """
     intent = db.get(TradeIntent, intent_id)
     if not intent:
@@ -436,6 +511,9 @@ def execute_intent(
     risk = config.get_risk()
     broker = config.get_broker()
 
+    advisory = rails_mode == "advisory" and is_manual_intent(intent)
+    if rails_mode == "advisory" and not advisory:
+        logger.warning("advisory rails refused for intent %s (not a manual trade by the user)", intent.id)
     violations = rail_violations(
         db,
         symbol=intent.symbol,
@@ -447,7 +525,11 @@ def execute_intent(
         account_kind=resolved_account,
         instrument_code=intent.instrument_code,
         not_before=intent.not_before,
+        duplicate_window_seconds=MANUAL_DUPLICATE_WINDOW_SECONDS if advisory else None,
     )
+    rail_warnings: list[str] = []
+    if advisory:
+        violations, rail_warnings = split_advisory(violations)
     if violations:
         raise ExecutionError(violations[0])
 
@@ -462,12 +544,16 @@ def execute_intent(
         probe = build_t212_client(config, account_kind=resolved_account, purpose="execute")  # type: ignore[arg-type]
         if broker.get("t212_base_env") != "sandbox" or not is_sandbox_url(probe.base_url):
             raise ExecutionError("sandbox mode: refusing to execute against a non-sandbox broker")
+    if is_sandbox() and mode != "paper":
+        _sandbox_top_up(db, intent, resolved_account)
 
     # Atomically claim the intent (approved -> executing). Two concurrent
     # executes (double-click, UI + Telegram) both pass the checks above; only
     # the one whose UPDATE matches places the order.
     meta = dict(intent.meta or {})
     meta["account_kind"] = resolved_account
+    if rail_warnings:
+        meta["rail_warnings"] = rail_warnings
     claimed = db.execute(
         update(TradeIntent)
         .where(TradeIntent.id == intent.id, TradeIntent.status == "approved")
@@ -478,6 +564,8 @@ def execute_intent(
     db.refresh(intent)
     if not claimed:
         raise ExecutionError(_status_message(intent, "executed"))
+    if rail_warnings:
+        _log_event(db, intent.id, "warn", "placed by the user past their limits (advisory)", {"warnings": rail_warnings})
 
     try:
         if broker_router.is_crypto(resolved_account):

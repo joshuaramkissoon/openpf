@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { ArrowLeft, ArrowRight, CircleCheck, CircleX, Loader2, TriangleAlert } from "lucide-react"
+import { ArrowLeft, ArrowRight, CircleCheck, CircleX, Gauge, Loader2, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -21,15 +21,37 @@ import { placeTrade, previewTrade, type InstrumentInsight, type TradePreview } f
 import { fmtMoney, fmtPct, fmtPrice, num } from "./insight-format"
 import { CapMeter } from "./insight-sections"
 
-const ACCOUNTS = ["stocks_isa", "invest"] as const
+const STOCK_ACCOUNTS = ["stocks_isa", "invest"]
+
+/** Where a trade should start: e.g. a held-back ask the user places themselves. */
+export type TradePrefill = { side?: "buy" | "sell"; amount_gbp?: number; account_kind?: string | null }
+
+/** A coin on the connected exchange, rather than a Trading 212 instrument. */
+export function isCryptoInsight(insight: InstrumentInsight, prefill?: TradePrefill | null) {
+  return (
+    prefill?.account_kind === "crypto" ||
+    Boolean(insight.instrument_code?.includes("/")) ||
+    Boolean(insight.position?.accounts?.includes("crypto") && insight.position.accounts.length === 1)
+  )
+}
 
 /**
- * The user's own trade, sized against their limits, then a review step:
- * amount, account, the post-trade weight against the cap, every rail, fees,
- * and (live only) a final confirm. Not a proposal: pressing Buy/Sell places
- * it, through the same execution gate that re-checks every rail.
+ * The user's own trade, sized, then a review step: amount, account, the
+ * post-trade weight against the cap, every rail, fees, and (live only) a final
+ * confirm. Not a proposal: pressing Buy/Sell places it, through the same
+ * execution gate. The limits that bind Archie's proposals (per order, per day,
+ * the caps) are amber warnings here — the user can place it anyway; cash,
+ * holdings and duplicates still block.
  */
-export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; onDone?: (placed: boolean) => void }) {
+export function TradeSizer({
+  insight,
+  prefill,
+  onDone,
+}: {
+  insight: InstrumentInsight
+  prefill?: TradePrefill | null
+  onDone?: (placed: boolean) => void
+}) {
   const book = insight.book
   const pos = insight.position
   const ownerPlay = insight.plays.find((p) => p.relation === "owner") ?? null
@@ -38,14 +60,28 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
   const total = book?.total_gbp ?? 0
   const priceGbp = insight.quote?.price_gbp ?? null
 
-  const defaultAccount =
+  const crypto = isCryptoInsight(insight, prefill)
+  const accounts = crypto ? ["crypto"] : STOCK_ACCOUNTS
+  const unit = crypto ? "coins" : "shares"
+  const fallbackAccount =
     pos && pos.accounts.length
       ? Object.entries(pos.value_by_account).sort((a, b) => b[1] - a[1])[0][0]
-      : Object.entries(book?.free_cash_by_account ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "stocks_isa"
+      : Object.entries(book?.free_cash_by_account ?? {})
+          .filter(([a]) => STOCK_ACCOUNTS.includes(a))
+          .sort((a, b) => b[1] - a[1])[0]?.[0] ?? "stocks_isa"
+  const defaultAccount = crypto
+    ? "crypto"
+    : prefill?.account_kind && STOCK_ACCOUNTS.includes(prefill.account_kind)
+      ? prefill.account_kind
+      : STOCK_ACCOUNTS.includes(fallbackAccount)
+        ? fallbackAccount
+        : "stocks_isa"
 
-  const [side, setSide] = useState<"buy" | "sell">("buy")
+  const [side, setSide] = useState<"buy" | "sell">(prefill?.side ?? "buy")
   const [account, setAccount] = useState<string>(defaultAccount)
-  const startAmount = Math.max(50, Math.round(Math.min(book?.max_order_gbp ?? 500, total * 0.01 || 500) / 50) * 50)
+  const startAmount = prefill?.amount_gbp
+    ? Math.round(prefill.amount_gbp)
+    : Math.max(50, Math.round(Math.min(book?.max_order_gbp ?? 500, total * 0.01 || 500) / 50) * 50)
   const [amount, setAmount] = useState<string>(String(startAmount))
   const [review, setReview] = useState<TradePreview | null>(null)
   const [busy, setBusy] = useState<null | "review" | "place">(null)
@@ -63,12 +99,13 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
   const verb = side === "buy" ? "Buy" : "Sell"
 
   // Instant feedback while sizing; the review step asks the server (the authority).
+  // Limits are Archie's guard rails, so on your own trade they warn, never block.
   const checks = useMemo(() => {
     const out: { tone: "bad" | "warn"; text: string }[] = []
     if (book?.max_order_gbp != null && amt > book.max_order_gbp)
-      out.push({ tone: "bad", text: `Above your single-order limit of ${fmtMoney(book.max_order_gbp)}.` })
+      out.push({ tone: "warn", text: `Above your ${fmtMoney(book.max_order_gbp)} single-order limit. You can still place it.` })
     if (side === "buy" && cap != null && weightNext > cap)
-      out.push({ tone: "bad", text: `Takes it to ${fmtPct(weightNext)} of your book, over your ${fmtPct(cap, 0)} position cap.` })
+      out.push({ tone: "warn", text: `Takes it to ${fmtPct(weightNext)} of your book, over your ${fmtPct(cap, 0)} position cap.` })
     if (side === "buy" && target != null && weightNext > target * 1.15 && !(cap != null && weightNext > cap))
       out.push({ tone: "warn", text: `Above the play's ${fmtPct(target)} target.` })
     if (side === "buy" && cash != null && amt > cash) out.push({ tone: "bad", text: `More than the ${fmtMoney(cash)} free cash in ${accountLabel(account)}.` })
@@ -106,9 +143,9 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
       // A broker that doesn't report its fill price yet: show the price it was sized at, marked as approximate.
       const price = res.fill_price || review?.sizing?.reference_price
       toast.success(`${side === "buy" ? "Bought" : "Sold"} ${fmtMoney(res.intent.estimated_notional_gbp)} of ${insight.display_ticker}`, {
-        description: `${filled.toLocaleString("en-GB", { maximumFractionDigits: 4 })} shares${price ? ` ${res.fill_price ? "at" : "at ≈"} ${fmtPrice(price, ccy)}` : ""} · ${accountLabel(account)}${
+        description: `${filled.toLocaleString("en-GB", { maximumFractionDigits: crypto ? 8 : 4 })} ${unit}${price ? ` ${res.fill_price ? "at" : "at ≈"} ${fmtPrice(price, ccy)}` : ""} · ${accountLabel(account)}${
           res.broker_mode === "paper" ? " · paper" : ""
-        }`,
+        }${res.rail_warnings?.length ? " · over your limits, as you chose" : ""}`,
       })
       setReview(null)
       onDone?.(true)
@@ -126,6 +163,8 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
     const fees = review.fees
     const live = review.broker_mode === "live"
     const ok = review.ok && !review.violations.length
+    const over = review.over_limits ?? []
+    const otherWarnings = review.warnings.filter((w) => !over.includes(w))
     return (
       <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-muted/15 p-4" aria-label="Review your trade">
         <div className="flex items-center gap-2">
@@ -152,7 +191,7 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
             {s ? (
               <span className="text-muted-foreground">
                 {" "}
-                · {s.quantity.toLocaleString("en-GB", { maximumFractionDigits: 4 })} shares at {fmtPrice(s.reference_price, s.currency)}
+                · {s.quantity.toLocaleString("en-GB", { maximumFractionDigits: crypto ? 8 : 4 })} {unit} at {fmtPrice(s.reference_price, s.currency)}
               </span>
             ) : null}
           </dd>
@@ -160,7 +199,9 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
           <dd>{accountLabel(account)}</dd>
           <dt className="text-muted-foreground">Fees</dt>
           <dd>
-            {fees && fees.fx_fee_gbp > 0 ? (
+            {fees?.exchange_fee_gbp != null ? (
+              <>Exchange fee ≈ {fmtMoney(fees.exchange_fee_gbp)}</>
+            ) : fees && fees.fx_fee_gbp > 0 ? (
               <>
                 No commission · FX fee {fmtPct(fees.fx_fee_rate, 2)} ≈ {fmtMoney(fees.fx_fee_gbp)}
               </>
@@ -183,14 +224,14 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
               <CircleX className="mt-px size-3.5 shrink-0" /> {railWords(v)}
             </p>
           ))}
-          {review.warnings.map((v) => (
+          {otherWarnings.map((v) => (
             <p key={v} className="flex items-start gap-1.5 text-warning">
               <TriangleAlert className="mt-px size-3.5 shrink-0" /> {railWords(v)}
             </p>
           ))}
-          {ok ? (
+          {ok && !over.length ? (
             <p className="flex items-center gap-1.5 text-muted-foreground">
-              <CircleCheck className="size-3.5 text-positive" /> Passes your rails: order size, daily limit, cash and duplicates.
+              <CircleCheck className="size-3.5 text-positive" /> Within your limits: order size, daily limit, cash and duplicates.
             </p>
           ) : null}
           {error ? (
@@ -200,17 +241,45 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
           ) : null}
         </div>
 
+        {ok && over.length ? (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-warning/35 bg-warning/[0.07] px-3 py-2.5 text-xs" role="note">
+            <p className="flex items-center gap-1.5 font-medium text-warning">
+              <Gauge className="size-3.5 shrink-0" /> Over your limits
+            </p>
+            <ul className="flex flex-col gap-0.5 pl-5 text-foreground/85">
+              {over.map((v) => (
+                <li key={v} className="list-disc marker:text-warning/70">
+                  {railWords(v, review)}
+                </li>
+              ))}
+            </ul>
+            <p className="pl-5 text-muted-foreground">
+              Your limits keep Archie’s proposals in check. This is your own trade, so it’s your call. It still counts toward today’s total.
+            </p>
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <Button
             onClick={() => (live ? setConfirmLive(true) : void place())}
             disabled={!ok || busy !== null}
-            className={cn(side === "sell" && "bg-negative text-white hover:bg-negative/90")}
+            className={cn(
+              side === "sell" && "bg-negative text-white hover:bg-negative/90",
+              over.length && side === "buy" && "bg-warning text-warning-foreground hover:bg-warning/85",
+            )}
           >
             {busy === "place" ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {over.length ? "Place anyway · " : ""}
             {verb} {fmtMoney(s?.estimated_notional_gbp ?? amt)}
           </Button>
           <span className="text-xs text-muted-foreground">
-            {live ? "Sends a real market order to Trading 212." : review.broker_mode === "paper" ? "Paper trading: a simulated fill." : "Sandbox broker: fake money."}
+            {live
+              ? crypto
+                ? "Sends a real market order to your exchange."
+                : "Sends a real market order to Trading 212."
+              : review.broker_mode === "paper"
+                ? "Paper trading: a simulated fill."
+                : "Sandbox: fake money, topped up as needed."}
           </span>
         </div>
 
@@ -220,7 +289,11 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
               <AlertDialogTitle>
                 {verb} {fmtMoney(s?.estimated_notional_gbp ?? amt)} of {insight.display_ticker}?
               </AlertDialogTitle>
-              <AlertDialogDescription>This sends a real order to your Trading 212 {accountLabel(account)} account.</AlertDialogDescription>
+              <AlertDialogDescription>
+                This sends a real order to your {crypto ? "" : "Trading 212 "}
+                {accountLabel(account)} account.
+                {over.length ? " It’s over your limits; you’ve chosen to place it anyway." : ""}
+              </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -243,7 +316,7 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
     <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-muted/15 p-4">
       <div className="flex flex-wrap items-center gap-2">
         <Seg value={side} onChange={(v) => edit(() => setSide(v as "buy" | "sell"))} options={pos ? ["buy", "sell"] : ["buy"]} />
-        <Seg value={account} onChange={(v) => edit(() => setAccount(v))} options={[...ACCOUNTS]} label={(a) => accountLabel(a)} />
+        <Seg value={account} onChange={(v) => edit(() => setAccount(v))} options={accounts} label={(a) => accountLabel(a)} />
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -274,7 +347,7 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
         </div>
         {shares != null && insight.quote ? (
           <span className={cn("text-xs text-muted-foreground", num)}>
-            ≈ {shares.toLocaleString("en-GB", { maximumFractionDigits: 3 })} shares at {fmtPrice(insight.quote.price, insight.quote.currency)}
+            ≈ {shares.toLocaleString("en-GB", { maximumFractionDigits: crypto ? 6 : 3 })} {unit} at {fmtPrice(insight.quote.price, insight.quote.currency)}
           </span>
         ) : null}
       </div>
@@ -299,17 +372,20 @@ export function TradeSizer({ insight, onDone }: { insight: InstrumentInsight; on
           Review {side} {fmtMoney(amt)}
           <ArrowRight className="size-3.5" />
         </Button>
-        <span className="text-xs text-muted-foreground">You’ll see fees and every rail before anything is placed.</span>
+        <span className="text-xs text-muted-foreground">You’ll see fees and every check before anything is placed.</span>
       </div>
     </div>
   )
 }
 
-/** Rail messages from the gate, in plain words. */
-function railWords(v: string): string {
-  const s = v.replace(/^risk-guard:\s*/i, "").replace(/^duplicate-order-guard:\s*/i, "")
-  if (/max single-order notional/i.test(s)) return "Above your single-order limit."
-  if (/max daily notional/i.test(s)) return "Over your daily trading limit."
+/** Rail messages from the gate, in plain words (with the limit's size when the preview carries it). */
+function railWords(v: string, review?: TradePreview): string {
+  const s = v.replace(/^(risk|crypto|duplicate-order|position)-guard:\s*/i, "")
+  const caps = review?.caps
+  if (/max single-order notional/i.test(s))
+    return caps ? `Above your ${fmtMoney(caps.max_single_order_notional_gbp)} single-order limit.` : "Above your single-order limit."
+  if (/max daily notional/i.test(s))
+    return caps ? `Takes today past your ${fmtMoney(caps.max_daily_notional_gbp)} daily limit.` : "Over your daily trading limit."
   if (/insufficient available cash/i.test(s)) return "Not enough free cash in this account."
   if (/similar order already exists/i.test(s)) return "A similar order was placed moments ago."
   return s.charAt(0).toUpperCase() + s.slice(1)

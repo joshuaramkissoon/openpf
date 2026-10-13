@@ -4,7 +4,7 @@ import { FileQuestion, Loader2, ShieldCheck } from 'lucide-react'
 import { getIntentsByIds } from '@/api/client'
 import { useDecisions } from '@/app/hooks/use-proposals'
 import { ProposalCarousel, ProposalPair, useApproveAll } from '@/features/home/proposal-carousel'
-import { ProposalReceipt, isSingleTranche } from '@/features/home/proposal-tiles'
+import { ProposalReceipt, dayLabel, isSingleTranche, laterDay } from '@/features/home/proposal-tiles'
 import { proposalPrompt } from '@/features/home/decisions-card'
 import { useAppActions } from '@/lib/app-actions'
 import { cn } from '@/lib/utils'
@@ -107,6 +107,10 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
   const unknown = ids.filter((id) => !byId.has(id))
   const approveAll = useApproveAll(pending, decisions)
 
+  // Staged for a later day's limits: counted apart, so "proposes N" means placeable today.
+  const later = pending.map(laterDay).filter((d): d is string => Boolean(d))
+  const today = pending.length - later.length
+  const laterWhen = new Set(later.map(dayLabel)).size === 1 ? `for ${dayLabel(later[0]).replace(/^Tomorrow$/, 'tomorrow')}` : 'for later days'
   const prominent = pending.length > 0 || held.length > 0
   const cards = pending.length + held.length
   const shared = decisions
@@ -121,13 +125,16 @@ export function ProposalGroup({ ids }: { ids: string[] }) {
           <span className="font-medium text-foreground">
             {pending.length === 0
               ? 'Held back by your limits'
-              : pending.length === 1
-                ? 'Archie proposes a trade'
-                : `Archie proposes ${pending.length} trades`}
+              : today === 0
+                ? `Archie proposes ${later.length === 1 ? 'a trade' : `${later.length} trades`} ${laterWhen}`
+                : today === 1
+                  ? 'Archie proposes a trade'
+                  : `Archie proposes ${today} trades`}
           </span>
+          {today > 0 && later.length > 0 ? <span className="text-muted-foreground">· {later.length} {laterWhen}</span> : null}
           {pending.length > 0 && held.length > 0 ? (
             <span className="text-muted-foreground">· {held.length} held back</span>
-          ) : (
+          ) : later.length > 0 && today > 0 ? null : (
             <span className="hidden text-muted-foreground sm:inline">
               {pending.length > 0 ? '· nothing happens until you approve' : '· nothing was proposed'}
             </span>
