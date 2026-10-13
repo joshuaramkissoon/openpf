@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -157,7 +158,11 @@ def price(code: str) -> float:
     value = _FALLBACK.get(code, 100.0)
     try:
         frame = _history(_ticker_for_code(code), 10)
-        value = float(frame["close"].iloc[-1])
+        latest = float(frame["close"].iloc[-1])
+        if math.isfinite(latest) and latest > 0:
+            value = latest
+        elif hit:
+            value = hit[0]
     except Exception:  # noqa: BLE001 — offline / throttled: keep the fallback
         if hit:
             value = hit[0]
@@ -413,15 +418,30 @@ def exchanges() -> list[dict[str, Any]]:
     return [{"id": 1, "name": "NASDAQ/NYSE (sandbox)", "workingSchedules": [{"id": 1, "timeEvents": []}]}]
 
 
+def _positive(value: Any) -> bool:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(out) and out > 0
+
+
 def place_order(account: str, scope: str, kind: str, body: dict[str, Any]) -> dict[str, Any]:
     if scope != "execute":
         raise SandboxError(403, "read key cannot place orders")
     code = str(body.get("ticker") or "").upper()
     if code not in _NAMES:
         raise SandboxError(400, f"unknown instrument {code}")
-    qty = float(body.get("quantity") or 0)
-    if qty == 0:
-        raise SandboxError(400, "quantity must be non-zero")
+    try:
+        qty = float(body.get("quantity") or 0)
+    except (TypeError, ValueError):
+        raise SandboxError(400, "quantity must be a number") from None
+    if not math.isfinite(qty) or qty == 0:
+        raise SandboxError(400, "quantity must be a non-zero finite number")
+    if kind in {"limit", "stop_limit"} and not _positive(body.get("limitPrice")):
+        raise SandboxError(400, "limitPrice must be a positive number")
+    if kind in {"stop", "stop_limit"} and not _positive(body.get("stopPrice")):
+        raise SandboxError(400, "stopPrice must be a positive number")
     side = "BUY" if qty > 0 else "SELL"
     now = datetime.utcnow()
     with _lock:

@@ -1,19 +1,34 @@
 from __future__ import annotations
 
+import logging
+import math
 from datetime import datetime, timedelta
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
-from app.models.entities import AccountSnapshot, ExecutionEvent, TradeIntent
+from app.models.entities import AccountSnapshot, ExecutionEvent, PositionSnapshot, TradeIntent
 from app.services.agent_skills_bridge import intent_to_skill_action
 from app.services.config_store import ConfigStore
 from app.services.market_data import MarketDataError, fetch_history
-from app.services.t212_client import T212Error, build_t212_client
+from app.services.t212_client import T212AuthError, T212Error, T212RateLimitError, build_t212_client
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionError(RuntimeError):
     pass
+
+
+# An intent left in 'executing' longer than this was interrupted (process
+# crash/restart mid-order). Its broker outcome is unknown, so it's marked failed
+# with a "check your broker" reason rather than left spinning forever.
+_STUCK_EXECUTING_MINUTES = 10
+_OUTCOME_UNKNOWN = (
+    "outcome unknown — the order may or may not have reached Trading 212. "
+    "Check your Trading 212 orders before proposing it again."
+)
 
 
 def _log_event(db: Session, intent_id: str, level: str, message: str, payload: dict | None = None) -> None:
@@ -38,11 +53,41 @@ def _daily_executed_notional(db: Session) -> float:
     return float(total or 0.0)
 
 
-def _latest_account_cash(db: Session) -> float:
-    row = db.execute(select(AccountSnapshot).order_by(desc(AccountSnapshot.fetched_at)).limit(1)).scalar_one_or_none()
+def _latest_account_cash(db: Session, account_kind: str | None = None) -> float | None:
+    """Free cash from the latest snapshot of ``account_kind`` (any account when
+    None). ``None`` when there's no snapshot to judge by."""
+    q = select(AccountSnapshot).order_by(desc(AccountSnapshot.fetched_at))
+    if account_kind:
+        q = q.where(AccountSnapshot.account_kind == account_kind)
+    row = db.execute(q.limit(1)).scalar_one_or_none()
     if not row:
-        return 0.0
+        return None
     return float(row.free_cash or 0.0)
+
+
+def _latest_held_quantity(db: Session, account_kind: str, symbol: str, instrument_code: str | None) -> float | None:
+    """Shares held in ``account_kind`` per the latest position snapshot, or None
+    when there's no snapshot for that account (can't judge)."""
+    acct_ts = db.execute(
+        select(AccountSnapshot.fetched_at)
+        .where(AccountSnapshot.account_kind == account_kind)
+        .order_by(desc(AccountSnapshot.fetched_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    if acct_ts is None:
+        return None
+    rows = db.execute(
+        select(PositionSnapshot).where(
+            PositionSnapshot.account_kind == account_kind, PositionSnapshot.fetched_at == acct_ts
+        )
+    ).scalars().all()
+    code = (instrument_code or "").upper()
+    sym = (symbol or "").upper()
+    total = 0.0
+    for row in rows:
+        if (code and (row.instrument_code or "").upper() == code) or (not code and (row.ticker or "").upper() == sym):
+            total += float(row.quantity or 0.0)
+    return total
 
 
 # A 'proposed' intent older than this is auto-archived: a stale proposal no
@@ -109,8 +154,34 @@ def supersede_open_proposals(db: Session) -> int:
     return len(open_proposals)
 
 
+def recover_stuck_executing(db: Session, older_than_minutes: int = _STUCK_EXECUTING_MINUTES) -> int:
+    """Fail intents stuck in 'executing' (the process died mid-order).
+
+    The broker outcome is unknown, so the reason tells the user to check
+    Trading 212 rather than retry blindly. Called on startup (with 0 — nothing
+    can be mid-flight before the app has served a request) and whenever intents
+    are listed."""
+    cutoff = datetime.utcnow() - timedelta(minutes=older_than_minutes)
+    stuck = (
+        db.execute(
+            select(TradeIntent).where(TradeIntent.status == "executing", TradeIntent.updated_at <= cutoff)
+        )
+        .scalars()
+        .all()
+    )
+    for intent in stuck:
+        intent.status = "failed"
+        intent.failure_reason = f"execution interrupted: {_OUTCOME_UNKNOWN}"
+        db.add(ExecutionEvent(intent_id=intent.id, level="error", message="execution interrupted", payload={}))
+    if stuck:
+        db.commit()
+        logger.warning("Marked %d intent(s) stuck in 'executing' as failed", len(stuck))
+    return len(stuck)
+
+
 def list_intents(db: Session, limit: int = 100) -> list[TradeIntent]:
     expire_stale_intents(db)
+    recover_stuck_executing(db)
     q = select(TradeIntent).order_by(desc(TradeIntent.created_at)).limit(limit)
     return list(db.execute(q).scalars().all())
 
@@ -120,12 +191,20 @@ def list_events(db: Session, limit: int = 300) -> list[ExecutionEvent]:
     return list(db.execute(q).scalars().all())
 
 
+def _status_message(intent: TradeIntent, action: str) -> str:
+    reason = f" ({intent.failure_reason})" if intent.failure_reason and intent.status in {"expired", "failed"} else ""
+    return f"This proposal can't be {action} — it is already {intent.status}{reason}."
+
+
 def approve_intent(db: Session, intent_id: str, note: str | None = None, actor: str = "human") -> TradeIntent:
+    # A proposal past its TTL must not be approvable just because nobody listed
+    # the queue (which is what normally expires it).
+    expire_stale_intents(db)
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
     if intent.status not in {"proposed", "approved"}:
-        raise ExecutionError(f"Intent {intent_id} cannot be approved from status {intent.status}")
+        raise ExecutionError(_status_message(intent, "approved"))
 
     intent.status = "approved"
     intent.approved_at = datetime.utcnow()
@@ -145,6 +224,9 @@ def reject_intent(db: Session, intent_id: str, note: str | None = None) -> Trade
     intent = db.get(TradeIntent, intent_id)
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
+    if intent.status not in {"proposed", "approved"}:
+        # Rejecting an executed/executing intent would rewrite the audit trail.
+        raise ExecutionError(_status_message(intent, "rejected"))
 
     intent.status = "rejected"
     if note:
@@ -162,8 +244,9 @@ def reject_intent(db: Session, intent_id: str, note: str | None = None) -> Trade
 def _paper_fill_price(symbol: str) -> float:
     try:
         history = fetch_history(symbol, lookback_days=90)
-        return float(history["close"].iloc[-1])
-    except (MarketDataError, IndexError, KeyError):
+        price = float(history["close"].iloc[-1])
+        return price if math.isfinite(price) and price > 0 else 0.0
+    except (MarketDataError, IndexError, KeyError, ValueError, TypeError):
         return 0.0
 
 
@@ -176,6 +259,8 @@ def rail_violations(
     estimated_notional: float,
     exclude_intent_id: str | None = None,
     risk: dict | None = None,
+    account_kind: str | None = None,
+    instrument_code: str | None = None,
 ) -> list[str]:
     """Every execution rail an order of this shape would trip right now.
 
@@ -205,8 +290,15 @@ def rail_violations(
     if _daily_executed_notional(db) + estimated_notional > float(risk["max_daily_notional"]):
         out.append("risk-guard: order exceeds max daily notional")
 
-    if side == "buy" and estimated_notional > _latest_account_cash(db):
-        out.append("risk-guard: insufficient available cash")
+    if side == "buy":
+        cash = _latest_account_cash(db, account_kind)
+        if cash is None or estimated_notional > cash:
+            out.append("risk-guard: insufficient available cash")
+
+    if side == "sell" and account_kind:
+        held = _latest_held_quantity(db, account_kind, symbol, instrument_code)
+        if held is not None and quantity > held + 1e-6:
+            out.append(f"position-guard: selling {quantity:g} but only {held:g} held in {account_kind}")
 
     return out
 
@@ -233,6 +325,8 @@ def execute_intent(
     if approve and intent.status == "proposed":
         intent = approve_intent(db, intent_id, note=f"human approval via {approved_via}", actor="human")
 
+    if intent.status != "approved" and intent.status != "proposed":
+        raise ExecutionError(_status_message(intent, "executed"))
     if intent.status != "approved":
         raise ExecutionError(
             f"Intent {intent_id} cannot be executed from status {intent.status} (it must be approved first)"
@@ -245,6 +339,15 @@ def execute_intent(
     if resolved_account not in {"invest", "stocks_isa"}:
         raise ExecutionError(f"invalid account '{account_kind}': must be 'invest' or 'stocks_isa'")
 
+    qty = float(intent.quantity or 0.0)
+    notional = float(intent.estimated_notional or 0.0)
+    if intent.side not in {"buy", "sell"}:
+        raise ExecutionError(f"invalid side '{intent.side}': must be 'buy' or 'sell'")
+    if not math.isfinite(qty) or qty <= 0:
+        raise ExecutionError("invalid quantity: must be a positive number of shares")
+    if not math.isfinite(notional) or notional < 0:
+        raise ExecutionError("invalid estimated notional on this intent")
+
     config = ConfigStore(db)
     risk = config.get_risk()
     broker = config.get_broker()
@@ -253,10 +356,12 @@ def execute_intent(
         db,
         symbol=intent.symbol,
         side=intent.side,
-        quantity=intent.quantity,
-        estimated_notional=intent.estimated_notional,
+        quantity=qty,
+        estimated_notional=notional,
         exclude_intent_id=intent.id,
         risk=risk,
+        account_kind=resolved_account,
+        instrument_code=intent.instrument_code,
     )
     if violations:
         raise ExecutionError(violations[0])
@@ -265,15 +370,21 @@ def execute_intent(
     if force_live:
         mode = "live"
 
-    intent.broker_mode = mode
-    intent.status = "executing"
-    # Record the resolved destination account on the intent for the audit trail.
+    # Atomically claim the intent (approved -> executing). Two concurrent
+    # executes (double-click, UI + Telegram) both pass the checks above; only
+    # the one whose UPDATE matches places the order.
     meta = dict(intent.meta or {})
     meta["account_kind"] = resolved_account
-    intent.meta = meta
-    db.add(intent)
+    claimed = db.execute(
+        update(TradeIntent)
+        .where(TradeIntent.id == intent.id, TradeIntent.status == "approved")
+        .values(status="executing", broker_mode=mode, meta=meta, updated_at=datetime.utcnow())
+        .execution_options(synchronize_session=False)
+    ).rowcount
     db.commit()
     db.refresh(intent)
+    if not claimed:
+        raise ExecutionError(_status_message(intent, "executed"))
 
     try:
         if mode == "paper":
@@ -342,11 +453,34 @@ def execute_intent(
         )
         return intent
 
-    except (ExecutionError, T212Error) as exc:
-        intent.status = "failed"
-        intent.failure_reason = str(exc)
-        db.add(intent)
-        db.commit()
-        db.refresh(intent)
-        _log_event(db, intent.id, "error", "execution failed", {"error": str(exc)})
-        raise
+    except Exception as exc:  # noqa: BLE001 — never leave an intent stuck in 'executing'
+        text = str(exc) or exc.__class__.__name__
+        # A transport error after the request left us means the order may have
+        # been placed — say so instead of inviting a blind retry.
+        if isinstance(exc, T212Error) and "request failed" in text:
+            text = f"{text} — {_OUTCOME_UNKNOWN}"
+        # Definitely-not-placed failures (rate limited, key rejected, exec key
+        # missing/disabled) put the intent back to 'approved' so the user can
+        # fix the cause and retry; anything else is terminal.
+        retryable = isinstance(exc, (ExecutionError, T212RateLimitError, T212AuthError))
+        try:
+            db.rollback()
+            intent = db.get(TradeIntent, intent_id) or intent
+            intent.status = "approved" if retryable else "failed"
+            intent.failure_reason = text[:2000]
+            db.add(intent)
+            db.commit()
+            db.refresh(intent)
+            _log_event(
+                db,
+                intent.id,
+                "warn" if retryable else "error",
+                "execution blocked (not sent; retryable)" if retryable else "execution failed",
+                {"error": text[:2000]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not record failure for intent %s", intent_id)
+        if isinstance(exc, (ExecutionError, T212Error)):
+            raise
+        logger.exception("Unexpected error executing intent %s", intent_id)
+        raise ExecutionError(f"execution failed: {exc.__class__.__name__}: {exc}") from exc

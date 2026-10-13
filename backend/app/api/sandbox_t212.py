@@ -106,7 +106,12 @@ async def place(kind: str, request: Request) -> Any:
         return JSONResponse({"message": "unknown order type"}, status_code=404)
     try:
         account, scope = _auth(request)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            raise sbx.SandboxError(400, "request body must be JSON") from None
+        if not isinstance(body, dict):
+            raise sbx.SandboxError(400, "request body must be a JSON object")
         return sbx.place_order(account, scope, kind, body)
     except sbx.SandboxError as exc:
         return _err(exc)

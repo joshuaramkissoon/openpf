@@ -114,8 +114,21 @@ async def lifespan(app: FastAPI):
                     _warm_sandbox_history()
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).warning("Sandbox seed skipped", exc_info=True)
+    # Nothing can be mid-order before we've served a request: anything still
+    # 'executing' was interrupted by a crash/restart — surface it, don't spin.
+    try:
+        from app.core.database import SessionLocal
+        from app.services.execution_service import recover_stuck_executing
+
+        with SessionLocal() as db:
+            recover_stuck_executing(db, older_than_minutes=0)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("Stuck-intent recovery skipped", exc_info=True)
     if _scheduler_should_run():
-        start_scheduler()
+        try:
+            start_scheduler()
+        except Exception:  # noqa: BLE001 — the dashboard must still come up
+            logging.getLogger(__name__).error("Scheduler failed to start; continuing without it", exc_info=True)
     # Builds Archie queues for agent-built Views (see views_builder.enqueue).
     import asyncio
 
