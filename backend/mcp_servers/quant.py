@@ -91,7 +91,7 @@ class TradeIn(BaseModel):
     speculative: bool = Field(default=False, description="placement only: likely to be cut at a loss → prefer Invest")
 
 
-@mcp.tool(annotations=_RO, meta=_META)
+@mcp.tool(annotations=_RO, meta=_META, structured_output=False)
 def size_position(
     tickers: list[str],
     method: Literal["conviction", "vol_target", "kelly", "budget"] = "conviction",
@@ -127,7 +127,7 @@ def size_position(
                 lookback=lookback)
 
 
-@mcp.tool(annotations=_RO, meta=_META)
+@mcp.tool(annotations=_RO, meta=_META, structured_output=False)
 def analyse_risk(
     scope: Literal["book", "play", "holdings"] = "book",
     view: Literal["overview", "concentration", "contribution", "drawdown", "cvar", "beta", "correlation_clusters"] = "overview",
@@ -149,7 +149,7 @@ def analyse_risk(
                 lookback=lookback)
 
 
-@mcp.tool(annotations=_RO, meta=_META)
+@mcp.tool(annotations=_RO, meta=_META, structured_output=False)
 def what_if(trades: list[TradeIn], lookback: Lookback = "1y") -> str:
     """Effect of hypothetical trades on the book before proposing them: weights before → after,
     book volatility and tail loss before → after, effective number of names, cash per account,
@@ -160,7 +160,7 @@ def what_if(trades: list[TradeIn], lookback: Lookback = "1y") -> str:
     return _run("what_if", qs.what_if_report, trades=[t.model_dump() for t in trades], lookback=lookback)
 
 
-@mcp.tool(annotations=_RO, meta=_META)
+@mcp.tool(annotations=_RO, meta=_META, structured_output=False)
 def rebalance_plan(
     scope: Literal["book", "play"] = "book",
     target: Literal["caps", "equal", "inverse_vol", "risk_parity", "hrp", "play_legs"] = "caps",
@@ -188,7 +188,7 @@ def rebalance_plan(
                 use_cash=use_cash, lookback=lookback)
 
 
-@mcp.tool(annotations=_RO, meta=_META)
+@mcp.tool(annotations=_RO, meta=_META, structured_output=False)
 def deploy_cash(
     amount_gbp: float,
     account: Account = "invest",
@@ -211,7 +211,7 @@ def deploy_cash(
                 weighting=weighting, months=months, expected_return=expected_return, lookback=lookback)
 
 
-@mcp.tool(annotations=_RO, meta=_META)
+@mcp.tool(annotations=_RO, meta=_META, structured_output=False)
 def placement(
     trades: list[TradeIn],
     tax_band: Literal["basic", "higher", "additional"] = "higher",
