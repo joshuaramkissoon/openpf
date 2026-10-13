@@ -1,0 +1,571 @@
+/*
+ * Rich content — Archie's replies, reports and briefs.
+ * Calm, premium reading: a real typographic scale, a ~68ch measure for prose
+ * (tables and charts may use the full width), proportional text with tabular
+ * figures only where numbers live, theme tokens only.
+ */
+
+.rc {
+  --rc-measure: 68ch;
+  --rc-body: color-mix(in oklch, var(--foreground) 88%, transparent);
+  --rc-soft: var(--muted-foreground);
+  --rc-rule: color-mix(in oklch, var(--foreground) 8%, transparent);
+  color: var(--rc-body);
+  font-size: 0.9375rem; /* 15px */
+  line-height: 1.68;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rc-compact {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.rc > :first-child,
+.rc .rc-clamp:first-child > .rc-clamp-body > :first-child {
+  margin-top: 0;
+}
+.rc > :last-child {
+  margin-bottom: 0;
+}
+
+/* ── Prose ───────────────────────────────────────────────────────────── */
+.rc-p,
+.rc-ul,
+.rc-ol,
+.rc-h {
+  max-width: var(--rc-measure);
+}
+.rc-p {
+  margin: 0.7em 0;
+}
+.rc strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.rc em {
+  font-style: italic;
+}
+.rc-link {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.rc-link:hover {
+  text-decoration-color: var(--primary);
+}
+.rc-code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  padding: 0.1em 0.38em;
+  border-radius: 0.35rem;
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* Headings: clear steps, generous space above, tight below. */
+.rc-h {
+  color: var(--foreground);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.3;
+  scroll-margin-top: 1rem;
+}
+.rc-h1 {
+  font-size: 1.25rem;
+  margin: 1.6em 0 0.5em;
+}
+.rc-h2 {
+  font-size: 1.0625rem;
+  margin: 1.55em 0 0.45em;
+}
+.rc-h3 {
+  font-size: 0.9375rem;
+  margin: 1.35em 0 0.35em;
+}
+.rc-h4 {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rc-soft);
+  margin: 1.3em 0 0.3em;
+}
+
+/* Lists: quiet markers, comfortable rhythm. */
+.rc-ul,
+.rc-ol {
+  margin: 0.6em 0;
+  padding-left: 1.25em;
+}
+.rc-ul {
+  list-style: none;
+}
+.rc-ul > li {
+  position: relative;
+}
+.rc-ul > li::before {
+  content: "";
+  position: absolute;
+  left: -0.95em;
+  top: 0.72em;
+  width: 0.3em;
+  height: 0.3em;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+}
+.rc-ol {
+  list-style: decimal;
+}
+.rc-ol > li::marker {
+  color: var(--rc-soft);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9em;
+}
+.rc-ul > li + li,
+.rc-ol > li + li {
+  margin-top: 0.3em;
+}
+.rc li > .rc-ul,
+.rc li > .rc-ol {
+  margin: 0.3em 0 0.1em;
+}
+.rc-hr {
+  border: 0;
+  border-top: 1px solid var(--rc-rule);
+  margin: 1.6em 0;
+}
+
+/* ── Figures + chips ─────────────────────────────────────────────────── */
+.rc-fig {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  white-space: nowrap;
+}
+.rc-pos {
+  color: var(--positive);
+}
+.rc-neg {
+  color: var(--negative);
+}
+.rc-ticker {
+  display: inline-flex;
+  align-items: center;
+  height: 1.45em;
+  padding: 0 0.42em;
+  margin: 0 0.06em;
+  border-radius: 0.4rem;
+  border: 1px solid color-mix(in oklch, var(--foreground) 12%, transparent);
+  background: color-mix(in oklch, var(--foreground) 4%, transparent);
+  color: var(--foreground);
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  vertical-align: 0.06em;
+  cursor: pointer;
+  transition: border-color 120ms, background-color 120ms, color 120ms;
+}
+.rc-ticker:hover {
+  border-color: color-mix(in oklch, var(--primary) 55%, transparent);
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+.rc-proposal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0 0.45em;
+  border-radius: 0.4rem;
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-size: 0.85em;
+  font-weight: 500;
+  vertical-align: 0.04em;
+}
+
+/* ── Data tables ─────────────────────────────────────────────────────── */
+.rc-table-wrap {
+  margin: 1em 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--rc-rule);
+  border-radius: 0.75rem;
+  background: color-mix(in oklch, var(--card) 60%, transparent);
+  -webkit-overflow-scrolling: touch;
+}
+.rc-table-wrap.is-tall {
+  max-height: 26rem;
+  overflow-y: auto;
+}
+.rc-table {
+  width: 100%;
+  /* Never break words letter by letter: the table scrolls sideways instead. */
+  overflow-wrap: normal;
+  word-break: normal;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8438rem; /* 13.5px */
+  line-height: 1.45;
+}
+.rc-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rc-soft);
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--rc-rule);
+  white-space: nowrap;
+}
+.rc-table td {
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid color-mix(in oklch, var(--foreground) 5%, transparent);
+  vertical-align: top;
+  color: var(--rc-body);
+}
+.rc-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.rc-table tbody tr:hover td {
+  background: color-mix(in oklch, var(--foreground) 2.5%, transparent);
+}
+.rc-table td:first-child {
+  color: var(--foreground);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.rc-table .is-right {
+  text-align: right;
+}
+.rc-table .is-center {
+  text-align: center;
+}
+.rc-table td.is-num {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 450;
+}
+.rc-table .rc-ticker {
+  margin-left: -0.1em;
+}
+
+/* ── Callouts ────────────────────────────────────────────────────────── */
+.rc-callout {
+  --tone: var(--primary);
+  display: flex;
+  gap: 0.75rem;
+  margin: 1.1em 0;
+  padding: 0.85rem 1rem;
+  max-width: calc(var(--rc-measure) + 2rem);
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklch, var(--tone) 22%, transparent);
+  background: color-mix(in oklch, var(--tone) 7%, transparent);
+}
+.rc-callout.is-risk {
+  --tone: var(--warning);
+}
+.rc-callout.is-note {
+  --tone: var(--muted-foreground);
+  background: color-mix(in oklch, var(--foreground) 3%, transparent);
+  border-color: var(--rc-rule);
+}
+.rc-callout-icon {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.22rem;
+  color: var(--tone);
+}
+.rc-callout-title {
+  margin: 0 0 0.2rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--foreground);
+}
+.rc-callout-body > :first-child,
+.rc-callout-body > :first-child > :first-child {
+  margin-top: 0;
+}
+.rc-callout-body > :last-child {
+  margin-bottom: 0;
+}
+.rc-callout-body .rc-p,
+.rc-callout-body p {
+  margin: 0.4em 0;
+}
+.rc-callout-body .rc-table-wrap {
+  background: var(--card);
+}
+
+/* ── Code ────────────────────────────────────────────────────────────── */
+.rc-codeblock {
+  margin: 1em 0;
+  border: 1px solid var(--rc-rule);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: color-mix(in oklch, var(--muted) 55%, transparent);
+}
+.rc-codeblock-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--rc-rule);
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--rc-soft);
+}
+.rc-codeblock pre {
+  margin: 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--foreground);
+}
+
+/* ── Viz ─────────────────────────────────────────────────────────────── */
+.rc-viz {
+  margin: 1.1em 0;
+}
+.rc-viz-skel,
+.rc-skel-card {
+  margin: 1.1em 0;
+  padding: 1rem;
+  border: 1px solid var(--rc-rule);
+  border-radius: 0.75rem;
+  background: color-mix(in oklch, var(--card) 70%, transparent);
+}
+.rc-skel-card {
+  height: 14rem;
+  animation: rc-pulse 1.6s ease-in-out infinite;
+}
+.rc-viz-skel-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  height: 8.5rem;
+  margin-top: 0.9rem;
+}
+.rc-viz-skel-bars > span {
+  flex: 1;
+  border-radius: 0.35rem 0.35rem 0.15rem 0.15rem;
+  background: color-mix(in oklch, var(--foreground) 8%, transparent);
+  animation: rc-pulse 1.6s ease-in-out infinite;
+}
+.rc-skel {
+  display: inline-block;
+  border-radius: 0.3rem;
+  background: color-mix(in oklch, var(--foreground) 8%, transparent);
+  animation: rc-pulse 1.6s ease-in-out infinite;
+}
+@keyframes rc-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* ── Proposals ───────────────────────────────────────────────────────── */
+.rc-proposals {
+  margin: 1.1em 0;
+  border-radius: 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.rc-proposals.is-pending {
+  border: 1px solid color-mix(in oklch, var(--primary) 32%, transparent);
+  background: color-mix(in oklch, var(--primary) 5%, var(--card));
+  box-shadow: 0 1px 0 color-mix(in oklch, var(--foreground) 4%, transparent);
+}
+.rc-proposals.is-resolved {
+  border: 1px solid var(--rc-rule);
+  background: transparent;
+}
+.rc-proposals-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid color-mix(in oklch, var(--primary) 18%, transparent);
+  font-size: 0.8125rem;
+}
+.rc-proposals-rows {
+  padding: 0.85rem 1rem;
+}
+.rc-proposals-rows > * + * {
+  border-top: 1px solid var(--rc-rule);
+}
+.rc-receipts {
+  padding: 0.15rem 0;
+}
+.rc-receipts.has-divider {
+  border-top: 1px solid var(--rc-rule);
+}
+.rc-receipt {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+.rc-receipt + .rc-receipt {
+  border-top: 1px solid color-mix(in oklch, var(--foreground) 5%, transparent);
+}
+
+/* ── Collapsing ──────────────────────────────────────────────────────── */
+.rc-clamp.is-closed > .rc-clamp-body {
+  max-height: 22rem;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.rc-clamp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.2rem 0 0.6rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--rc-rule);
+  font-size: 0.75rem;
+  color: var(--rc-soft);
+}
+.rc-clamp-toggle:hover {
+  color: var(--foreground);
+}
+
+/* ── Reports ─────────────────────────────────────────────────────────── */
+.rc-report {
+  font-size: 0.9375rem;
+}
+.rc-tldr {
+  margin: 0 0 1.4rem;
+  padding: 1rem 1.15rem;
+  border-radius: 0.85rem;
+  background: color-mix(in oklch, var(--primary) 7%, var(--card));
+  border: 1px solid color-mix(in oklch, var(--primary) 20%, transparent);
+  color: var(--foreground);
+  font-size: 0.97rem;
+  line-height: 1.6;
+}
+.rc-tldr-label,
+.rc-toc-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.rc-tldr > .rc-p:first-of-type {
+  margin-top: 0;
+}
+.rc-tldr > :last-child {
+  margin-bottom: 0;
+}
+.rc-toc {
+  margin: 0 0 1.5rem;
+  padding: 0.25rem 0 0.25rem 0.9rem;
+  border-left: 2px solid var(--rc-rule);
+}
+.rc-toc-label {
+  color: var(--rc-soft);
+}
+.rc-toc ol {
+  display: grid;
+  gap: 0.15rem;
+}
+.rc-toc button {
+  display: inline-flex;
+  gap: 0.55rem;
+  font-size: 0.8438rem;
+  color: var(--rc-soft);
+  text-align: left;
+}
+.rc-toc button:hover {
+  color: var(--foreground);
+}
+.rc-toc-n {
+  min-width: 1ch;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+}
+.rc-section + .rc-section,
+.rc-report > .rc-p + .rc-section {
+  margin-top: 0.4rem;
+}
+.rc-section-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 1.4rem 0 0.35rem;
+  padding: 0.4rem 0 0.4rem;
+  border-top: 1px solid var(--rc-rule);
+  text-align: left;
+}
+.rc-section:first-of-type .rc-section-head {
+  border-top: 0;
+  margin-top: 0.4rem;
+}
+.rc-section-head .rc-h2 {
+  margin: 0;
+}
+.rc-section-chevron {
+  width: 1rem;
+  height: 1rem;
+  color: var(--rc-soft);
+  opacity: 0;
+  transition: opacity 120ms, transform 160ms;
+}
+.rc-section-head:hover .rc-section-chevron,
+.rc-section-head:focus-visible .rc-section-chevron,
+.rc-section-chevron.-rotate-90 {
+  opacity: 1;
+}
+.rc-keynums {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0.25rem 0 0;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--border);
+}
+.rc-keynum {
+  padding: 0.6rem 0.8rem;
+  background: var(--card);
+  min-width: 0;
+}
+.rc-keynum dt {
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rc-keynum dd {
+  margin: 0.15rem 0 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

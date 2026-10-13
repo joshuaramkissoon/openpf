@@ -9,6 +9,8 @@ type InstrumentContextValue = {
   openInstrument: (ticker: string, hint?: InstrumentHint) => void
   /** Open the Cmd+K command palette. */
   openPalette: () => void
+  /** Current holdings (for ticker chips + Archie's suggestions). */
+  positions: PositionItem[]
 }
 
 const InstrumentContext = createContext<InstrumentContextValue | null>(null)
@@ -18,6 +20,12 @@ export function useInstrument() {
   if (!ctx) throw new Error("useInstrument must be used within <InstrumentProvider>")
   return ctx
 }
+
+/** Holdings without throwing outside the provider (e.g. in isolated renders). */
+export function useHeldPositions(): PositionItem[] {
+  return useContext(InstrumentContext)?.positions ?? EMPTY_POSITIONS
+}
+const EMPTY_POSITIONS: PositionItem[] = []
 
 const RECENT_KEY = "openpf:recent-instruments"
 const RECENT_LIMIT = 8
@@ -101,7 +109,7 @@ export function InstrumentProvider({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  const value = useMemo(() => ({ openInstrument, openPalette }), [openInstrument, openPalette])
+  const value = useMemo(() => ({ openInstrument, openPalette, positions }), [openInstrument, openPalette, positions])
 
   return (
     <InstrumentContext.Provider value={value}>
