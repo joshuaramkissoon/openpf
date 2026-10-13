@@ -68,6 +68,19 @@ def _sandbox_enabled() -> bool:
     return is_sandbox()
 
 
+def _start_scheduler_safely() -> bool:
+    """Start the in-process scheduler if enabled. A failure is logged, never
+    fatal — the dashboard must still come up."""
+    if not _scheduler_should_run():
+        return False
+    try:
+        start_scheduler()
+        return True
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).error("Scheduler failed to start; continuing without it", exc_info=True)
+        return False
+
+
 def _bind_host() -> str:
     """Best-effort host uvicorn was bound to (``--host`` arg or UVICORN_HOST)."""
     argv = sys.argv
@@ -138,11 +151,7 @@ async def lifespan(app: FastAPI):
             recover_stuck_executing(db, older_than_minutes=0)
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).warning("Stuck-intent recovery skipped", exc_info=True)
-    if _scheduler_should_run():
-        try:
-            start_scheduler()
-        except Exception:  # noqa: BLE001 — the dashboard must still come up
-            logging.getLogger(__name__).error("Scheduler failed to start; continuing without it", exc_info=True)
+    _start_scheduler_safely()
     # Builds Archie queues for agent-built Views (see views_builder.enqueue).
     import asyncio
 

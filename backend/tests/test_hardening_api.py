@@ -124,6 +124,34 @@ def test_artifact_path_traversal(monkeypatch, tmp_path, path):
     assert artifact_service.get_artifact("../secret.md") is None
 
 
+def test_old_db_gets_missing_columns(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine, inspect, text
+
+    import app.core.database as database
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'old.db'}", future=True)
+    with engine.begin() as conn:  # an old trade_intents without most of today's columns
+        conn.execute(text("CREATE TABLE trade_intents (id VARCHAR(36) PRIMARY KEY, symbol VARCHAR(32), quantity FLOAT)"))
+        conn.execute(text("INSERT INTO trade_intents VALUES ('a', 'AAPL', 1.0)"))
+    monkeypatch.setattr(database, "engine", engine)
+    database.init_db()
+    cols = {c["name"] for c in inspect(engine).get_columns("trade_intents")}
+    assert {"status", "metadata", "failure_reason", "estimated_notional"} <= cols
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT status FROM trade_intents")).scalar() == "proposed"
+
+
+def test_scheduler_start_failure_is_not_fatal(monkeypatch):
+    import app.main as main
+
+    def broken():
+        raise RuntimeError("apscheduler exploded")
+
+    monkeypatch.setattr(main, "_scheduler_should_run", lambda: True)
+    monkeypatch.setattr(main, "start_scheduler", broken)
+    assert main._start_scheduler_safely() is False  # logged, not raised
+
+
 def test_cancel_order_id_must_be_numeric():
     from app.main import app
 
