@@ -51,6 +51,7 @@ class WatchlistItemView(BaseModel):
     price: float | None = None
     change_pct: float | None = None
     currency: str | None = None
+    spark: list[float] = []  # recent daily closes for the card sparkline
     # Board "stays alive" signals.
     open_flags: int = 0
     latest_flag: str | None = None
