@@ -161,3 +161,29 @@ class PlayDraftOut(BaseModel):
 class PlayReviewOut(BaseModel):
     verdict: Literal["on_track", "watch", "broken"]
     notes: str = Field(max_length=1200)
+
+
+# ── Rebalance ────────────────────────────────────────────────────────────────
+
+class RebalancePreviewRequest(BaseModel):
+    # Unsaved target weights from the basket editor ({ticker: weight}); omit to use the saved ones.
+    weights: dict[str, float] | None = None
+    use_cash: bool = False
+
+
+class RebalanceProposeRequest(BaseModel):
+    use_cash: bool = False
+
+
+class RebalanceUserAction(BaseModel):
+    """Proof a person pressed "Place them myself" in the review step. Agents have
+    no route here at all (no MCP tool; their hooks block the endpoint)."""
+
+    kind: Literal["manual_trade"]
+    reviewed: Literal[True]
+
+
+class RebalancePlaceRequest(BaseModel):
+    user_action: RebalanceUserAction
+    live_confirmed: bool = False
+    use_cash: bool = False

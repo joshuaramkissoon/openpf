@@ -565,7 +565,7 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
     ORIGINAL-case ``ticker`` so the venue can be recovered for yfinance
     resolution. Never raises — returns {} when metadata is unavailable.
 
-    Each value: ``{"name": ..., "ticker": <original-case>, "currency": <code>}``.
+    Each value: ``{"name": ..., "ticker": <original-case>, "currency": <code>, "type": STOCK|ETF|…}``.
     """
     global _instrument_meta_cache
     now = datetime.now().timestamp()
@@ -596,6 +596,7 @@ def _instrument_meta_map(db: Session) -> dict[str, dict[str, str]]:
                     "short_name": str(short).strip() if short else "",
                     "ticker": ticker,
                     "currency": str(inst.get("currencyCode", "") or ""),
+                    "type": str(inst.get("type", "") or ""),
                 }
     except Exception:  # noqa: BLE001 — metadata is best-effort, never block the snapshot
         mapping = {}

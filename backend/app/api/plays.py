@@ -14,12 +14,19 @@ from app.schemas.plays import (
     PlayDraftRequest,
     PlayUpdate,
     PromoteBenchRequest,
+    RebalancePlaceRequest,
+    RebalancePreviewRequest,
+    RebalanceProposeRequest,
     RingItemRequest,
     StageRequest,
     SuggestRequest,
 )
 from app.services import book_service as bs
+from app.services import manual_trade
+from app.services import play_rebalance as rb
 from app.services import plays_service as ps
+from app.services.execution_service import ExecutionError
+from app.services.t212_client import T212Error
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +231,48 @@ def stage_tranche(play_id: str, payload: StageRequest | None = None, db: Session
     try:
         return ps.stage_tranche(db, play, payload.tranche_index if payload else None)
     except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+# ── Rebalance back to target ─────────────────────────────────────────────────
+
+@router.post("/{play_id}/rebalance/preview")
+def rebalance_preview(play_id: str, payload: RebalancePreviewRequest | None = None,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The trades that bring the play to its targets (optionally unsaved ones). Records nothing."""
+    play = _get_or_404(db, play_id)
+    p = payload or RebalancePreviewRequest()
+    try:
+        return rb.plan(db, play, weights=p.weights, use_cash=p.use_cash)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("rebalance preview failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail=PORTFOLIO_UNAVAILABLE) from exc
+
+
+@router.post("/{play_id}/rebalance/propose")
+def rebalance_propose(play_id: str, payload: RebalanceProposeRequest | None = None,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Queue the rebalance as proposals (source "rebalance") for approval. Uses the saved targets."""
+    play = _get_or_404(db, play_id)
+    try:
+        return rb.propose(db, play, use_cash=(payload or RebalanceProposeRequest()).use_cash)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@router.post("/{play_id}/rebalance/place")
+def rebalance_place(play_id: str, payload: RebalancePlaceRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The user places the rebalance orders by hand through the manual-trade path
+    (advisory limits, live confirmation). Human-only: agents can't reach it."""
+    play = _get_or_404(db, play_id)
+    try:
+        return rb.place(db, play, live_confirmed=payload.live_confirmed, use_cash=payload.use_cash)
+    except manual_trade.ManualTradeError as exc:
+        status = 409 if exc.code == "needs_live_confirmation" else 400
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)}) from exc
+    except (ExecutionError, T212Error, ValueError) as exc:
         raise _bad(exc) from exc
 
 

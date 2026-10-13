@@ -123,6 +123,8 @@ def book_context(db: Session) -> dict[str, Any]:
             "ppl": float(p.get("ppl") or 0.0),
             "weight": float(p.get("weight") or 0.0),
             "price": float(p.get("current_price") or 0.0),
+            "quantity": float(p.get("quantity") or 0.0),
+            "currency": p.get("instrument_currency"),
         })
     positions.sort(key=lambda r: r["value"], reverse=True)
     return {"total_gbp": total, "free_cash_gbp": free_cash, "positions": positions}
@@ -472,6 +474,15 @@ def resolve_instrument(db: Session, ticker: str) -> tuple[str, bool]:
     t = (ticker or "").strip().upper()
     base = t.split(".")[0]
     is_lse = t.endswith(".L")
+    try:
+        from app.services.instrument_names import find_listing
+
+        # Any venue T212 lists (Xetra RHM.DE → RHMd_EQ, Paris HO.PA → HOp_EQ, …).
+        listing = find_listing(db, t)
+        if listing:
+            return str(listing["instrument_code"]), True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("listing lookup failed for %s: %s", ticker, exc)
     try:
         from app.services.portfolio_service import search_instruments
 
@@ -1124,6 +1135,10 @@ Rules:
 - The user invests via Trading 212 (UK). In a Stocks ISA, US-domiciled ETFs are NOT available (PRIIPs);
   prefer individual US/UK stocks or London-listed UCITS ETFs (Yahoo symbols ending .L). In the Invest account
   US stocks are fine; still avoid US-domiciled ETFs.
+- Trading 212 lists US, London and the main continental venues (Xetra .DE, Paris .PA, Amsterdam .AS, Milan .MI,
+  Madrid .MC, Swiss .SW, Brussels .BR, Lisbon .LS, Vienna .VI), not the Nordics or Asia. Use Yahoo symbols with
+  the right suffix; for a Nordic or Asian name prefer its US ADR or a London UCITS ETF. Any leg Trading 212 doesn't
+  list is dropped from the draft.
 - 3-7 legs. Mix roles: "core" (purest, most liquid exposure), "satellite" (higher-beta / smaller), and
   optionally a "hedge". Weights sum to 1. No leveraged or inverse products.
 - Use the tools to sanity-check that each ticker exists, is liquid, and to gauge volatility/valuation. Be brief:
@@ -1205,7 +1220,7 @@ def _friendly_draft_error(exc: BaseException) -> tuple[str, str]:
 # ── Draft jobs (persisted so restarts don't strand a spinner) ────────────────
 
 STALE_JOB_MINUTES = 15
-INTERRUPTED_MSG = "The server restarted while Archie was drafting this play. Retry to pick it up again."
+INTERRUPTED_MSG = "The draft stopped because OpenPF restarted. Retry picks up from the start."
 
 
 def _session_factory():
@@ -1539,6 +1554,10 @@ async def _draft(job: DraftJob) -> str:
         job.add("Checking it's all on Trading 212")
         job.add("Sizing against your book and risk rails")
         play = _draft_to_play(db, req, out, book)
+        dropped = (play.meta or {}).get("dropped_legs") or []
+        if dropped:
+            job.add(f"Dropped {', '.join(dropped)}: not on Trading 212", phase="sizing", source="portfolio",
+                    dropped=dropped)
         job.add("Draft ready")
         return play.id
 
