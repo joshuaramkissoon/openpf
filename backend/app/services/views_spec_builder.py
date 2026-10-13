@@ -78,14 +78,86 @@ class Provider(Protocol):
 
 
 # ── schema + prompt ─────────────────────────────────────────────────────
+# Constrained decoding emits object properties in schema order, so a model that
+# opens a block with "type" (as every example does) could never go back for
+# "title"/"from"/"transform"/"width", and a measure opened with "agg" lost its
+# "field". The schema and the examples share one natural order instead.
+_MEASURE_ORDER = ("from", "agg", "field", "transform", "per")
+_MEASURE_KEYS = ("value", "delta", "max", "mark", "per")
+
+
+def _type_first(props: dict[str, Any]) -> dict[str, Any]:
+    return {"type": props["type"], **{k: v for k, v in props.items() if k != "type"}} if "type" in props else props
+
+
+def _measure_ordered(props: dict[str, Any]) -> dict[str, Any]:
+    head = {k: props[k] for k in _MEASURE_ORDER if k in props}
+    return {**head, **{k: v for k, v in props.items() if k not in head}}
+
+
 def reply_schema() -> dict[str, Any]:
-    return SpecReply.model_json_schema(by_alias=True)
+    schema = SpecReply.model_json_schema(by_alias=True)
+    for name, d in (schema.get("$defs") or {}).items():
+        props = d.get("properties")
+        if not isinstance(props, dict):
+            continue
+        d["properties"] = _measure_ordered(props) if name == "Measure" else _type_first(props)
+    return schema
+
+
+def _order_like(obj: dict[str, Any], order: list[str]) -> dict[str, Any]:
+    head = {k: obj[k] for k in order if k in obj}
+    return {**head, **{k: v for k, v in obj.items() if k not in head}}
+
+
+def _ordered_measure(m: Any, order: list[str]) -> Any:
+    if not isinstance(m, dict):
+        return m
+    m = _order_like(m, order)
+    if "per" in m:
+        m["per"] = _ordered_measure(m["per"], order)
+    return m
+
+
+def _ordered_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """An example spec written in exactly the schema's property order, so copying
+    its shape never runs into the decoder's ordering."""
+    defs = reply_schema()["$defs"]
+    order = {name: list(d.get("properties") or {}) for name, d in defs.items()}
+    by_type = {d["properties"]["type"].get("const"): name for name, d in defs.items() if "type" in (d.get("properties") or {})}
+    blocks = []
+    for b in spec.get("blocks") or []:
+        b = _order_like(dict(b), order.get(by_type.get(b.get("type"), ""), ["type"]))
+        for k in _MEASURE_KEYS:
+            if k in b:
+                b[k] = _ordered_measure(b[k], order["Measure"])
+        if isinstance(b.get("items"), list):
+            items = []
+            for it in b["items"]:
+                it = _order_like(dict(it), order["KpiItem"])
+                for k in ("value", "delta"):
+                    if k in it:
+                        it[k] = _ordered_measure(it[k], order["Measure"])
+                items.append(it)
+            b["items"] = items
+        blocks.append(b)
+    return _order_like({**spec, "blocks": blocks}, order["VizSpec"])
 
 
 _RULES = """You design visual pages over a UK investor's live Trading 212 portfolio, as JSON viz specs. You never write code.
 
 Reply with ONE JSON object: {"decision": "build"|"decline"|"needs_code", "reason": string|null, "spec": <viz spec>|null}.
-- build: return a complete, valid spec (version 1) following the reference below exactly. Visual first: lead with a hero or kpis, then the picture (treemap / allocation / bars / timeseries), tables only last as detail. 3–6 blocks. Short sentence-case titles; one-line subtitles that explain non-obvious metrics.
+- build: return a complete, valid spec (version 1) following the reference below exactly. 3–6 blocks. Short sentence-case titles; one-line subtitles that explain non-obvious metrics.
+  - One question per view. Decide the single question the request asks ("Which countries am I exposed to?") and put it, as a question, at the start of `description`. Every block must help answer it; cut anything that doesn't.
+  - Narrative order: the answer first (one `hero` — the number that answers the question — with a `kpis` aside of 2–3 supporting figures), then the why (the one chart that explains it), then detail on demand (a second chart or a table). Never two heroes.
+  - The hero is the answer as an amount or a share, with a `deltaLabel` saying what the share is of — "£63,725 · 82% of your book", "−£817 · −1.1% on what's invested" — never a count of categories ("8 countries") or a figure that needs another chart to mean anything. When the hero is about the top row of a grouping (largest country, biggest payer), set `name` to the label field so it reads "Largest country · United States".
+  - Time buckets are continuous: for "by month" use the `month` transform on dated rows (it zero-fills empty months) — never a pre-bucketed list that skips months. A chart about a move (today, since purchase) colours by the signed move (`color` on a treemap).
+  - Each chart shows something the others don't: never draw the same rows twice (an allocation and a bar list of the same groups is one picture). Pair a grouped chart with a different view of the detail (a treemap of the holdings, a table of rows no chart draws).
+  - Grid: 12 columns; widths full=12, two-thirds=8, half=6, third=4. Every row must add up to 12: hero two-thirds + kpis third (or half + half), charts in pairs of half/half or two-thirds + third, a big treemap or a time chart full. Never leave a half or third alone on a row.
+  - Honest charts: amounts over time start at zero (the default; don't set zero:false for money); a balance that changes in jumps is a step (`curve: "step"`); never add a hero `trend` for a series a timeseries already draws; don't chart a series that barely moves — say it in a kpi instead. One-slice or two-slice part-to-whole is a number, not a donut.
+  - Each figure computes exactly what its label claims (a count of countries groups by country first; a share has a `per`). If a measure can't express it ("outside the largest"), pick a figure it can.
+  - Every number has a label, and every % says what it's a share of: hero `deltaLabel` ("of your book", "on what you paid"), kpi `hint`, bars `secondaryLabel` / `valueLabel` ("% of account", "% of book").
+  - Colour is meaning, not decoration: one-series bars stay neutral with the accent on the point (`highlight`: max by default); gain/loss colours only for signed values.
   - Never repeat a chart's rows in a table (same source and groupBy, or the chart's label column): every chart already has a table toggle and drill-down. Put extra columns (value, weight, holdings count) in the chart's `details`. A table is only for rows no chart shows.
   - Titles must name the dimension actually used: groupBy sector → "by sector". Only say "theme" when grouping by `theme` (the owning play, falling back to sector).
   - Labels are for people: column, series and detail labels are plain words ("Today", "Weight"), never field names like day_change_pct.
@@ -96,7 +168,7 @@ Only use sources, paths, fields, transforms, block types and formats from the re
 
 def _examples() -> str:
     specs = preset_specs()
-    picks = [specs[k] for k in ("today", "income") if k in specs]
+    picks = [_ordered_spec(specs[k]) for k in ("today", "cash-drag") if k in specs]
     return "\n\n".join(json.dumps(s, separators=(",", ":")) for s in picks)
 
 

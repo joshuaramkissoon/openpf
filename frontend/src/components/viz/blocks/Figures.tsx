@@ -44,14 +44,17 @@ export function Sparkline({ values, height = 44, signed = false }: { values: num
 }
 
 /** The one number a page leads with — the answer. Label, figure, then what the figure means. */
-export function Hero({ block, value, delta, trend }: { block: HeroBlock; value: number | null; delta: number | null; trend?: number[] }) {
+export function Hero({ block, value, delta, trend, name }: { block: HeroBlock; value: number | null; delta: number | null; trend?: number[]; name?: string }) {
   const fmt = useFmt()
   const blur = useBlur()
   const env = useVizEnv()
   const small = env.size === 'S' || env.size === 'M'
   return (
     <div className="flex flex-col">
-      <p className={cn('font-medium text-muted-foreground', small ? 'text-xs' : 'text-[13px]')}>{block.label}</p>
+      <p className={cn('truncate font-medium text-muted-foreground', small ? 'text-xs' : 'text-[13px]')}>
+        {block.label}
+        {name ? <span className="text-foreground"> · {name}</span> : null}
+      </p>
       <p className={cn('mt-2 font-semibold', small ? 'text-[30px] leading-none tracking-tight' : 'viz-hero-value', tone(value, block.format), blur(block.format))}>
         {fmt(value, block.format)}
       </p>

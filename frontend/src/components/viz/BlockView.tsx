@@ -3,7 +3,7 @@ import { ChartNoAxesColumn, Sparkles, Table2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { num, resolveMeasure, resolveRows, type EngineCtx } from './engine'
-import { fieldLabel, useVizEnv } from './shared'
+import { fieldLabel, prettyLabel, useVizEnv } from './shared'
 import type { Block, Row, VizSpec } from './types'
 import { Allocation } from './blocks/Allocation'
 import { Bars } from './blocks/Bars'
@@ -117,13 +117,14 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
     const run = async (): Promise<Loaded> => {
       if (block.type === 'note') return { rows: [], measures: [] }
       if (block.type === 'hero') {
-        const [value, delta, trendRows] = await Promise.all([
+        const [value, delta, trendRows, nameRows] = await Promise.all([
           resolveMeasure(spec, block.value, block.from, block.transform, ctx),
           block.delta ? resolveMeasure(spec, block.delta, block.from, block.transform, ctx) : Promise.resolve(null),
           block.trend ? resolveRows(spec, block.trend.from, undefined, ctx).catch(() => []) : Promise.resolve([] as Row[]),
+          block.name && block.from ? resolveRows(spec, block.from, block.transform, ctx).catch(() => []) : Promise.resolve([] as Row[]),
         ])
         const trend = block.trend ? trendRows.map((r) => num(r[block.trend!.field])).filter((v): v is number => v != null) : undefined
-        return { rows: [], measures: [{ value, delta }], trend }
+        return { rows: nameRows.slice(0, 1), measures: [{ value, delta }], trend }
       }
       if (block.type === 'meter') {
         const [value, max, mark] = await Promise.all([
@@ -163,7 +164,15 @@ export function BlockView({ spec, block, ctx, chrome = true, span = 12 }: { spec
   else {
     switch (block.type) {
       case 'hero':
-        body = <Hero block={block} value={data.measures[0]?.value ?? null} delta={data.measures[0]?.delta ?? null} trend={data.trend} />
+        body = (
+          <Hero
+            block={block}
+            value={data.measures[0]?.value ?? null}
+            delta={data.measures[0]?.delta ?? null}
+            trend={data.trend}
+            name={block.name && data.rows[0] ? prettyLabel(data.rows[0][block.name]) : undefined}
+          />
+        )
         break
       case 'meter':
         body = <Meter block={block} value={data.measures[0]?.value ?? null} max={data.measures[0]?.delta ?? null} mark={data.measures[1]?.value ?? null} />

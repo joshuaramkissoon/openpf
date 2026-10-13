@@ -239,6 +239,8 @@ export function shortLabel(s: string): string {
 export function prettyLabel(v: unknown): string {
   const s = v == null ? '' : String(v)
   if (PRETTY[s]) return PRETTY[s]
+  // Month keys ("2026-06") read as months ("Jun 26").
+  if (/^\d{4}-\d{2}$/.test(s)) return new Date(`${s}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })
   // Raw lowercase enum values ("crypto", "kraken") read as names; tickers and sentences pass through.
   if (/^[a-z][a-z_]{1,23}$/.test(s)) return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')
   return s

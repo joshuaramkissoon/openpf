@@ -32,8 +32,11 @@ type Base = {
 }
 
 export type Trend = { from: string; field: string; x?: string }
-/** `deltaLabel` names what a delta is relative to ("of your book", "on cost") — a % never stands alone. */
-export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; deltaLabel?: string; caption?: string; trend?: Trend }
+/**
+ * `deltaLabel` names what a delta is relative to ("of your book", "on cost") — a % never stands alone.
+ * `name`: a field of the block's first row that says what the number is about ("country" → United States).
+ */
+export type HeroBlock = Base & { type: 'hero'; label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; deltaLabel?: string; name?: string; caption?: string; trend?: Trend }
 export type MeterBlock = Base & { type: 'meter'; label: string; value: Measure; max: Measure | number; format?: VizFormat; mark?: Measure; markLabel?: string; caption?: string }
 export type KpiItem = { label: string; value: Measure; format?: VizFormat; delta?: Measure; deltaFormat?: VizFormat; hint?: string }
 export type KpisBlock = Base & { type: 'kpis'; items: KpiItem[] }

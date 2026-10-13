@@ -545,6 +545,86 @@ def test_tidy_fills_short_rows_so_the_grid_has_no_voids():
     assert [b["width"] for b in spec["blocks"]] == ["half", "half"]
 
 
+def test_tidy_drops_a_second_chart_of_the_same_rows_and_pairs_hero_with_kpis():
+    by_country = {"from": "pf.positions", "transform": [{"enrich": ["country"]}, {"groupBy": "country"}], "label": "country", "value": "value"}
+    raw = {
+        "version": 1,
+        "title": "Countries",
+        "blocks": [
+            {"type": "hero", "label": "Abroad", "from": "pf.positions", "value": {"agg": "sum", "field": "value"}},
+            {"type": "kpis", "from": "pf.positions", "items": [{"label": "Holdings", "value": {"agg": "count"}, "format": "int"}]},
+            {"type": "allocation", "title": "Mix", **by_country},
+            {"type": "bars", "title": "By country", **by_country},
+            {"type": "treemap", "title": "Holdings", "from": "pf.positions", "transform": [{"enrich": ["country"]}], "label": "ticker", "size": "value", "group": "country"},
+        ],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    assert [b["type"] for b in spec["blocks"]] == ["hero", "kpis", "allocation", "treemap"]
+    assert [b["width"] for b in spec["blocks"][:2]] == ["two-thirds", "third"]
+
+
+def test_tidy_charts_dividend_months_continuously():
+    raw = {
+        "version": 1,
+        "title": "Income",
+        "data": {"divs": {"source": "dividends"}},
+        "blocks": [{"type": "bars", "from": "divs.monthly", "label": "month", "value": "amount", "orientation": "vertical"}],
+    }
+    spec, problems = validate_spec(raw)
+    assert not problems
+    b = spec["blocks"][0]
+    assert b["from"] == "divs.items" and b["transform"] == [{"month": {"field": "paid_on", "sum": "amount", "last": 12}}] and b["label"] == "label"
+
+
+def test_normalize_counts_the_dimension_a_kpi_names():
+    from app.services.viz_spec import normalize_spec
+
+    raw = {
+        "version": 1,
+        "title": "X",
+        "blocks": [{"type": "kpis", "from": "pf.positions", "transform": [{"enrich": ["country"]}], "items": [
+            {"label": "Countries", "value": {"agg": "count"}, "format": "int"},
+            {"label": "Holdings", "value": {"agg": "count"}, "format": "int"},
+        ]}],
+    }
+    spec, problems = validate_spec(normalize_spec(raw))
+    assert not problems
+    countries, holdings = spec["blocks"][0]["items"]
+    assert countries["value"]["transform"] == [{"enrich": ["country"]}, {"groupBy": "country"}]
+    assert "transform" not in holdings["value"]
+
+
+def test_normalize_carries_block_enrich_into_a_measure_transform():
+    from app.services.viz_spec import normalize_spec
+
+    raw = {
+        "version": 1,
+        "title": "X",
+        "blocks": [{"type": "kpis", "from": "pf.positions", "transform": [{"enrich": ["country"]}], "items": [
+            {"label": "Top 3 share", "value": {"agg": "sum", "field": "value", "transform": [{"groupBy": "country"}, {"top": {"n": 3}}], "per": {"agg": "sum", "field": "value"}}, "format": "pct"},
+        ]}],
+    }
+    spec, problems = validate_spec(normalize_spec(raw))
+    assert not problems
+    assert spec["blocks"][0]["items"][0]["value"]["transform"][0] == {"enrich": ["country"]}
+    # On a grouped block, a measure that refines rows keeps the grouping.
+    raw["blocks"][0]["transform"] = [{"enrich": ["country"]}, {"groupBy": "country"}]
+    raw["blocks"][0]["items"][0]["value"]["transform"] = [{"sort": {"by": "value"}}, {"top": {"n": 3}}]
+    spec, _ = validate_spec(normalize_spec(raw))
+    steps = spec["blocks"][0]["items"][0]["value"]["transform"]
+    assert [list(s)[0] for s in steps] == ["enrich", "groupBy", "sort", "top"]
+
+
+def test_normalize_enriches_a_table_column_that_needs_it():
+    from app.services.viz_spec import normalize_spec
+
+    raw = {"version": 1, "title": "X", "blocks": [{"type": "table", "from": "pf.positions", "columns": [{"field": "ticker", "label": "Holding"}, {"field": "country", "label": "Country"}]}]}
+    spec, problems = validate_spec(normalize_spec(raw))
+    assert not problems
+    assert spec["blocks"][0]["transform"][0] == {"enrich": ["country"]}
+
+
 def test_spec_accepts_honesty_and_labelling_fields():
     raw = {
         "version": 1,
