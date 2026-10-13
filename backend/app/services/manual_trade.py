@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.services import execution_service, proposal_service
 from app.services.config_store import ConfigStore
+from app.services.crypto_exchanges import is_crypto_account
 
 ACCOUNTS = ("invest", "stocks_isa", "crypto")
 # Trading 212 charges no commission on shares; non-GBP instruments pay a 0.15% FX fee each way.
@@ -71,8 +72,8 @@ def _check(side: str, account_kind: str, notional_gbp: float) -> tuple[str, str]
     account_kind = (account_kind or "").strip().lower()
     if side not in ("buy", "sell"):
         raise ManualTradeError("side must be 'buy' or 'sell'")
-    if account_kind not in ACCOUNTS:
-        raise ManualTradeError("account must be 'invest', 'stocks_isa' or 'crypto'")
+    if account_kind not in ACCOUNTS and not is_crypto_account(account_kind):
+        raise ManualTradeError("account must be 'invest', 'stocks_isa' or a crypto account")
     if not notional_gbp or notional_gbp <= 0:
         raise ManualTradeError("amount must be more than zero")
     return side, account_kind
@@ -80,7 +81,7 @@ def _check(side: str, account_kind: str, notional_gbp: float) -> tuple[str, str]
 
 def _instrument(ident: dict[str, Any], account_kind: str) -> dict[str, Any]:
     """What to size: the T212 instrument, or (crypto) the coin on the exchange."""
-    if account_kind == "crypto":
+    if is_crypto_account(account_kind):
         return {"symbol": str(ident.get("sym") or _label(ident)), "instrument_code": None}
     code = ident.get("instrument_code")
     return {"symbol": None if code else _label(ident), "instrument_code": code}

@@ -447,7 +447,8 @@ def rail_violations(
     if broker_router.is_crypto(account_kind):
         from app.services.crypto_service import crypto_rail_violations
 
-        out.extend(crypto_rail_violations(db, side=side, estimated_notional=estimated_notional, risk=risk))
+        out.extend(crypto_rail_violations(db, side=side, estimated_notional=estimated_notional, risk=risk,
+                                          account_kind=account_kind))
 
     return out
 
@@ -478,6 +479,14 @@ def execute_intent(
     if not intent:
         raise ExecutionError(f"Intent {intent_id} not found")
 
+    # Capability check first: a read-only connection never executes (nor gets
+    # approved on the way), whoever asks.
+    # The proposed account is checked as well as any override: a suggestion for
+    # a read-only account can't be re-routed into a tradable one.
+    refused = broker_router.refusal_for(db, intent, account_kind)
+    if refused:
+        raise ExecutionError(refused)
+
     if reason := _not_yet(intent):
         raise ExecutionError(reason)
 
@@ -495,8 +504,8 @@ def execute_intent(
     # the account the intent was proposed for, else invest. No silent invest
     # default once a choice has been made upstream.
     resolved_account = str(account_kind or (intent.meta or {}).get("account_kind") or "invest").strip().lower()
-    if resolved_account not in broker_router.ACCOUNTS:
-        raise ExecutionError(f"invalid account '{account_kind}': must be 'invest', 'stocks_isa' or 'crypto'")
+    if resolved_account not in broker_router.ACCOUNTS and not broker_router.is_crypto(resolved_account):
+        raise ExecutionError(f"invalid account '{account_kind}': must be 'invest', 'stocks_isa' or a crypto account")
 
     qty = float(intent.quantity or 0.0)
     notional = float(intent.estimated_notional or 0.0)

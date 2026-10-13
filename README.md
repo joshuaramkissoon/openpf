@@ -51,7 +51,7 @@ OpenPF is built so that a confused or prompt-injected agent cannot move your mon
 - **It only acts on its own where you've granted a standing permission.** In Settings → Permissions you can let Archie place, say, the next tranche of a play you already approved, rebalance trades back into your bands, or small idle-cash buys into approved plays. Each permission has a per-trade cap, a daily cap, an optional expiry and an off switch; one switch pauses them all. In live mode a permission only applies once you've confirmed it while live, and editing it asks again. Anything new, outside a play, over a cap or in another category still waits for you. Archie can suggest a permission when his track record earns it, but no agent tool can create or widen one. Every trade placed this way shows in Activity as "auto · <permission>", with a one-tap revoke.
 - **One execution gate, enforced in code.** Orders reach the broker only through `execute_intent`, and only for proposals you approved, by hand or through a standing permission. It re-checks every rail: per-order and daily notional caps, duplicate window and cash.
 - **An honest track record.** Every proposal is tracked forward from its price when proposed, at 1 day, 1 week, 1 month and 3 months against a benchmark (SPY by default), including the ones you rejected or let expire. Activity → Track record shows the hit rate by category with the sample size, and Archie quotes the same numbers.
-- **Execution keys never enter an agent process.** Trading 212 lets you create separate read and trade keys. Only the API server holds the trade key. Crypto exchange keys must be trade-only (keys that can withdraw are refused on connect) and are never given to any agent process. Agent hooks also block calls to the app's own API, to trading212.com and to the crypto exchanges' APIs.
+- **Execution keys never enter an agent process.** Trading 212 lets you create separate read and trade keys. Only the API server holds the trade key. Crypto exchange keys must never be able to withdraw (they're refused on connect). Connection keys are encrypted at rest. No key is ever given to an agent process. Agent hooks also block calls to the app's own API, to trading212.com, to the crypto exchanges' APIs and to every connected broker's API. Read-only connections can never execute.
 - **Safe defaults.**
   - New installs run in paper mode on T212's demo environment.
   - The server binds to localhost.
@@ -59,9 +59,23 @@ OpenPF is built so that a confused or prompt-injected agent cannot move your mon
   - Telegram ignores everyone not on your allowlist.
 - **Leveraged desk (labs, off by default):** an optional regime-aware 3× ETP engine. It only places orders itself if you switch on auto-execute, and always within its own hard daily rails. Agents can tighten those rails, never loosen them.
 
+## Connect your accounts
+
+Settings → **Connections** puts every account in one book: Trading 212, crypto exchanges, Interactive Brokers, Alpaca, and brokers without a public API (Robinhood, Schwab, Fidelity, Vanguard and others) through SnapTrade. Each connection starts **read-only**. You paste a key that can only read, and its holdings join your total, Home's book-by-play, risk, views and the stock sheet, converted to GBP, with an account chip on every row. Archie analyses all of it. Where OpenPF can't trade (IBKR, Alpaca, SnapTrade, or a read-only crypto key), Archie's suggestions show **Place it in <broker>** instead of Approve, and the execution gate refuses them.
+
+| Provider | What you paste | Read | Trade |
+|---|---|---|---|
+| Trading 212 (Invest, ISA) | read key + optional IP-restricted execution key (Broker & keys) | ✓ | ✓ on approval |
+| Kraken / Coinbase / Binance (several at once) | a query-only key; later, a trade-only key | ✓ | ✓ on approval, never withdraw |
+| Interactive Brokers | Flex Web Service token + Flex Query ID | ✓ | place in IBKR |
+| Alpaca | Key ID + secret (live or paper) | ✓ | place in Alpaca |
+| SnapTrade → Robinhood, Schwab, Fidelity, … | your free SnapTrade Personal key (check current limits), then log in to your broker on SnapTrade's page | ✓ | place in your broker |
+
+Each provider has a step-by-step guide in the app that says exactly which permissions to tick. Keys are encrypted at rest (back up `openpf-secrets.key` next to the database, or set `OPENPF_SECRETS_KEY`), never shown again and never given to Archie. Research, sources and the safety model: [docs/connections.md](docs/connections.md).
+
 ## Crypto (Kraken, Coinbase Advanced Trade, Binance)
 
-Crypto sits in the same book as your shares: it counts toward the portfolio total, Home's book-by-play, holdings, equity history and risk metrics, all in GBP. Trades go through the same approval gate. OpenPF talks to exchanges through [CCXT](https://github.com/ccxt/ccxt), so the exchange is a setting (Settings → Crypto):
+Crypto sits in the same book as your shares: it counts toward the portfolio total, Home's book-by-play, holdings, equity history and risk metrics, all in GBP. Trades go through the same approval gate. OpenPF talks to exchanges through [CCXT](https://github.com/ccxt/ccxt), so the exchange is a setting (Settings → Connections). You can connect several exchanges at once, each read-only or trade:
 
 | Exchange | Market orders in | Entry-tier fee (maker / taker) | UK status |
 |---|---|---|---|
@@ -85,7 +99,7 @@ The verified key is stored like the Trading 212 keys: in the app's database, sho
 2. Funds permissions: tick **Query**. Leave **Deposit** and **Withdraw** unticked.
 3. Orders and trades: tick **Query open orders & trades**, **Query closed orders & trades** and **Create & modify orders**. Leave **Cancel & close orders**, **Export data**, Earn and WebSocket permissions unticked. **Query ledger entries** is optional (lets OpenPF read deposits so they aren't counted as gains).
 4. Optionally restrict the key to your machine's IP address.
-5. In OpenPF: Settings → Crypto → Kraken, paste the key and the private key (secret) → **Verify & connect**.
+5. In OpenPF: Settings → Connections → Add connection → Kraken → **Trade**, paste the key and the private key (secret) → **Verify & connect**. To start read-only instead, pick **Read-only** and create a key with only the Query permissions the guide lists. Later, **Enable trading** on the connection swaps in a trade key.
 6. Deposit GBP on Kraken. Your crypto cap (Settings → Risk rails, default **5% of the whole book**) limits how much crypto any proposal can add.
 
 **The Starter crypto play** (Plays → New → "Or start from a template", or ask Archie "I want to get into crypto but I'm nervous") drafts a small plan: 1–3% of the book from conviction, never above the cap, bought in equal weekly amounts over 8–12 weeks (Bitcoin, plus Ether at 20% if you want). It comes with kill rules (pause new buys if the sleeve falls 40% from its peak; stop at the cap) and a plain-English explanation of volatility, fees, custody and tax. Each weekly buy is an ordinary play-tranche proposal you approve.
@@ -129,7 +143,8 @@ Keep it running on an always-on machine with `./scripts/serve.sh` (see `docs/run
 | `VIEWS_SPEC_PROVIDER` / `VIEWS_SPEC_MODEL` | `together` (default) or `anthropic`; Together model id (default `deepseek-ai/DeepSeek-V4.1-Flash`) |
 | `VIEWS_MODEL` / `CLAUDE_PLAYS_MODEL` | Models for the custom-code view fallback and play drafting |
 | `MAX_CRYPTO_PCT_OF_BOOK` | Crypto cap as a fraction of the whole book (default `0.05`); Settings → Risk rails overrides it |
-| `CRYPTO_EXCHANGE` / `CRYPTO_API_KEY` / `CRYPTO_API_SECRET` | Optional. A crypto key from `.env` stays unused until it's verified as trade-only in Settings → Crypto |
+| `CRYPTO_EXCHANGE` / `CRYPTO_API_KEY` / `CRYPTO_API_SECRET` | Optional. A crypto key from `.env` stays unused until it's verified in Settings → Connections (Reconnect) |
+| `OPENPF_SECRETS_KEY` | Optional Fernet key for connection secrets. Default: `openpf-secrets.key` next to the SQLite DB (back it up with the DB) |
 
 ## How it's built
 

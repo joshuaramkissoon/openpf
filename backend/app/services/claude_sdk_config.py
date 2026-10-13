@@ -369,7 +369,7 @@ _NETWORK_DENY = [
     ),
     (re.compile(rf"\bbackend:{_API_PORT}\b|:{_API_PORT}/api\b", re.IGNORECASE), "requests to the app's own API are blocked"),
     (
-        re.compile(r"/api/(?:agent/intents|orders|leveraged|config|crypto)\b", re.IGNORECASE),
+        re.compile(r"/api/(?:agent/intents|orders|leveraged|config|crypto|connections)\b", re.IGNORECASE),
         "trading/config API endpoints are human-only",
     ),
     (
@@ -379,6 +379,11 @@ _NETWORK_DENY = [
     (re.compile(r"trading212\.com", re.IGNORECASE), "direct Trading 212 API access is blocked — use the read-only trading212 tools"),
     (re.compile(r"\b(?:api(?:-futures)?\.kraken\.com|api\.coinbase\.com|api\.exchange\.coinbase\.com|api\d?\.binance\.com)\b",
                 re.IGNORECASE), "direct crypto exchange API access is blocked — use the read-only crypto tools"),
+    # Broker / aggregator connections (Settings → Connections): only the backend
+    # talks to them, with keys the agent never holds.
+    (re.compile(r"\b(?:[a-z0-9-]+\.)?(?:interactivebrokers\.(?:com|co\.uk)|ibkr\.com|alpaca\.markets|snaptrade\.com"
+                r"|schwabapi\.com|tastyworks\.com|tastytrade\.com|robinhood\.com)\b", re.IGNORECASE),
+     "direct broker API access is blocked — holdings from every connection are already in the portfolio tools"),
 ]
 _BASH_TRADING_DENY = [
     (
@@ -386,7 +391,8 @@ _BASH_TRADING_DENY = [
             r"\b(?:execute_intent|approve_intent|manual_trade|place_(?:market|limit|stop|stop_limit)_order|cancel_order"
             r"|build_t212_client|get_account_exec_credentials|exec_api_(?:key|secret)|T212_EXEC|update_policy"
             r"|build_crypto_client|CcxtCryptoBroker|client_for|ccxt|CRYPTO_API_(?:KEY|SECRET)|crypto_config"
-            r"|set_leveraged|auto_execute|execute_signal|ConfigStore|app_config|sqlite3?)\b",
+            r"|set_leveraged|auto_execute|execute_signal|ConfigStore|app_config|sqlite3?"
+            r"|secret_box|open_secret|OPENPF_SECRETS_KEY|build_provider_client|connections_service)\b",
             re.IGNORECASE,
         ),
         "trade execution, broker credentials and the app database are off-limits — propose trades with propose_trade",

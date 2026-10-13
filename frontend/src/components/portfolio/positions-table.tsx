@@ -3,11 +3,12 @@ import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AssetIcon, Money, MoneyDelta, Pct, PctDelta, SectionCard } from "@/components/kit"
 import { useCryptoStatus } from "@/lib/crypto-status"
-import { accountTag, formatQuantity } from "@/utils/format"
+import { formatQuantity } from "@/utils/format"
+import { AccountChip } from "@/components/kit"
+import { isCryptoAccount } from "@/lib/accounts"
 import { cn } from "@/lib/utils"
 import type { PositionItem } from "@/types"
 
@@ -144,11 +145,9 @@ export function PositionsTable({
                 >
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <AssetIcon symbol={p.display_ticker || p.ticker} crypto={p.account_kind === "crypto"} size={22} />
+                      <AssetIcon symbol={p.display_ticker || p.ticker} crypto={isCryptoAccount(p.account_kind)} size={22} />
                       <span className="font-medium">{p.display_ticker || p.ticker}</span>
-                      <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-muted-foreground">
-                        {accountTag(p.account_kind)}
-                      </Badge>
+                      <AccountChip kind={p.account_kind} />
                     </div>
                   </TableCell>
                   {renderOwner ? <TableCell className="py-1.5">{renderOwner(p)}</TableCell> : null}

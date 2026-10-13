@@ -187,6 +187,9 @@ def intents(
             execution_price=r.execution_price,
             failure_reason=r.failure_reason,
             crypto=(r.meta or {}).get("crypto") if isinstance(r.meta, dict) else None,
+            read_only=bool((r.meta or {}).get("read_only")) if isinstance(r.meta, dict) else False,
+            place_in=(r.meta or {}).get("place_in") if isinstance(r.meta, dict) else None,
+            account_label=(r.meta or {}).get("account_label") if isinstance(r.meta, dict) else None,
             not_before=r.not_before,
             held=(r.meta or {}).get("held") if isinstance(r.meta, dict) else None,
         )

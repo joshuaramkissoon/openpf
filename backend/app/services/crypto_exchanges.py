@@ -57,6 +57,15 @@ EXCHANGES: dict[str, dict[str, Any]] = {
             "Optional: restrict the key to this machine's IP address.",
         ],
         "notes": "OpenPF test-calls Kraken's withdrawal-info endpoint on connect: a key that is allowed to reach it is refused.",
+        "read_steps": [
+            "Kraken Pro → Settings → API → Create API key. Name it \"OpenPF read-only\".",
+            "Funds permissions: tick Query only. Leave Deposit and Withdraw UNTICKED.",
+            "Orders and trades: tick Query open orders & trades and Query closed orders & trades. Leave Create & modify, "
+            "Cancel & close UNTICKED.",
+            "Data: tick Query ledger entries (lets OpenPF net deposits out of your returns). Leave Export data, Earn and "
+            "WebSocket unticked.",
+            "Generate the key and copy both the API key and the private key (secret).",
+        ],
     },
     "coinbase": {
         "id": "coinbase",
@@ -81,6 +90,12 @@ EXCHANGES: dict[str, dict[str, Any]] = {
             "Optional: add this machine's IP address to the allowlist.",
         ],
         "notes": "OpenPF reads the key's permissions from Coinbase on connect and refuses any key with Transfer.",
+        "read_steps": [
+            "Coinbase Developer Platform → API keys → Create API key (a Secret API key for Advanced Trade).",
+            "Under Advanced settings choose the ECDSA signature algorithm (CCXT signs Coinbase requests with ECDSA).",
+            "Permissions: tick View only. Leave Trade and Transfer UNTICKED.",
+            "Paste the key name (organizations/…/apiKeys/…) as the API key and the private key as the secret.",
+        ],
     },
     "binance": {
         "id": "binance",
@@ -105,10 +120,28 @@ EXCHANGES: dict[str, dict[str, Any]] = {
             "Restrict access to trusted IPs (this machine).",
         ],
         "notes": "OpenPF reads the key's restrictions from Binance on connect and refuses any key that can withdraw or transfer.",
+        "read_steps": [
+            "Binance → Account → API Management → Create API → System generated. Name it \"OpenPF read-only\".",
+            "Edit restrictions: keep Enable Reading ticked and leave every other box UNTICKED (Spot & Margin Trading, "
+            "Withdrawals, Internal Transfer, Universal Transfer, Futures, Margin).",
+            "IP access: restricting to this machine's IP is safer; an unrestricted read-only key also works.",
+            "Copy the API key and the secret key (the secret is shown once).",
+        ],
     },
 }
 
 SANDBOX_EXCHANGE = "kraken"
+
+
+def crypto_account_kind(exchange: str) -> str:
+    """Account key for a crypto connection added in Settings → Connections."""
+    return f"{CRYPTO_ACCOUNT}:{exchange.strip().lower()}"
+
+
+def is_crypto_account(account_kind: str | None) -> bool:
+    """``crypto`` (the original connection) or ``crypto:<exchange>``."""
+    k = str(account_kind or "").strip().lower()
+    return k == CRYPTO_ACCOUNT or k.startswith(CRYPTO_ACCOUNT + ":")
 
 
 def is_crypto_symbol(symbol: str | None) -> bool:

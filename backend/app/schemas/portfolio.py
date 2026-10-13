@@ -12,6 +12,8 @@ class AccountSummary(BaseModel):
     pie_cash: float | None = None
     total: float | None = None
     ppl: float | None = None
+    label: str | None = None
+    read_only: bool = False
 
 
 class PositionItem(BaseModel):

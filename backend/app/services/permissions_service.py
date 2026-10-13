@@ -428,6 +428,12 @@ def evaluate(db: Session, intent: TradeIntent, *, now: datetime | None = None) -
     if intent.created_at is not None and now - intent.created_at > _MAX_PROPOSAL_AGE:
         result["blocked"] = "proposal too old for a standing permission"
         return result
+    from app.services import broker_router
+
+    refused = broker_router.refusal_for(db, intent)
+    if refused:
+        result["blocked"] = refused
+        return result
     perms = db.execute(
         select(StandingPermission).where(StandingPermission.revoked_at.is_(None)).order_by(StandingPermission.created_at)
     ).scalars().all()

@@ -14,6 +14,10 @@ one. Defence in depth, all keyed off :func:`is_sandbox`:
   (env/DB keys ignored), ``build_crypto_client`` only ever returns the mock, and
   the real CCXT client refuses to be constructed — or to send any request to
   an exchange host — in a sandbox process (``crypto_client``);
+* broker/aggregator connections (IBKR, Alpaca, SnapTrade): ``build_provider_client``
+  only returns offline fixtures that accept only fake sandbox credentials, and
+  the real HTTP clients refuse to be built or to reach any host
+  (``provider_clients``);
 * startup asserts all of the above and fails closed (``main.lifespan``).
 """
 
@@ -78,12 +82,29 @@ def verify_isolation() -> list[str]:
         crypto_client = crypto_service.client_for(store)
         if crypto_client is not None and not crypto_client.sandbox:
             raise SandboxViolation("sandbox would reach a real crypto exchange")
+        # Every crypto connection (incl. Settings → Connections ones) is a mock.
+        for cfg in crypto_service.crypto_configs(store):
+            c = crypto_service._client_for_cfg(cfg)
+            if c is not None and not c.sandbox:
+                raise SandboxViolation(f"sandbox would reach a real crypto exchange ({cfg['account_kind']})")
+        # Brokers/aggregators: only the offline fixtures can be built.
+        from app.services.provider_clients import ProviderAuthError, SANDBOX_TOKENS, build_provider_client
+
+        for provider_id, creds in SANDBOX_TOKENS.items():
+            if not build_provider_client(provider_id, creds).sandbox:
+                raise SandboxViolation(f"sandbox would reach a real {provider_id} API")
+            try:
+                build_provider_client(provider_id, {k: "real-looking" for k in creds})
+                raise SandboxViolation(f"sandbox accepted a non-sandbox {provider_id} credential")
+            except ProviderAuthError:
+                pass
     return [
         f"broker   : {url} (mock Trading 212 — no real money)",
         f"database : {settings.database_url}",
         f"runtime  : {runtime} (Archie artifacts + memory)",
         f"views    : {settings.views_data_dir}",
         "crypto   : mock Kraken exchange (in-process — exchange hosts refused)",
+        "brokers  : IBKR / Alpaca / SnapTrade fixtures (offline — provider hosts refused)",
     ]
 
 

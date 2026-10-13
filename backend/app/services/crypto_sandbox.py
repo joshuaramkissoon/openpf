@@ -11,6 +11,12 @@ Keys it accepts (mirroring how a real key's permissions work):
 * ``sandbox-crypto`` — trade-only (view + trade, no withdraw). The demo key.
 * ``sandbox-crypto-withdraw`` — can withdraw. Exists so the "refuse keys with
   withdrawal permission" path can be demonstrated and tested end to end.
+* ``sandbox-crypto-read`` — query-only (view, no trade, no withdraw): the key a
+  read-only connection uses.
+
+The mock Kraken account above is the one that trades. Other exchanges connected
+in a sandbox (Binance, Coinbase) are read-only fixtures with small fixed
+balances (``FIXTURE_BALANCES``), so a demo can show several exchanges at once.
 """
 
 from __future__ import annotations
@@ -33,7 +39,17 @@ logger = logging.getLogger(__name__)
 SANDBOX_KEY = "sandbox-crypto"
 SANDBOX_SECRET = "sandbox"
 SANDBOX_WITHDRAW_KEY = "sandbox-crypto-withdraw"
+SANDBOX_READ_KEY = "sandbox-crypto-read"
 SANDBOX_CRYPTO_CREDENTIALS = {"api_key": SANDBOX_KEY, "api_secret": SANDBOX_SECRET}
+SANDBOX_READ_CREDENTIALS = {"api_key": SANDBOX_READ_KEY, "api_secret": SANDBOX_SECRET}
+
+# Read-only fixture accounts for the other exchanges: coins + quote cash, with an
+# average cost as a multiple of today's price.
+FIXTURE_BALANCES: dict[str, dict[str, Any]] = {
+    "binance": {"balances": {"USDC": 85.0, "SOL": 1.8, "ETH": 0.05}, "cost_mult": {"SOL": 0.82, "ETH": 1.06}},
+    "coinbase": {"balances": {"GBP": 40.0, "BTC": 0.0015, "LINK": 6.0}, "cost_mult": {"BTC": 0.71, "LINK": 1.12}},
+    "kraken": {"balances": {"GBP": 25.0, "XRP": 120.0}, "cost_mult": {"XRP": 0.64}},
+}
 
 # Offline fixtures (GBP). Only used when no market data is reachable.
 FIXTURE_PRICES_GBP = {"BTC": 62000.0, "ETH": 2300.0, "SOL": 140.0, "XRP": 1.9, "ADA": 0.55,
@@ -157,6 +173,8 @@ def check_key(api_key: str, api_secret: str) -> dict[str, Any]:
         return {"can_view": True, "can_trade": True, "can_withdraw": False}
     if api_key == SANDBOX_WITHDRAW_KEY:
         return {"can_view": True, "can_trade": True, "can_withdraw": True}
+    if api_key == SANDBOX_READ_KEY and api_secret == SANDBOX_SECRET:
+        return {"can_view": True, "can_trade": False, "can_withdraw": False}
     raise SandboxExchangeError("invalid sandbox crypto key")
 
 

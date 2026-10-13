@@ -35,6 +35,8 @@ import { useOpenInstrument } from "@/components/instrument/instrument-provider"
 import { navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 import { accountLabel, formatMoney, formatPercent, formatQuantity } from "@/utils/format"
+import { ReadOnlyNote, readOnlyPlacement } from "@/components/kit"
+import { isCryptoAccount } from "@/lib/accounts"
 import type { AppConfig, LimitBlock, PositionItem, TradeIntent } from "@/types"
 import { PENDING_STATUSES, type DecisionsContextValue, type ExecAccount, type ProposalsState } from "@/app/hooks/use-proposals"
 
@@ -53,11 +55,13 @@ type Rail = { ok: boolean; label: string }
 const isPending = (i: TradeIntent) => (PENDING_STATUSES as readonly string[]).includes(i.status)
 
 function presetAccount(i: TradeIntent): ExecAccount | null {
-  return i.account_kind === "stocks_isa" || i.account_kind === "invest" || i.account_kind === "crypto" ? i.account_kind : null
+  if (i.account_kind === "stocks_isa" || i.account_kind === "invest" || i.account_kind === "crypto") return i.account_kind
+  // Any other connected account (crypto:binance, ibkr:…) is fixed — never re-routed via the picker.
+  return i.account_kind ? (i.account_kind as ExecAccount) : null
 }
 
 function accountShort(kind?: string | null) {
-  return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : kind === "crypto" ? accountLabel("crypto") : null
+  return kind === "stocks_isa" ? "ISA" : kind === "invest" ? "Invest" : kind ? accountLabel(kind) : null
 }
 
 function assetName(i: TradeIntent) {
@@ -356,8 +360,8 @@ export function LiveConfirm({
 }
 
 function liveDescription(intent: TradeIntent, account: ExecAccount | null) {
-  return intent.account_kind === "crypto"
-    ? `This sends a real market order to your ${accountLabel("crypto")} account.${intent.crypto?.fee_gbp != null ? ` Estimated fee ${formatMoney(intent.crypto.fee_gbp, "GBP", 2)}.` : ""} Crypto prices can move sharply; coins on an exchange are not FSCS-protected.`
+  return isCryptoAccount(intent.account_kind)
+    ? `This sends a real market order to your ${accountLabel(intent.account_kind ?? "crypto")} account.${intent.crypto?.fee_gbp != null ? ` Estimated fee ${formatMoney(intent.crypto.fee_gbp, "GBP", 2)}.` : ""} Crypto prices can move sharply; coins on an exchange are not FSCS-protected.`
     : `This sends a real order to your Trading 212 ${account === "stocks_isa" ? "Stocks ISA" : "Invest"} account.`
 }
 
@@ -377,7 +381,7 @@ export function dayLabel(day: string) {
 
 /** Can be placed right now with one tap: pending, account known, inside the rails, not staged for later. */
 export function approvableNow(i: TradeIntent, rail: Rail | undefined) {
-  return i.status !== "executing" && Boolean(presetAccount(i)) && Boolean(rail?.ok) && !laterDay(i)
+  return i.status !== "executing" && Boolean(presetAccount(i)) && !readOnlyPlacement(i) && Boolean(rail?.ok) && !laterDay(i)
 }
 
 function LaterBadge({ day }: { day: string }) {
@@ -539,7 +543,7 @@ export function ProposalTile({
         <IconAction label={askLabel} onClick={() => onAsk(intent)}>
           <ArchieIcon className="size-3.5" />
         </IconAction>
-        {placeMyself && (later || !rail.ok) ? (
+        {placeMyself && (later || !rail.ok) && !readOnlyPlacement(intent) ? (
           <IconAction label="Place it myself" onClick={placeMyself} disabled={disabled}>
             <Hand className="size-3.5" />
           </IconAction>
@@ -547,6 +551,9 @@ export function ProposalTile({
         <IconAction label="Reject" onClick={() => void ctx.proposals.reject(intent.id)} disabled={disabled}>
           <X className="size-3.5" />
         </IconAction>
+        {readOnlyPlacement(intent) ? (
+          <ReadOnlyNote broker={readOnlyPlacement(intent)!} />
+        ) : (
         <div className="ml-auto flex items-center gap-1.5">
           {later ? (
             <LaterBadge day={later} />
@@ -576,6 +583,7 @@ export function ProposalTile({
             </>
           )}
         </div>
+        )}
       </footer>
 
       <LiveConfirm
@@ -700,13 +708,16 @@ export function HeldTile({
       </p>
 
       <footer className={cn("mt-auto flex items-center gap-1", compact ? "pt-2.5" : "pt-3")}>
-        {placeMyself ? (
+        {readOnlyPlacement(intent) ? (
+          // A read-only account (IBKR, SnapTrade, …): OpenPF can't place it, so the user does it there.
+          <ReadOnlyNote broker={readOnlyPlacement(intent)!} className="ml-0" />
+        ) : placeMyself ? (
           <Button size="sm" variant="outline" className="h-7 gap-1.5 bg-card px-2.5 text-xs" disabled={working} onClick={placeMyself}>
             <Hand className="size-3.5" />
             Place it myself
           </Button>
         ) : null}
-        {fitsTomorrow ? (
+        {fitsTomorrow && !readOnlyPlacement(intent) ? (
           <Button
             size="sm"
             variant={placeMyself ? "ghost" : "outline"}

@@ -332,6 +332,10 @@ export interface TradeIntent {
   failure_reason?: string | null
   /** Crypto proposals: exchange + cost estimates shown on the card. */
   crypto?: CryptoEstimate | null
+  /** A suggestion for a read-only connection (IBKR, SnapTrade, …): place it in `place_in`, never Approve. */
+  read_only?: boolean
+  place_in?: string | null
+  account_label?: string | null
   /** Staged for a later day's limit window (UTC date): can't be placed before it. */
   not_before?: string | null
   /** status "held": the part of an ask a notional limit stopped. Kept (staged: true) once re-proposed. */
