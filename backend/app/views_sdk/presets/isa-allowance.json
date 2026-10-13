@@ -36,6 +36,7 @@
       "value": "amount",
       "orientation": "vertical",
       "format": "money",
+      "empty": "No ISA deposits yet this tax year.",
       "width": "two-thirds"
     },
     {

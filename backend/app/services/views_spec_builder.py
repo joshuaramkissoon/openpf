@@ -236,6 +236,7 @@ async def build_spec(prompt: str, current: dict[str, Any] | None = None, *, prov
     schema = reply_schema()
     base = [{"role": "system", "content": system_prompt()}, {"role": "user", "content": user_prompt(prompt, current)}]
     errors: list[str] = []
+    unavailable = 0
     for provider in plist:
         try:
             text = await provider.complete(base, schema)
@@ -263,6 +264,7 @@ async def build_spec(prompt: str, current: dict[str, Any] | None = None, *, prov
             errors.append(f"{provider.name}: " + "; ".join(problems2[:3]))
         except ProviderUnavailable as exc:
             errors.append(f"{provider.name}: {exc}")
+            unavailable += 1
             continue
         except (httpx.HTTPError, asyncio.TimeoutError) as exc:
             errors.append(f"{provider.name}: {type(exc).__name__}")
@@ -271,6 +273,6 @@ async def build_spec(prompt: str, current: dict[str, Any] | None = None, *, prov
             logger.warning("spec provider %s failed", provider.name, exc_info=True)
             errors.append(f"{provider.name}: {str(exc)[:160]}")
             continue
-    if all("unavailable" in e.lower() or "rejected" in e.lower() for e in errors):
+    if unavailable == len(plist):
         raise NoSpecProvider("; ".join(errors))
     raise SpecBuildError("; ".join(errors) or "the model didn't return a usable spec")

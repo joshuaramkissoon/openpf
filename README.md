@@ -37,7 +37,7 @@ Staging a tranche creates proposals. Nothing executes without you.
 
 ![A play](docs/assets/play-draft.png)
 
-**Views: the app builds itself into what you want.** "Show me my portfolio split by theme with today's move." In about a minute there's a new page pinned in your sidebar, running live on your data. Edit it with a sentence and revert to any version. Views run in a locked-down sandbox: they can read a whitelisted set of portfolio data and nothing else. No network, no trading, no access to the app.
+**Views: the app builds itself into what you want.** Start from presets ranked for your portfolio (what moved today, where your risk is, currency exposure, income, winners & losers, cash drag, ISA allowance, theme map), or ask in a sentence: "show me my portfolio split by theme with today's move." A fast model turns it into a declarative chart spec (treemaps, allocations, ranked bars, curves, with drill-down) in seconds, pinned in your sidebar and running live on your data. Edit it with a sentence and revert to any version. Specs are data, not code: they read a whitelisted set of portfolio data and nothing else. No network, no trading. Requests a view can't serve (trades, crypto, bank accounts) get a clear answer and the closest preset.
 
 ![A view Archie built](docs/assets/view.png)
 
@@ -82,7 +82,9 @@ Keep it running on an always-on machine with `./scripts/serve.sh` (see `docs/run
 | `OPENPF_SANDBOX` | `1` = use the built-in mock broker; real broker keys are ignored |
 | `OPENPF_API_TOKEN` | Require a token for the API and chat (set it before exposing beyond localhost) |
 | `OPENPF_USER_NAME` | How Archie addresses you |
-| `VIEWS_MODEL` / `CLAUDE_PLAYS_MODEL` | Models for the view builder and play drafting |
+| `TOGETHER_API_KEY` | Fast view building on Together AI (otherwise views use Claude; with neither, the closest preset) |
+| `VIEWS_SPEC_PROVIDER` / `VIEWS_SPEC_MODEL` | `together` (default) or `anthropic`; Together model id (default `deepseek-ai/DeepSeek-V4.1-Flash`) |
+| `VIEWS_MODEL` / `CLAUDE_PLAYS_MODEL` | Models for the custom-code view fallback and play drafting |
 
 ## How it's built
 

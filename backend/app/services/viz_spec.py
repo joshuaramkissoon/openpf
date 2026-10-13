@@ -38,13 +38,7 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _field(v: str) -> str:
-    if not isinstance(v, str) or not _FIELD_RE.match(v):
-        raise ValueError(f"'{v}' is not a valid field name")
-    return v
-
-
-FieldName = Annotated[str, Field(min_length=1, max_length=40)]
+FieldName = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")]
 
 
 class Query(_Strict):

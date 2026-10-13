@@ -21,10 +21,8 @@
       "from": "pf.positions",
       "width": "half",
       "items": [
-        {"label": "If GBP rises 5%", "value": {"agg": "sum", "field": "fx_up", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}, {"compute": {"as": "fx_up", "op": "scale", "field": "value", "by": -0.047619}}]}, "format": "signedMoney", "hint": "foreign holdings are worth less in pounds"},
-        {"label": "If GBP falls 5%", "value": {"agg": "sum", "field": "fx_down", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}, {"compute": {"as": "fx_down", "op": "scale", "field": "value", "by": 0.052632}}]}, "format": "signedMoney", "hint": "and worth more"},
-        {"label": "GBP/USD", "value": {"from": "fx.rates", "field": "USD"}, "format": "num", "hint": "dollars per pound"},
-        {"label": "GBP/EUR", "value": {"from": "fx.rates", "field": "EUR"}, "format": "num", "hint": "euros per pound"}
+        {"label": "If GBP rises 5%", "value": {"agg": "sum", "field": "fx_up", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}, {"compute": {"as": "fx_up", "op": "scale", "field": "value", "by": -0.047619}}]}, "format": "signedMoney", "hint": "holdings abroad are worth less in pounds"},
+        {"label": "If GBP falls 5%", "value": {"agg": "sum", "field": "fx_down", "transform": [{"filter": {"field": "exposure_currency", "op": "!=", "value": "GBP"}}, {"compute": {"as": "fx_down", "op": "scale", "field": "value", "by": 0.052632}}]}, "format": "signedMoney", "hint": "and worth more"}
       ]
     },
     {
@@ -50,7 +48,17 @@
       "width": "half"
     },
     {
+      "type": "kpis",
+      "from": "fx.rates",
+      "width": "half",
+      "items": [
+        {"label": "GBP/USD", "value": {"field": "USD"}, "format": "num", "hint": "dollars per pound"},
+        {"label": "GBP/EUR", "value": {"field": "EUR"}, "format": "num", "hint": "euros per pound"}
+      ]
+    },
+    {
       "type": "note",
+      "width": "half",
       "text": "Listing currency is a proxy: a London-listed fund that owns US shares still moves with the dollar. A stronger pound lowers the sterling value of everything priced abroad."
     }
   ]

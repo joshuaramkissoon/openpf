@@ -17,13 +17,13 @@
     {
       "type": "treemap",
       "title": "Book by theme",
-      "subtitle": "Holdings grouped by the play that owns them; colour is today's move. Click a theme to drill in.",
+      "subtitle": "Holdings grouped by the play that owns them (their sector when no play does); colour is today's move. Click a theme to drill in.",
       "from": "pf.positions",
-      "transform": [{"enrich": ["play"]}],
+      "transform": [{"enrich": ["theme"]}],
       "label": "ticker",
       "size": "value",
       "color": "day_change_pct",
-      "group": "play"
+      "group": "theme"
     },
     {
       "type": "bars",

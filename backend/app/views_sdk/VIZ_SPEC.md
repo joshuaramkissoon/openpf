@@ -50,7 +50,7 @@ Tables are the drill-down layer, not the page. 3–6 blocks is typical.
 
 | field | type | notes |
 |---|---|---|
-| `type` | string | `hero` `kpis` `treemap` `allocation` `bars` `timeseries` `multiples` `heatgrid` `table` `note` |
+| `type` | string | `hero` `meter` `kpis` `treemap` `allocation` `bars` `timeseries` `multiples` `heatgrid` `table` `note` |
 | `title` | string ≤ 60 | sentence case; optional for `hero`/`kpis` |
 | `subtitle` | string ≤ 160 | one line explaining a non-obvious metric |
 | `width` | `full` (default) · `half` · `third` · `two-thirds` | stacks to full width on phones |
@@ -64,12 +64,12 @@ Each step is an object with exactly one key:
 
 | step | example | effect |
 |---|---|---|
-| `filter` | `{"filter": {"field": "value", "op": ">", "value": 0}}` | ops `= != > >= < <= in notin contains`; `value` may be a list for `in`/`notin` |
-| `enrich` | `{"enrich": ["sector", "theme"]}` | adds per-ticker fields: `sector` `industry` `country` `asset_type` (`Stock`/`ETF`/`Fund`) `play` (owning play title or `Unsorted`) `theme` (owning play title, else sector) `play_id` |
+| `filter` | `{"filter": {"field": "value", "op": ">", "value": 0}}` | ops `= != > >= < <= in notin contains`; `value` may be a list for `in`/`notin`; `"$today"` and `"$tax_year_start"` (6 April) are dynamic dates for comparing ISO date fields |
+| `enrich` | `{"enrich": ["sector", "theme"]}` | adds per-ticker fields: `sector` `industry` `country` `asset_type` (`Stock`/`ETF`/`Fund`) `play` (owning play title or `Unsorted`) `theme` (owning play title, else sector) `play_id` `dividend_yield` (fraction) `ex_dividend_date` |
 | `groupBy` | `{"groupBy": "theme"}` | one row per value; sums numeric money fields (`value cost ppl day_change amount weight target_gbp`), adds `count` and `items` (the rows), and recomputes `day_change_pct` = Σday_change/(Σvalue−Σday_change), `ppl_pct` = Σppl/Σcost |
 | `sort` | `{"sort": {"by": "value", "dir": "desc"}}` | `dir` `asc`/`desc` (default desc) |
 | `top` | `{"top": {"n": 8, "other": true}}` | keep N; with `other` the rest fold into one "Other" row |
-| `compute` | `{"compute": {"as": "share", "op": "share", "field": "value"}}` | ops: `share` (field ÷ Σfield), `ratio` (`a` ÷ `b`), `diff` (`a` − `b`), `abs`, `neg`, `scale` (`field` × `by` number) |
+| `compute` | `{"compute": {"as": "share", "op": "share", "field": "value"}}` | ops: `share` (field ÷ Σfield), `ratio` (`a` ÷ `b`), `diff` (`a` − `b`), `product` (`a` × `b`, e.g. value × dividend_yield), `abs`, `neg`, `scale` (`field` × `by` number) |
 | `month` | `{"month": {"field": "paid_on", "sum": "amount", "last": 12}}` | buckets dated rows into calendar months, zero-filled, → rows `{month, label, amount}` |
 
 ### Measures (single numbers)
@@ -92,7 +92,11 @@ Money is in the display currency and honours privacy mode. Fractions are 0–1.
 ## Blocks
 
 **`hero`** — the one number the page leads with (one per page).
-`{"type": "hero", "label": "Today", "value": Measure, "format": "signedMoney", "delta": Measure, "deltaFormat": "signedPct", "caption": "across 20 holdings"}`
+`{"type": "hero", "label": "Today", "value": Measure, "format": "signedMoney", "delta": Measure, "deltaFormat": "signedPct", "caption": "across 20 holdings", "trend": {"from": "hist.points", "field": "total"}?}`
+`trend` adds a sparkline under the number.
+
+**`meter`** — one amount against a limit, with an optional pace marker.
+`{"type": "meter", "label": "ISA allowance used", "from": "cf.tax_year", "value": {"field": "isa_used"}, "max": {"field": "isa_allowance"} | 20000, "mark": {"field": "year_elapsed_pct"}?, "markLabel": "Share of the tax year gone"?, "format": "money"}`
 
 **`kpis`** — 2–5 stat tiles.
 `{"type": "kpis", "items": [{"label": "Invested", "value": Measure, "format": "money", "delta": Measure?, "deltaFormat": "signedPct"?, "hint": "text"?}]}`
@@ -137,17 +141,26 @@ Same whitelist as code views (see `VIEW_SDK.md` for full shapes). Useful paths:
 
 | source | params | paths |
 |---|---|---|
-| `portfolio` | `account` | `positions[]` (ticker, name, accounts, yf, instrument_currency, value, cost, ppl, ppl_pct, weight, day_change, day_change_pct, quantity, momentum_63d, volatility_30d), `account` (total, invested, free_cash, ppl), `accounts[]` (account, total, invested, free_cash, ppl), `metrics` |
+| `portfolio` | `account` | `positions[]` (ticker, name, accounts, yf, instrument_currency, exposure_currency (GBX→GBP), value, cost, ppl, ppl_pct, weight, day_change, day_change_pct, quantity, momentum_63d, volatility_30d), `account` (total, invested, free_cash, ppl), `accounts[]` (account, total, invested, free_cash, ppl), `metrics` |
 | `history` | `range` 1m 3m 6m ytd 1y 2y 5y all, `account` | `points[]` (date, total, invested, free_cash, gain), plus return_pct, net_contributed |
 | `dividends` | `account` | `items[]` (ticker, amount, paid_on, account), `monthly[]` (month, amount), `by_ticker[]` (ticker, amount), `total` |
 | `orders` | `account`, `ticker`, `limit` | `orders[]` (ticker, side, value, created_at, status) |
-| `plays` | `status` | `plays[]` (title, status, rings.exposure, rings.owned[], rings.bench[]), `owners[]` (ticker, play_id, value) |
-| `cashflows` | `account` | `items[]` (account, type DEPOSIT/WITHDRAW, amount, currency, date), `tax_year` (start, end, deposits{}) |
+| `plays` | `status` | `plays[]` (id, title, status, exposure, owned_count, bench_count, rings.owned[]/related[]/bench[]), `owners[]` (ticker, play_id, value) |
+| `cashflows` | `account` | `items[]` (account, type DEPOSIT/WITHDRAW, amount, currency, date), `tax_year` (start, end, isa_allowance, isa_used, isa_remaining, isa_withdrawn, isa_used_pct, days_left, year_elapsed_pct, monthly_to_max) |
+| `news` | `movers` (top-N movers today) or `tickers`, `days`, `limit` | `items[]` (ticker, title, source, published_at, summary) — text only |
+| `profiles` | `tickers` (≤ 40) | `profiles[]` (sector, industry, country, quote_type, dividend_yield, ex_dividend_date) — prefer the `enrich` transform |
 | `fx` | — | `rates` (GBP, USD, EUR per 1 unit of display currency) |
 | `watchlist`, `proposals` | | `items[]`, `proposals[]` |
 
 **Money rule:** money comes only from display-currency fields (`value`, `cost`,
 `ppl`, `day_change`, dividend `amount`); never multiply prices by quantities.
+
+## Widgets
+
+Any single block also renders as a fixed-size widget: `<VizBlock spec={...} size="S" | "M" | "L" />`
+(S 1×1, M 2×1, L 2×2). Blocks pick compact forms at small sizes (hero → number + sparkline,
+timeseries → sparkline, bars → top 3–8, allocation → bar + top slices). `WIDGET_PRESETS` in
+`frontend/src/components/viz/widgets.ts` lists ready-made one-block widgets.
 
 ## Limits
 
