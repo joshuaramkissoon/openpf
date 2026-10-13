@@ -8,7 +8,7 @@ Status: shipped on the `v2-integrate` line (October 2026). Code: `backend/app/qu
 
 Archie gave sizing, risk and allocation advice by doing the arithmetic in his head: reading
 prices, estimating volatility, multiplying by a conviction. That is slow, unrepeatable and
-sometimes wrong, and it is invisible to the user. Josh's brief: "maths as tools, a well
+sometimes wrong, and it is invisible to the user. The brief: "maths as tools, a well
 thought out, sufficient tool kit", and a considered answer to "how does Archie navigate a
 growing toolset".
 

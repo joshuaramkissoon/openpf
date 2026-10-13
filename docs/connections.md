@@ -25,7 +25,7 @@ Research checked October 2026 against official docs where reachable. This is a s
 
 ### Conclusions
 
-- **Josh's setup:** Trading 212 Invest + ISA (read + trade, as today), Kraken (start read-only, add a trade key when wanted), and optionally Binance (read-only; Binance isn't onboarding new UK users).
+- **A typical UK setup:** Trading 212 Invest + ISA (read + trade), Kraken (start read-only, add a trade key when wanted), and optionally Binance (read-only; Binance isn't onboarding new UK users).
 - **Cleanest read-only broker path:** IBKR Flex Web Service. A token plus a query id, reports only, and IP restriction if you like.
 - **Broad coverage for everyone else:** SnapTrade with a free **Personal** key. That key is meant for exactly this case: one person reading their own accounts. Personal keys skip user registration; SnapTrade resolves the user from the key. OpenPF also handles a Commercial key by registering one SnapTrade user.
 - **Not built, and why:** Schwab direct (7-day manual re-auth; use SnapTrade), Robinhood stocks (no official API; use SnapTrade), Plaid (Link/webhook flow, US/CA trial only), IBKR Web API (gateway + session babysitting). tastytrade and Robinhood Crypto are viable and are next on the list.
