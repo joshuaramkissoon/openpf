@@ -196,6 +196,67 @@ def _extract_tool_results(message: Any) -> list[tuple[str, bool]]:
     return out
 
 
+# Tools whose results create trade proposals (TradeIntents). Matched on the
+# bare tool name so the MCP prefix (mcp__proposals__ / mcp__plays__) doesn't matter.
+_PROPOSAL_TOOLS = ("propose_trade", "stage_play_tranche")
+
+
+def _tool_result_texts(message: Any) -> dict[str, str]:
+    """tool_use_id -> the tool result's text content (MCP tools return JSON text)."""
+
+    def _text_of(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(getattr(item, "text", None), str):
+                    parts.append(item.text)
+            return "".join(parts)
+        return ""
+
+    out: dict[str, str] = {}
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        for block in content:
+            tool_use_id = getattr(block, "tool_use_id", None)
+            if isinstance(tool_use_id, str):
+                out[tool_use_id] = _text_of(getattr(block, "content", None))
+            elif isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                out[block["tool_use_id"]] = _text_of(block.get("content"))
+    return out
+
+
+def proposal_ids_from_tool_result(tool_name: str, text: str) -> list[str]:
+    """Intent ids created by a propose_trade / stage_play_tranche call, from its
+    JSON result. Anything unparseable or unsuccessful yields []."""
+    bare = (tool_name or "").rsplit("__", 1)[-1]
+    if bare not in _PROPOSAL_TOOLS or not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    ids: list[str] = []
+    intent = payload.get("intent")
+    if payload.get("ok") and isinstance(intent, dict) and isinstance(intent.get("id"), str):
+        ids.append(intent["id"])
+    for created in payload.get("created") or []:
+        if isinstance(created, dict) and isinstance(created.get("intent_id"), str):
+            ids.append(created["intent_id"])
+    return ids
+
+
+def proposal_marker(intent_id: str) -> str:
+    """The in-transcript reference to a proposal. Only the id is stored; the chat
+    UI renders it as a live card from the intents API."""
+    return f"\n\n[proposal](proposal:{intent_id})\n\n"
+
+
 def _extract_input_json_delta(message: Any) -> tuple[int | None, str]:
     """Extract (content_block_index, partial_json) from input_json_delta events."""
     event = getattr(message, "event", None)
@@ -429,7 +490,15 @@ class ClaudeChatRuntime:
         on_delta: Callable[[str], Awaitable[None]],
         on_status: Callable[[str, str, dict | None], Awaitable[None]] | None = None,
         on_question: QuestionAsker | None = None,
+        inline_proposals: bool = False,
     ) -> ReplyResult:
+        """Stream one assistant turn.
+
+        ``inline_proposals``: when a propose_trade / stage_play_tranche call
+        creates proposals, splice a ``[proposal](proposal:<id>)`` reference into
+        the reply at that point (streamed + persisted) so the web chat can show
+        a live approval card in place. Off for plain-text consumers (Telegram).
+        """
         state = await self._get_session(chat_session_id)
 
         async with state.lock:
@@ -633,10 +702,18 @@ class ClaudeChatRuntime:
                                 friendly = _friendly_tool_name(tool_name)
                                 await emit_status("tool_start", friendly, tool_input)
 
+                    result_texts = _tool_result_texts(message) if inline_proposals else {}
                     for tool_id, is_error in _extract_tool_results(message):
                         if tool_id in seen_tool_result_ids:
                             continue
                         seen_tool_result_ids.add(tool_id)
+                        if inline_proposals and not is_error:
+                            for intent_id in proposal_ids_from_tool_result(
+                                tool_name_by_id.get(tool_id, ""), result_texts.get(tool_id, "")
+                            ):
+                                marker = proposal_marker(intent_id)
+                                chunks.append(marker)
+                                await on_delta(marker)
                         # Handle pending tasks that never got subagent_start emitted
                         if tool_id in pending_task_inputs and tool_id not in active_subagents:
                             pending_task_inputs.pop(tool_id, None)

@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,7 @@ from app.schemas.chat import (
     ChatSessionCreate,
     ChatSessionItem,
 )
-from app.models.entities import Thesis
+from app.models.entities import Thesis, TradeIntent
 from app.services.agent_service import get_run, list_runs, run_agent
 from app.services.chat_service import (
     append_assistant_message,
@@ -113,8 +113,17 @@ def run_detail(run_id: str, db: Session = Depends(get_db)) -> AgentRunResponse:
 
 
 @router.get("/intents", response_model=list[TradeIntentItem])
-def intents(db: Session = Depends(get_db)) -> list[TradeIntentItem]:
-    rows = list_intents(db)
+def intents(
+    ids: str | None = Query(default=None, description="Comma-separated intent ids to fetch (any age)"),
+    db: Session = Depends(get_db),
+) -> list[TradeIntentItem]:
+    if ids:
+        # Chat transcripts reference proposals by id; old ones can fall outside
+        # the recent list, so they're fetched directly.
+        wanted = [i.strip() for i in ids.split(",") if i.strip()][:50]
+        rows = list(db.execute(select(TradeIntent).where(TradeIntent.id.in_(wanted))).scalars().all()) if wanted else []
+    else:
+        rows = list_intents(db)
     return [
         TradeIntentItem(
             id=r.id,
@@ -429,6 +438,7 @@ async def chat_stream(session_id: str, websocket: WebSocket):
                         on_delta=_on_delta,
                         on_status=_on_status,
                         on_question=_on_question,
+                        inline_proposals=True,
                     ),
                     timeout=timeout,
                 )
