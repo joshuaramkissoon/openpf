@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import dayjs from 'dayjs'
 import { ArrowRight, Plus, Target } from 'lucide-react'
 
-import { Money, PageHeader, PctDelta } from '@/components/kit'
+import { Money, MoneyDelta, PageHeader, PctDelta } from '@/components/kit'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { WatchlistBoard } from '@/components/WatchlistBoard'
@@ -13,8 +14,8 @@ import { ArchieMark, Swatch, useBook } from './book'
 import { AllocationBar } from './book-card'
 import { SortHoldingsSheet } from './suggestions'
 import { EXAMPLE_IDEAS } from './new-play'
-import type { Play, PlayPerformance } from './types'
-import { ConvictionDots, Meter, Sparkline, StatusChip, VerdictChip } from './ui'
+import type { BookGroup, Play, PlayPerformance } from './types'
+import { Sparkline, StatusChip, VerdictChip } from './ui'
 
 type Tab = 'plays' | 'watchlist'
 
@@ -120,7 +121,7 @@ export function PlaysList({ tab }: { tab: Tab }) {
       ) : plays === null ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-48 rounded-xl" />
+            <Skeleton key={i} className="h-56 rounded-xl" />
           ))}
         </div>
       ) : sorted.length === 0 ? (
@@ -141,88 +142,207 @@ function PlayCard({ play }: { play: Play }) {
   const perf = usePerformance(play)
   const { book } = useBook()
   const group = book?.groups.find((g) => g.play_id === play.id)
-  const deployed = perf && perf.target_exposure_gbp ? perf.held_gbp / perf.target_exposure_gbp : 0
+  const open = () => navigate(`/plays/${play.id}`)
+
+  if (play.status === 'draft') return <DraftCard play={play} onOpen={open} />
+
   const series = perf?.points.map((p) => p.basket) ?? []
-  const need = group?.needs[0]
+  // Only cues that ask for a decision: kill rules, due tranches, size drift, orders to approve.
+  const need = group?.needs.find((n) => n.tone === 'critical' || n.tone === 'warn')
+  const verdict = play.review.verdict && play.review.verdict !== 'on_track' ? play.review.verdict : null
 
   return (
     <button
       type="button"
-      onClick={() => navigate(`/plays/${play.id}`)}
+      onClick={open}
       className={cn(
-        'group flex min-h-48 flex-col rounded-xl border border-border bg-card p-5 text-left transition-colors hover:border-foreground/25',
+        'group flex min-h-56 flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-colors hover:border-foreground/25',
         play.status === 'closed' && 'opacity-70',
       )}
     >
-      <div className="flex items-center justify-between gap-3">
-        {group ? (
-          <span className="inline-flex items-center gap-2 text-xs text-muted-foreground capitalize">
-            <Swatch kind="play" colorIndex={group.color_index} className="size-2.5" />
-            {play.status}
-          </span>
-        ) : (
-          <StatusChip status={play.status} />
-        )}
-        <VerdictChip verdict={play.status === 'draft' ? null : play.review.verdict} />
-      </div>
-      <h3 className="mt-3 text-base font-semibold tracking-tight text-balance">{play.title}</h3>
-      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{firstLine(play.thesis)}</p>
+      <div className="flex w-full flex-1 flex-col p-5">
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="flex min-w-0 items-center gap-2 text-base font-semibold tracking-tight">
+            {group ? <Swatch kind="play" colorIndex={group.color_index} className="size-2.5" /> : null}
+            <span className="truncate">{play.title}</span>
+          </h3>
+          {verdict ? <VerdictChip verdict={verdict} /> : play.status !== 'active' ? <StatusChip status={play.status} /> : null}
+        </div>
+        <p className="mt-1 truncate text-sm text-muted-foreground" title={firstLine(play.thesis)}>
+          {firstLine(play.thesis) || 'No thesis written yet'}
+        </p>
 
-      <div className="mt-auto space-y-3 pt-5">
-        {play.status === 'draft' ? (
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>
-              {play.legs.length} legs · <Money value={play.budget_gbp} decimals={0} /> suggested
-            </span>
-            <span className="inline-flex items-center gap-1 text-foreground opacity-0 transition-opacity group-hover:opacity-100">
-              Review <ArrowRight className="size-3" />
-            </span>
-          </div>
-        ) : (
-          <>
-            <div className="flex items-end justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-[11px] text-muted-foreground">Since activation</p>
-                {perf ? (
-                  perf.basket_return != null ? (
-                    <PctDelta value={perf.basket_return} className="text-lg font-semibold" />
-                  ) : (
-                    <span className="font-mono text-lg text-muted-foreground">—</span>
-                  )
-                ) : (
-                  <Skeleton className="mt-1 h-6 w-16" />
-                )}
-              </div>
-              <Sparkline values={series} className="w-28" />
-            </div>
-            <div className="space-y-1.5">
-              <Meter value={group && group.target_pct ? group.weight / group.target_pct : deployed} />
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>
-                  {group ? (
-                    <>
-                      {formatPercent(group.weight, 1)} of book
-                      {group.target_pct ? ` · target ${formatPercent(group.target_pct, 0)}` : ''}
-                    </>
-                  ) : perf ? (
-                    <>
-                      <Money value={perf.held_gbp} decimals={0} /> of <Money value={perf.target_exposure_gbp} decimals={0} />
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </span>
-                <ConvictionDots conviction={play.conviction} />
-              </div>
-              {need ? (
-                <p className="flex items-center gap-1.5 pt-1 text-xs text-foreground/80">
-                  <span className={cn('size-1.5 shrink-0 rounded-full', need.tone === 'critical' ? 'bg-negative' : need.tone === 'warn' ? 'bg-warning' : 'bg-muted-foreground/50')} />
-                  <span className="truncate">{need.text}</span>
+        {/* Owned value and P&L, with the basket's shape since activation */}
+        <div className="mt-5 flex items-end justify-between gap-4">
+          <div className="min-w-0">
+            {group ? (
+              <>
+                <Money value={group.value_gbp} decimals={0} className="text-xl font-semibold tracking-tight" />
+                <p className="mt-0.5 text-xs">
+                  <MoneyDelta value={group.ppl_gbp} decimals={0} />
+                  {group.ppl_pct != null ? <PctDelta value={group.ppl_pct} className="ml-1.5" /> : null}
+                  <span className="ml-1.5 text-muted-foreground">P&amp;L</span>
                 </p>
-              ) : null}
-            </div>
-          </>
-        )}
+              </>
+            ) : (
+              <Skeleton className="h-10 w-28" />
+            )}
+          </div>
+          <Sparkline values={series} className="w-24 shrink-0" />
+        </div>
+
+        <div className="mt-auto space-y-3 pt-5">
+          {group ? <SizeToTarget weight={group.weight} target={group.target_pct ?? 0} /> : null}
+          <div className="grid grid-cols-2 gap-3 border-t border-border/60 pt-3 text-xs">
+            <NextTranche group={group} />
+            <ExitRules perf={perf} />
+          </div>
+        </div>
+      </div>
+      {need ? (
+        <div
+          className={cn(
+            'flex w-full items-center gap-2 border-t px-5 py-2.5 text-xs text-foreground',
+            need.tone === 'critical' ? 'border-negative/25 bg-negative/5' : 'border-warning/25 bg-warning/5',
+          )}
+        >
+          <span className={cn('size-1.5 shrink-0 rounded-full', need.tone === 'critical' ? 'bg-negative' : 'bg-warning')} />
+          <span className="min-w-0 flex-1 truncate">{need.text}</span>
+          <span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground group-hover:text-foreground">
+            Review <ArrowRight className="size-3" />
+          </span>
+        </div>
+      ) : null}
+    </button>
+  )
+}
+
+/** Owned size against the target: fill to today's weight, a tick at the target. */
+function SizeToTarget({ weight, target }: { weight: number; target: number }) {
+  if (!target) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        <span className="font-mono text-foreground tabular-nums">{formatPercent(weight, 1)}</span> of your book · no target size
+      </p>
+    )
+  }
+  const scale = Math.max(target, weight) * 1.12
+  const over = weight > target * 1.3
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="text-muted-foreground">
+          <span className="font-mono text-foreground tabular-nums">{formatPercent(weight, 1)}</span> of book
+        </span>
+        <span className="text-muted-foreground">
+          target <span className="font-mono tabular-nums">{formatPercent(target, 0)}</span>
+        </span>
+      </div>
+      <div
+        className="relative h-1.5 rounded-full bg-muted"
+        role="img"
+        aria-label={`${formatPercent(weight, 1)} of book against a ${formatPercent(target, 0)} target`}
+      >
+        <div
+          className={cn('absolute inset-y-0 left-0 rounded-full', over ? 'bg-warning' : 'bg-foreground/70')}
+          style={{ width: `${Math.min(100, (weight / scale) * 100)}%` }}
+        />
+        <div className="absolute -inset-y-1 w-0.5 rounded-full bg-foreground" style={{ left: `calc(${(target / scale) * 100}% - 1px)` }} />
+      </div>
+    </div>
+  )
+}
+
+function NextTranche({ group }: { group?: BookGroup }) {
+  let text = '—'
+  let of = ''
+  if (group) {
+    const total = group.tranches_total ?? 0
+    const staged = group.tranches_staged ?? 0
+    const nt = group.next_tranche
+    if (!total) text = 'No new money planned'
+    else if (nt) {
+      of = ` · ${nt.index + 1} of ${total}`
+      text = `${nt.label}${nt.is_due ? ', due now' : nt.due ? `, ${dayjs(nt.due).format('D MMM')}` : ''}`
+    } else if (staged >= total) text = `All ${total} staged`
+  }
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] text-muted-foreground">Next tranche{of}</p>
+      <p className="mt-0.5 truncate text-foreground">{text}</p>
+    </div>
+  )
+}
+
+const RULE_DOT: Record<string, string> = {
+  intact: 'bg-positive',
+  near: 'bg-warning',
+  tripped: 'bg-negative',
+  manual: 'bg-muted-foreground/50',
+  unknown: 'border border-muted-foreground/60',
+}
+
+function ExitRules({ perf }: { perf: PlayPerformance | null }) {
+  const rules = perf?.kill_status ?? []
+  const tripped = rules.filter((r) => r.state === 'tripped').length
+  const near = rules.filter((r) => r.state === 'near').length
+  const checked = rules.filter((r) => r.state === 'intact').length
+  const text = !perf
+    ? '…'
+    : !rules.length
+      ? 'None set'
+      : tripped
+        ? `${tripped} tripped`
+        : near
+          ? `${near} close to tripping`
+          : checked
+            ? 'All clear'
+            : 'Not checked yet'
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] text-muted-foreground">Exit rules</p>
+      <p className="mt-0.5 flex items-center gap-2">
+        {rules.length ? (
+          <span className="inline-flex gap-1" aria-hidden>
+            {rules.map((r, i) => (
+              <span key={i} className={cn('size-1.5 rounded-full', RULE_DOT[r.state] ?? RULE_DOT.unknown)} />
+            ))}
+          </span>
+        ) : null}
+        <span className={cn('truncate', tripped ? 'text-negative' : near ? 'text-warning' : 'text-foreground')}>{text}</span>
+      </p>
+    </div>
+  )
+}
+
+function DraftCard({ play, onOpen }: { play: Play; onOpen: () => void }) {
+  const legs = play.legs.slice(0, 5)
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex min-h-56 flex-col rounded-xl border border-dashed border-border bg-card/50 p-5 text-left transition-colors hover:border-foreground/30"
+    >
+      <div className="flex w-full items-start justify-between gap-3">
+        <h3 className="min-w-0 truncate text-base font-semibold tracking-tight">{play.title}</h3>
+        <StatusChip status="draft" />
+      </div>
+      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{firstLine(play.thesis)}</p>
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {legs.map((l) => (
+          <span key={l.ticker} className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
+            {l.ticker}
+          </span>
+        ))}
+        {play.legs.length > legs.length ? <span className="px-1 text-[11px] text-muted-foreground">+{play.legs.length - legs.length}</span> : null}
+      </div>
+      <div className="mt-auto flex w-full items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs">
+        <span className="text-muted-foreground">
+          <Money value={play.budget_gbp} decimals={0} className="text-foreground" /> suggested · {play.sizing.tranches?.length ?? 0} tranches
+        </span>
+        <span className="inline-flex items-center gap-1 font-medium text-foreground">
+          Review draft <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" />
+        </span>
       </div>
     </button>
   )

@@ -417,6 +417,8 @@ export interface WatchlistItem {
   price: number | null
   change_pct: number | null
   currency: string | null
+  /** ~3 months of daily closes, oldest first (empty when unavailable). */
+  spark?: number[]
   // Board "stays alive" signals.
   open_flags: number
   latest_flag: string | null

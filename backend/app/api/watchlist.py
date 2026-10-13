@@ -34,11 +34,30 @@ def _fetch_quote(symbol: str) -> dict[str, Any]:
         return {"price": None, "change_pct": None, "currency": None}
 
 
+SPARK_DAYS = 90  # calendar days of daily closes behind each card's sparkline
+
+
+def _fetch_spark(symbol: str) -> list[float]:
+    """~3 months of daily closes for the card sparkline (cached upstream). Never raises."""
+    try:
+        from app.services.market_data import fetch_history
+
+        frame = fetch_history(symbol, lookback_days=SPARK_DAYS)
+        return [round(float(c), 4) for c in frame["close"] if c == c][-64:]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("watchlist sparkline failed for %s: %s", symbol, exc)
+        return []
+
+
+def _fetch_card(symbol: str) -> dict[str, Any]:
+    return {**_fetch_quote(symbol), "spark": _fetch_spark(symbol)}
+
+
 def _quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     if not symbols:
         return {}
     with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as pool:
-        results = list(pool.map(_fetch_quote, symbols))
+        results = list(pool.map(_fetch_card, symbols))
     return dict(zip(symbols, results))
 
 
@@ -52,6 +71,7 @@ def _to_view(item, quote: dict[str, Any], flags: list[dict[str, Any]]) -> Watchl
         price=quote.get("price"),
         change_pct=quote.get("change_pct"),
         currency=quote.get("currency"),
+        spark=quote.get("spark") or [],
         open_flags=len(flags),
         latest_flag=flags[0]["title"] if flags else None,
         latest_severity=flags[0]["severity"] if flags else None,
@@ -91,7 +111,7 @@ def create_watchlist_item(payload: WatchlistCreate, db: Session = Depends(get_db
         target_direction=payload.target_direction,
         source="manual",
     )
-    quote = _fetch_quote(item.symbol)
+    quote = _fetch_card(item.symbol)
     flags = wl.flags_by_symbol(db, [item.symbol]).get(item.symbol, [])
     return _to_view(item, quote, flags)
 
@@ -102,7 +122,7 @@ def update_watchlist_item(item_id: str, payload: WatchlistUpdate, db: Session = 
     item = wl.update_item(db, item_id, patch)
     if not item:
         raise HTTPException(status_code=404, detail="watchlist item not found")
-    quote = _fetch_quote(item.symbol)
+    quote = _fetch_card(item.symbol)
     flags = wl.flags_by_symbol(db, [item.symbol]).get(item.symbol, [])
     return _to_view(item, quote, flags)
 

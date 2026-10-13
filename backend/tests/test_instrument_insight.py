@@ -180,6 +180,24 @@ def test_held_insight_is_currency_consistent(client, session_factory, stubs):
     assert body["pending"] == []
 
 
+def test_sheet_counts_only_what_the_play_owns_for_its_concentration_rule(client, session_factory, stubs):
+    """Regression: the sheet evaluated kill rules off-thread with no DB session, so
+    ownership fell back to *every* holding in the play's account. A play owning
+    13.5% read as 48.5% and its 'grows past 30% of the book' rule as Triggered."""
+    db = session_factory()
+    db.add(Play(title="AI compute", status="active", account_kind="stocks_isa",
+                legs=[{"ticker": "NVDA", "role": "core", "target_weight": 1.0, "rationale": "Accelerators"}],
+                kill_criteria=[{"text": "This bet grows past 30% of the book",
+                                "rule": {"type": "weight_above", "ticker": None, "value": 0.3}}]))
+    db.commit()
+    db.close()
+    owner = _get(client, "NVDA").json()["plays"][0]
+    rule = owner["rules"][0]
+    assert rule["status"] == "fine", rule
+    assert "13.5%" in rule["detail"]
+    assert owner["verdict"] == "on_track"
+
+
 def test_pence_series_is_shown_in_pounds(client, stubs):
     stubs["frames"]["VUSA"] = _frame(seed=5, start=9000.0, currency="GBp")
     body = _get(client, "VUSA").json()

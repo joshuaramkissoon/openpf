@@ -314,6 +314,59 @@ def test_accept_and_dismiss_suggestions(db, store):
         ps.stage_tranche(db, play, risk=RISK, free_cash_gbp=1000)
 
 
+def _kill_states(db, play, book):
+    perf = ps.play_performance(db, play, book=book, history_fn=lambda t, n: [], price_fn=lambda t: None)
+    return {k["rule"]["type"]: k["state"] for k in perf["kill_status"] if k.get("rule")}
+
+
+def test_adopted_play_does_not_trip_its_own_concentration_cap(db, store):
+    """Regression: a play accepted from 'Sort with Archie' showed Broken at once —
+    'grows past 58% of the book' Triggered. The cap came from the Unsorted pool
+    (45%) but the move also pulled the same ticker out of Core in the other
+    account, so the play really started at 70%."""
+    book = {
+        "total_gbp": 10_000.0,
+        "free_cash_gbp": {"stocks_isa": 500.0, "invest": 0.0},
+        "positions": [_pos("NVDA", 3000), _pos("AVGO", 1500), _pos("NVDA", 2500, account="invest"),
+                      _pos("MSFT", 1000), _pos("SPY", 1500, account="invest")],
+    }
+    bs.assign_owner(db, "NVDA", "core", account_kind="invest", book=book)
+    out = bs.generate_suggestions(db, use_model=False, book=book)
+    ai = next(i for i in out["items"] if i["title"] == "AI infrastructure")
+    assert ai["weight"] == pytest.approx(0.45)
+    play = db.get(Play, bs.accept_suggestion(db, ai["id"], book=book)["play_id"])
+    full = bs.compute_book(db, book=book)
+    # Only the Unsorted holdings move: Core keeps the Invest NVDA.
+    assert {h["key"] for h in _group(full, play)["owned"]} == {"stocks_isa:NVDA", "stocks_isa:AVGO"}
+    assert {h["key"] for h in _group(full, "core")["owned"]} >= {"invest:NVDA"}
+    assert _group(full, play)["weight"] == pytest.approx(0.45)
+    cap = next(c for c in play.kill_criteria if c["rule"]["type"] == "weight_above")
+    assert cap["rule"]["value"] > 0.45 / 0.9  # not even "near"
+    assert _kill_states(db, play, book)["weight_above"] == "intact"
+    assert not [n for n in _group(full, play)["needs"] if n["kind"] in {"kill_tripped", "kill_near"}]
+
+    # Joining more holdings to the adopted play later lifts its cap with it.
+    book["positions"].append(_pos("TSM", 1500))
+    sug = bs.save_agent_suggestions(db, [{"kind": "existing", "play_id": play.id, "tickers": ["TSM"]}], book=book)
+    bs.accept_suggestion(db, sug["items"][0]["id"], book=book)
+    db.refresh(play)
+    assert _group(bs.compute_book(db, book=book), play)["weight"] == pytest.approx(0.60)
+    assert _kill_states(db, play, book)["weight_above"] == "intact"
+    assert play.sizing["target_pct_of_book"] == pytest.approx(0.60)
+
+
+def test_adopted_cap_only_lifts_the_automatic_rule(db):
+    play = _play(db, legs=("NVDA",), sizing={"adopted": True, "target_pct_of_book": 0.2, "tranches": []},
+                 kill=[{"text": "This bet grows past 25% of the book", "rule": {"type": "weight_above", "ticker": None, "value": 0.25}},
+                       {"text": "NVDA over half the play", "rule": {"type": "weight_above", "ticker": "NVDA", "value": 0.5}},
+                       {"text": "Hard cap I set", "rule": {"type": "weight_above", "ticker": None, "value": 0.3}}])
+    bs.assign_owner(db, "NVDA", play.id, book=BOOK)
+    bs.fit_adopted_cap(db, play, {**BOOK, "total_gbp": 5000.0})  # NVDA 2000 → 40%
+    rules = [c["rule"]["value"] for c in play.kill_criteria]
+    assert rules == [0.52, 0.5, 0.3]  # the user's own rules are left alone
+    assert play.kill_criteria[0]["text"] == "This bet grows past 52% of the book"
+
+
 def test_model_suggestions_are_validated_and_fall_back(db, store, monkeypatch):
     monkeypatch.setattr(bs, "_model_suggestions", lambda *a: [
         {"kind": "play", "title": "AI", "tickers": ["NVDA", "NVDA", "FAKE", "tsm"], "why": "chips"},
@@ -573,3 +626,15 @@ def test_api_book_without_a_portfolio_is_a_clear_503(client, monkeypatch):
     monkeypatch.setattr(ps, "book_context", down)
     r = client.get("/api/plays/book")
     assert r.status_code == 503 and "portfolio isn't available" in r.json()["detail"]
+
+
+def test_draft_progress_events_carry_phase_source_and_tickers():
+    ev = ps._tool_event("mcp__marketdata__get_price_snapshot", {"ticker": "rbot.l"})
+    assert ev == {"text": "Checking price for rbot.l", "phase": "prices", "source": "market", "tickers": ["RBOT.L"]}
+    ev = ps._tool_event("mcp__marketdata__get_correlation_matrix", {"tickers": ["NVDA", "AVGO"]})
+    assert (ev["phase"], ev["source"], ev["tickers"]) == ("compare", "quant", ["NVDA", "AVGO"])
+    ev = ps._tool_event("WebSearch", {"query": "uranium supply 2026"})
+    assert (ev["phase"], ev["source"]) == ("research", "web") and "tickers" not in ev
+    assert ps._phase_for("Book: £10,000 across 8 holdings")["phase"] == "portfolio"
+    assert ps._phase_for("Sizing against your book and risk rails")["phase"] == "sizing"
+    assert ps._phase_for("Draft ready")["phase"] == "done"

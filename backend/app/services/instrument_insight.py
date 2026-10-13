@@ -931,12 +931,26 @@ def build_insight(ticker: str, db: Session, *, wait_s: float = DEFAULT_WAIT_S) -
 
     plays = _plays(db, ident, book)
     play_book = _play_book(snap)
+    # Resolve ownership here, where there's a DB session: the performance runs
+    # off-thread without one, and must count only what each play owns.
+    owners: dict[tuple[str, str], dict[str, Any]] | None = None
+    try:
+        from app.services import book_service
+
+        owners = book_service.resolve_owners(play_book["positions"], book_service.owning_plays(db), book_service.explicit_rows(db))
+    except Exception:  # noqa: BLE001 — falls back to the basket's own names
+        logger.debug("ownership unavailable for the stock sheet", exc_info=True)
     for p in plays:
         snapshot = p.pop("_snapshot")
         if snapshot.status in ("active", "paused") and snapshot.kill_criteria:
+            owned = None if owners is None else [
+                pos for pos in play_book["positions"]
+                if (owners.get((str(pos.get("account_kind") or ""), _norm(pos.get("ticker")))) or {}).get("play_id") == snapshot.id
+            ]
+            owned_key = tuple(sorted(f"{x.get('account_kind')}:{x.get('ticker')}" for x in owned or []))
             futures[f"play:{p['id']}"] = _cached_future(
-                ("play", p["id"], tuple(holding_list)), TTL_PLAYS,
-                lambda s=snapshot: plays_service.play_performance(None, s, book=play_book),  # type: ignore[arg-type]
+                ("play", p["id"], tuple(holding_list), owned_key), TTL_PLAYS,
+                lambda s=snapshot, o=owned: plays_service.play_performance(None, s, book=play_book, owned=o),  # type: ignore[arg-type]
             )
 
     remaining = max(0.0, wait_s - (time.time() - started))

@@ -13,7 +13,7 @@ import { createWatchlistItem, deleteWatchlistItem } from "@/api/client"
 import { InsightChartView } from "./insight-chart"
 import { EventsSection, FundamentalsSection, NewsSection, RiskSection, ThesisSection, WeightMeter } from "./insight-sections"
 import { TradeSizer } from "./trade-sizer"
-import { SmartMoneyLine } from "@/features/smart-money"
+import { SmartMoneySection } from "@/features/smart-money"
 import { fmtMoney, fmtPct, fmtPrice, num } from "./insight-format"
 
 /** A best-effort instant identity to paint the header before the fetch lands. */
@@ -137,7 +137,7 @@ export function InstrumentDetailSheet({
             />
 
             {data ? (
-              <div className="flex flex-col gap-8 px-5 pb-10 sm:px-7">
+              <div className="flex flex-col gap-7 px-5 pb-10 sm:px-7">
                 <ForMe data={data} />
                 <Actions
                   data={data}
@@ -173,7 +173,7 @@ export function InstrumentDetailSheet({
                 {data.alerts.length ? <AlertsList alerts={data.alerts} /> : null}
                 {data.risk ? <RiskSection risk={data.risk} held={data.held} /> : data.pending.includes("risk") ? <SectionSkeleton /> : null}
                 {data.events ? <EventsSection events={data.events} /> : null}
-                <SmartMoneyLine ticker={data.display_ticker} />
+                <SmartMoneySection ticker={data.display_ticker} />
                 <ThesisSection play={primaryPlay(data.plays)} theses={data.theses} held={data.held} />
                 <NewsSection news={data.news} />
                 {data.fundamentals ? <FundamentalsSection f={data.fundamentals} currency={data.quote?.currency ?? "USD"} /> : null}

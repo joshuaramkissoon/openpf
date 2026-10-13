@@ -884,6 +884,51 @@ DEFAULT_ADOPTED_KILLS = [
 ]
 
 
+_ADOPTED_CAP_RE = re.compile(r"^This bet grows past \d+% of the book$")
+
+
+def adopted_cap(weight: float) -> float:
+    """Concentration cap for a play built from holdings: comfortably above today's weight."""
+    return round(max(0.25, min(0.9, weight * 1.25 + 0.02)), 2)
+
+
+def _is_adopted_cap(c: dict[str, Any]) -> bool:
+    rule = c.get("rule") or {}
+    return (rule.get("type") == "weight_above" and not rule.get("ticker")
+            and (c.get("auto") == "adopted_cap" or bool(_ADOPTED_CAP_RE.match(str(c.get("text") or "")))))
+
+
+def fit_adopted_cap(db: Session, play: Play, book: dict[str, Any]) -> float:
+    """Re-base an adopted play on what it *actually* owns now, and lift its
+    automatic concentration cap above that weight (never lowers it).
+
+    Called after holdings are moved into the play. The weight is measured the same
+    way the kill rule is evaluated (owned positions over total equity), so the cap
+    can't sit below the play's real starting weight — which happened when it was
+    set from the Unsorted pool alone while the move also pulled in the same
+    ticker's holdings from other accounts, or more holdings joined later."""
+    total = float(book.get("total_gbp") or 0.0)
+    owned = sum(float(p.get("value") or 0.0) for p in owned_positions(db, play, book["positions"]))
+    weight = owned / total if total else 0.0
+    cap = adopted_cap(weight)
+    kills = [dict(c) for c in play.kill_criteria or []]
+    changed = False
+    for i, c in enumerate(kills):
+        if _is_adopted_cap(c) and float((c.get("rule") or {}).get("value") or 0.0) < cap:
+            kills[i] = {**c, "text": f"This bet grows past {cap:.0%} of the book", "auto": "adopted_cap",
+                        "rule": {"type": "weight_above", "ticker": None, "value": cap}}
+            changed = True
+    if changed:
+        play.kill_criteria = kills
+    sizing = dict(play.sizing or {})
+    if weight > float(sizing.get("target_pct_of_book") or 0.0):
+        sizing["target_pct_of_book"] = round(weight, 4)
+        play.sizing = sizing
+    db.add(play)
+    db.commit()
+    return weight
+
+
 def accept_suggestion(db: Session, sid: str, *, title: str | None = None, tickers: list[str] | None = None,
                       kind: str | None = None, book: dict[str, Any] | None = None) -> dict[str, Any]:
     """Apply one suggestion (with the user's edits). Creates an active play built from
@@ -898,31 +943,40 @@ def accept_suggestion(db: Session, sid: str, *, title: str | None = None, ticker
         raise OwnershipError("Pick at least one holding that's still Unsorted.")
     kind = (kind or item["kind"]).lower()
     play_id: str | None = None
-    if kind == "core":
+
+    def move(owner: str) -> None:
+        # Only the Unsorted holdings the suggestion showed: the same ticker owned
+        # by Core or another play in a different account stays where it is.
         for t in chosen:
-            assign_owner(db, t, "core", source="suggestion", book=book)
+            for acct in dict.fromkeys(pool[t]["accounts"]):
+                assign_owner(db, t, owner, account_kind=acct, source="suggestion", book=book)
+
+    if kind == "core":
+        move("core")
     elif kind == "existing" and item.get("play_id"):
         play = db.get(Play, item["play_id"])
         if play is None:
             raise OwnershipError("That play doesn't exist any more.")
-        for t in chosen:
-            assign_owner(db, t, play.id, source="suggestion", book=book)
+        move(play.id)
+        if (play.sizing or {}).get("adopted"):
+            fit_adopted_cap(db, play, book)
         play_id = play.id
     else:
         held_value = {t: pool[t]["value_gbp"] for t in chosen}
         total_v = sum(held_value.values()) or 1.0
         accounts: dict[str, float] = {}
         for p in book["positions"]:
-            if norm_ticker(p.get("ticker")) in held_value:
+            t = norm_ticker(p.get("ticker"))
+            if t in held_value and p.get("account_kind") in pool[t]["accounts"]:
                 accounts[p["account_kind"]] = accounts.get(p["account_kind"], 0.0) + float(p.get("value") or 0.0)
         name = (title or item.get("title") or "Untitled play").strip()[:80]
         total_book = float(book.get("total_gbp") or 0.0)
         weight_now = (sum(held_value.values()) / total_book) if total_book else 0.0
         # An adopted play describes what you already hold: its target is today's
         # weight, and the concentration cap sits comfortably above it.
-        cap = round(max(0.25, min(0.9, weight_now * 1.25 + 0.02)), 2)
+        cap = adopted_cap(weight_now)
         kills = [DEFAULT_ADOPTED_KILLS[0],
-                 {"text": f"This bet grows past {cap:.0%} of the book",
+                 {"text": f"This bet grows past {cap:.0%} of the book", "auto": "adopted_cap",
                   "rule": {"type": "weight_above", "ticker": None, "value": cap}}]
         play = ps.create_play(db, {
             "title": name,
@@ -945,8 +999,10 @@ def accept_suggestion(db: Session, sid: str, *, title: str | None = None, ticker
         ps.set_status(play, "active")
         db.add(play)
         db.commit()
-        for t in chosen:
-            assign_owner(db, t, play.id, source="suggestion", book=book)
+        move(play.id)
+        # Measure what it really owns now (as the kill rule will) and keep the
+        # cap above that, so adopting holdings never trips the play at once.
+        fit_adopted_cap(db, play, book)
         play_id = play.id
     item["status"] = "accepted"
     item["play_id"] = play_id

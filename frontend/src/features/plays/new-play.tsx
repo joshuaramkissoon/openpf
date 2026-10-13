@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, Lightbulb, Loader2, RotateCw, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Lightbulb, Loader2, RotateCw } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,8 +7,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { parseApiError, toastApiError } from '@/lib/api-error'
 import { useAppActions } from '@/lib/app-actions'
 import { navigate as routerNavigate } from '@/lib/router'
-import { cn } from '@/lib/utils'
 import { getDraftJob, retryDraft, startDraft } from './api'
+import { DraftProgressView } from './drafting'
 import { StarterCryptoCard } from './starter-crypto'
 import type { Conviction, DraftJob, PlayAccount } from './types'
 import { Eyebrow, Segmented } from './ui'
@@ -229,7 +229,6 @@ function Drafting({ jobId }: { jobId: string }) {
   }, [jobId])
 
   const [retrying, setRetrying] = useState(false)
-  const lines = job?.progress ?? []
   const failed = job?.status === 'error' || missing
   const kind = job?.error_kind
   const idea = job?.idea ?? job?.request?.idea ?? ''
@@ -255,7 +254,7 @@ function Drafting({ jobId }: { jobId: string }) {
   }
 
   return (
-    <div className="mx-auto max-w-xl space-y-8 py-10">
+    <div className="mx-auto max-w-3xl space-y-8 py-10">
       <div className="space-y-2">
         <Eyebrow>{failed ? 'Drafting stopped' : 'Drafting your play'}</Eyebrow>
         <h1 className="text-2xl font-semibold tracking-tight">{failed ? heading : 'Archie is researching the theme'}</h1>
@@ -264,38 +263,13 @@ function Drafting({ jobId }: { jobId: string }) {
             ? missing
               ? 'It may have been cleared. Start again — your idea takes a minute to draft.'
               : job?.error || 'Something went wrong. Try again.'
-            : 'Picking a basket, checking prices and risk, then sizing it against your book.'}
+            : 'Picking a basket, checking prices and fundamentals, then sizing it against your book. Takes about a minute.'}
         </p>
         {failed && idea ? (
           <p className="border-l-2 border-border pl-3 text-sm text-muted-foreground italic">“{idea}”</p>
         ) : null}
       </div>
-      <ol className="space-y-2.5">
-        {lines.map((l, i) => {
-          const last = i === lines.length - 1
-          const spinning = last && !failed && job?.status === 'running'
-          return (
-            <li
-              key={`${l.at}-${i}`}
-              className={cn(
-                'flex items-start gap-3 text-sm animate-in fade-in slide-in-from-bottom-1 duration-300',
-                last ? 'text-foreground' : 'text-muted-foreground',
-              )}
-            >
-              <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
-                {spinning ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : last && failed ? (
-                  <X className="size-3.5 text-warning" />
-                ) : (
-                  <Check className="size-3.5 text-muted-foreground" />
-                )}
-              </span>
-              <span className="min-w-0 break-words">{l.text}</span>
-            </li>
-          )
-        })}
-      </ol>
+      <DraftProgressView job={job} failed={failed} />
       {failed ? (
         <div className="flex flex-wrap items-center gap-2">
           {job?.retryable ? (
