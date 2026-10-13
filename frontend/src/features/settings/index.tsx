@@ -7,6 +7,7 @@ import { CostsWorkspace } from "@/components/CostsWorkspace"
 import { RuntimeDiagnosticsPanel } from "@/components/RuntimeDiagnosticsPanel"
 import { SettingsPanel, type SettingsSection } from "@/components/SettingsPanel"
 import { HelpGuide } from "@/components/help/help-guide"
+import { PermissionsSettings } from "@/features/autonomy/permissions"
 import { PageHeader, Section, Segmented, TabNav } from "@/components/kit"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -17,12 +18,13 @@ import { useTheme, type ThemePreference } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import type { AppConfig } from "@/types"
 
-type Tab = "general" | "broker" | "risk" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
+type Tab = "general" | "broker" | "risk" | "permissions" | "notifications" | "usage" | "diagnostics" | "labs" | "help"
 
 const TABS: { value: Tab; label: string; description: string }[] = [
   { value: "general", label: "General", description: "Theme and privacy." },
   { value: "broker", label: "Broker & keys", description: "Execution mode, Trading 212 environment and API keys." },
   { value: "risk", label: "Risk rails", description: "Hard limits checked on every order." },
+  { value: "permissions", label: "Permissions", description: "Where Archie may act on his own, and how far." },
   { value: "notifications", label: "Notifications", description: "Telegram alerts and commands." },
   { value: "usage", label: "Usage", description: "Estimated model usage on your Claude account." },
   { value: "diagnostics", label: "Diagnostics", description: "Runtime, MCP servers and capabilities." },
@@ -100,6 +102,7 @@ export function SettingsPage({
               onPrivacyModeChange={onPrivacyModeChange}
             />
           ) : null}
+          {tab === "permissions" ? <PermissionsSettings suggestionId={route.query.get("suggestion")} /> : null}
           {tab === "usage" ? <CostsWorkspace onError={onError} /> : null}
           {tab === "diagnostics" ? <RuntimeDiagnosticsPanel onError={onError} /> : null}
           {tab === "labs" ? <LabsSection config={config} onConfigChanged={onConfigChanged} /> : null}

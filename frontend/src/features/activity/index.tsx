@@ -15,9 +15,10 @@ import type { BrokerMode } from "@/app/hooks/use-app-config"
 import type { ProposalsState } from "@/app/hooks/use-proposals"
 import { ProposalRow, railCheck } from "@/features/home/decision-rows"
 import { proposalPrompt } from "@/features/home/decisions-card"
+import { TrackRecordTab } from "@/features/autonomy/track-record"
 
-type Tab = "proposals" | "orders" | "automations" | "audit"
-const TABS: Tab[] = ["proposals", "orders", "automations", "audit"]
+type Tab = "proposals" | "track-record" | "orders" | "automations" | "audit"
+const TABS: Tab[] = ["proposals", "track-record", "orders", "automations", "audit"]
 
 /** `/activity/:tab` — proposals, broker orders, automations and the audit trail. */
 export function ActivityPage({
@@ -48,6 +49,7 @@ export function ActivityPage({
         onChange={(t) => navigate(`/activity/${t}`)}
         tabs={[
           { value: "proposals", label: "Proposals", count: proposals.pending.length },
+          { value: "track-record", label: "Track record" },
           { value: "orders", label: "Orders" },
           { value: "automations", label: "Runs" },
           { value: "audit", label: "Audit" },
@@ -56,6 +58,7 @@ export function ActivityPage({
       {tab === "proposals" ? (
         <ProposalsTab proposals={proposals} config={config} brokerMode={brokerMode} positions={positions} total={total} />
       ) : null}
+      {tab === "track-record" ? <TrackRecordTab /> : null}
       {tab === "orders" ? <OrdersWorkspace onError={onError} /> : null}
       {tab === "automations" ? (
         <div className="space-y-8">
@@ -157,6 +160,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 function HistoryRow({ intent }: { intent: TradeIntent }) {
+  const auto = (intent.approved_by ?? "").startsWith("permission:")
   return (
     <li className="flex items-baseline gap-3 py-2 text-sm">
       <span className="w-24 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
@@ -168,6 +172,14 @@ function HistoryRow({ intent }: { intent: TradeIntent }) {
       <span className="w-16 shrink-0 font-medium">{intent.symbol}</span>
       <Money value={intent.estimated_notional} currency="GBP" decimals={0} className="w-20 shrink-0 text-right text-xs" />
       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={intent.failure_reason || intent.rationale}>
+        {auto ? (
+          <span
+            className="mr-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground"
+            title="Placed under a standing permission you granted"
+          >
+            auto · {intent.permission_label ?? "permission"}
+          </span>
+        ) : null}
         {intent.failure_reason || intent.rationale}
       </span>
       <span className={cn("shrink-0 text-xs capitalize", STATUS_TONE[intent.status] ?? "text-muted-foreground")}>

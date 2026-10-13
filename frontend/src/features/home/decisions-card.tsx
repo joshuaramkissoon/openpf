@@ -7,6 +7,8 @@ import type { AppConfig, PositionItem } from "@/types"
 import type { ProposalsState } from "@/app/hooks/use-proposals"
 import type { BrokerMode } from "@/app/hooks/use-app-config"
 
+import { PermissionSuggestionRow, usePermissionSuggestions } from "@/features/autonomy/home"
+
 import { ProposalRow, SignalRow, railCheck } from "./decision-rows"
 import { signalPrompt, type useSignals } from "./use-signals"
 
@@ -44,6 +46,8 @@ export function DecisionsCard({
   total: number
 }) {
   const { askArchie, openTicker, navigate } = useAppActions()
+  const { suggestions, dismiss } = usePermissionSuggestions()
+  const shownSuggestions = suggestions.slice(0, 1)
   const pending = proposals.pending
   const shownProposals = pending.slice(0, MAX_ITEMS)
   const signalSlots = Math.max(0, Math.min(3, MAX_ITEMS - shownProposals.length))
@@ -51,8 +55,8 @@ export function DecisionsCard({
   const hiddenSignals = signals.groups.length - shownSignals.length
   const hiddenProposals = pending.length - shownProposals.length
   const loading = !proposals.loaded || signals.loading
-  const empty = !loading && pending.length === 0 && signals.groups.length === 0
-  const count = pending.length + signals.groups.length
+  const empty = !loading && pending.length === 0 && signals.groups.length === 0 && shownSuggestions.length === 0
+  const count = pending.length + signals.groups.length + shownSuggestions.length
 
   return (
     <div className="rounded-xl border border-border bg-card">
@@ -86,6 +90,9 @@ export function DecisionsCard({
           </div>
         ) : (
           <div className="divide-y divide-border/70">
+            {shownSuggestions.map((s) => (
+              <PermissionSuggestionRow key={s.id} s={s} onDismiss={() => void dismiss(s.id)} />
+            ))}
             {shownProposals.map((intent) => (
               <ProposalRow
                 key={intent.id}
