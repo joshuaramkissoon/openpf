@@ -395,6 +395,49 @@ class Play(Base):
     what_would_change_my_mind: Mapped[str] = mapped_column(Text, default="")
     # {last_reviewed_at, verdict, notes, history: [...]}
     review: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Ring 2 — holdings owned elsewhere (another play or Core) that matter to this
+    # theme: [{ticker, why, added_at}]. Never counted in the play's size.
+    related: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # Ring 3 — not-held candidates for later tranches: [{ticker, name, why, instrument_verified, added_at}]
+    bench: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
     source_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class HoldingOwner(Base):
+    """Explicit owner of one holding (per account): a play, Core or Unsorted.
+
+    Holdings without a row get a derived owner (the active play whose basket
+    holds them, else Unsorted) — see ``plays_service.compute_book``."""
+
+    __tablename__ = "holding_owners"
+    __table_args__ = (UniqueConstraint("account_kind", "ticker", name="uq_holding_owner"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    account_kind: Mapped[str] = mapped_column(String(24), index=True)
+    ticker: Mapped[str] = mapped_column(String(32), index=True)  # display ticker, upper-case
+    owner_kind: Mapped[str] = mapped_column(String(12), default="unsorted")  # play | core | unsorted
+    play_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(16), default="user")  # user | archie | suggestion | system
+
+
+class PlayDraftJob(Base):
+    """A play draft running (or run) in the background. Persisted so a restart
+    mid-draft surfaces as a failed job with Retry instead of a stuck spinner."""
+
+    __tablename__ = "play_draft_jobs"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)  # running | done | error
+    request: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    progress: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    play_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)  # friendly, shown to the user
+    # unclear_idea | no_instruments | interrupted | model | failed
+    error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    retry_of: Mapped[str | None] = mapped_column(String(16), nullable=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Conviction = Literal["low", "medium", "high"]
 AccountKind = Literal["invest", "stocks_isa"]
@@ -14,7 +14,7 @@ RuleType = Literal["price_below", "drawdown_pct", "weight_above", "date_after"]
 # ── API inputs ───────────────────────────────────────────────────────────────
 
 class PlayDraftRequest(BaseModel):
-    idea: str = Field(min_length=3, max_length=4000)
+    idea: str = Field(default="", max_length=8000)  # friendly checks in plays_service.idea_problem
     budget_gbp: float | None = Field(default=None, gt=0)
     conviction: Conviction | None = None
     horizon_months: int | None = Field(default=None, ge=1, le=120)
@@ -74,6 +74,36 @@ class StageRequest(BaseModel):
     tranche_index: int | None = Field(default=None, ge=0)
 
 
+# ── Book / ownership / rings ─────────────────────────────────────────────────
+
+class AssignOwnerRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=32)
+    # 'core' | 'unsorted' | a play id
+    owner: str = Field(min_length=1, max_length=64)
+    # Omit to move the holding in every account that holds it.
+    account_kind: AccountKind | None = None
+
+
+class RingItemRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=32)
+    why: str = Field(default="", max_length=500)
+    name: str = Field(default="", max_length=120)
+
+
+class PromoteBenchRequest(BaseModel):
+    weight: float = Field(default=0.1, gt=0, le=0.5)
+
+
+class SuggestRequest(BaseModel):
+    use_model: bool = True
+
+
+class AcceptSuggestionRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=80)
+    tickers: list[str] | None = None
+    kind: Literal["play", "core", "existing"] | None = None
+
+
 # ── LLM draft output (validated; one retry on failure) ───────────────────────
 
 class DraftLeg(BaseModel):
@@ -91,14 +121,30 @@ class DraftKillCriterion(BaseModel):
 
 
 class PlayDraftOut(BaseModel):
-    title: str = Field(max_length=80)
-    thesis: str = Field(description="Markdown, 2-4 short paragraphs")
-    legs: list[DraftLeg] = Field(min_length=2, max_length=8)
-    kill_criteria: list[DraftKillCriterion] = Field(min_length=2, max_length=6)
-    what_would_change_my_mind: str
+    # Set (with legs/kill_criteria empty) when the idea isn't an investable theme.
+    unclear: str | None = Field(default=None, description="Only when the idea can't be drafted: one friendly sentence why")
+    title: str = Field(default="", max_length=80)
+    thesis: str = Field(default="", description="Markdown, 2-4 short paragraphs")
+    legs: list[DraftLeg] = Field(default_factory=list, max_length=8)
+    kill_criteria: list[DraftKillCriterion] = Field(default_factory=list, max_length=6)
+    what_would_change_my_mind: str = ""
     suggested_conviction: Conviction = "medium"
     benchmark: str = "SPY"
     key_risks: list[str] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def _complete_unless_unclear(self) -> "PlayDraftOut":
+        if self.unclear and self.unclear.strip():
+            return self
+        if not self.title.strip():
+            raise ValueError("title is required")
+        if len(self.legs) < 2:
+            raise ValueError("at least 2 legs are required")
+        if len(self.kill_criteria) < 2:
+            raise ValueError("at least 2 kill criteria are required")
+        if sum(1 for c in self.kill_criteria if c.rule is not None) < 2:
+            raise ValueError("at least 2 kill criteria must carry a machine-checkable rule")
+        return self
 
     @field_validator("legs")
     @classmethod
@@ -110,13 +156,6 @@ class PlayDraftOut(BaseModel):
                 raise ValueError(f"duplicate ticker {key}")
             seen.add(key)
         return legs
-
-    @field_validator("kill_criteria")
-    @classmethod
-    def _machine_checkable(cls, items: list[DraftKillCriterion]) -> list[DraftKillCriterion]:
-        if sum(1 for c in items if c.rule is not None) < 2:
-            raise ValueError("at least 2 kill criteria must carry a machine-checkable rule")
-        return items
 
 
 class PlayReviewOut(BaseModel):

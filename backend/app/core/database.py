@@ -51,6 +51,13 @@ def _run_lightweight_migrations() -> None:
         if "tool_calls" not in cols:
             statements.append("ALTER TABLE chat_messages ADD COLUMN tool_calls JSON DEFAULT NULL")
 
+    if "plays" in existing_tables:
+        cols = {c["name"] for c in inspector.get_columns("plays")}
+        if "related" not in cols:
+            statements.append("ALTER TABLE plays ADD COLUMN related JSON DEFAULT '[]'")
+        if "bench" not in cols:
+            statements.append("ALTER TABLE plays ADD COLUMN bench JSON DEFAULT '[]'")
+
     if not statements:
         return
 

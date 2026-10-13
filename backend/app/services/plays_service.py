@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.entities import Alert, Play, TradeIntent
+from app.models.entities import Alert, Play, PlayDraftJob, TradeIntent
 from app.schemas.plays import PlayDraftOut, PlayReviewOut
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,8 @@ def serialize_play(p: Play) -> dict[str, Any]:
         "kill_criteria": p.kill_criteria or [],
         "what_would_change_my_mind": p.what_would_change_my_mind,
         "review": p.review or {},
+        "related": [r for r in (p.related or []) if not r.get("hidden")],
+        "bench": p.bench or [],
         "source_session_id": p.source_session_id,
         "meta": p.meta or {},
     }
@@ -119,6 +121,7 @@ def book_context(db: Session) -> dict[str, Any]:
             "value": float(p.get("value") or 0.0),
             "ppl": float(p.get("ppl") or 0.0),
             "weight": float(p.get("weight") or 0.0),
+            "price": float(p.get("current_price") or 0.0),
         })
     positions.sort(key=lambda r: r["value"], reverse=True)
     return {"total_gbp": total, "free_cash_gbp": free_cash, "positions": positions}
@@ -477,6 +480,17 @@ def resolve_instrument(db: Session, ticker: str) -> tuple[str, bool]:
     return (f"{base}l_EQ" if is_lse else f"{base}_US_EQ"), False
 
 
+def instruments_known(db: Session) -> bool:
+    """True when the broker's instrument list is available, so an unresolved
+    ticker really means "not on Trading 212" rather than "couldn't check"."""
+    try:
+        from app.services.portfolio_service import _instrument_meta_map
+
+        return bool(_instrument_meta_map(db))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _attach_instruments(db: Session, legs: list[dict[str, Any]]) -> None:
     for l in legs:
         if not l.get("instrument_code"):
@@ -507,7 +521,105 @@ def _normalise_legs(legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+class PlayInputError(ValueError):
+    """Bad play input — the message is friendly and shown to the user as-is."""
+
+
+_ACCOUNTS = {"invest", "stocks_isa"}
+MAX_LEGS = 12
+_TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9.\-_]{0,15}")
+
+
+def validate_play_input(data: dict[str, Any], *, creating: bool = False) -> None:
+    """Friendly checks shared by the API, Archie's MCP tools and drafting."""
+    if creating or data.get("title") is not None:
+        title = str(data.get("title") or "").strip()
+        if not title:
+            raise PlayInputError("Give the play a short name.")
+        if len(title) > 240:
+            raise PlayInputError("That name is too long — keep it under 240 characters.")
+    if data.get("conviction") is not None and data["conviction"] not in CONVICTION_PCT:
+        raise PlayInputError("Conviction must be low, medium or high.")
+    if data.get("horizon_months") is not None:
+        try:
+            h = int(data["horizon_months"])
+        except (TypeError, ValueError):
+            raise PlayInputError("Horizon must be a whole number of months.") from None
+        if not 1 <= h <= 120:
+            raise PlayInputError("Horizon must be between 1 and 120 months.")
+    if data.get("account_kind") is not None and data["account_kind"] not in _ACCOUNTS:
+        raise PlayInputError("Account must be Invest or Stocks ISA.")
+    if data.get("budget_gbp") is not None:
+        try:
+            b = float(data["budget_gbp"])
+        except (TypeError, ValueError):
+            raise PlayInputError("Budget must be an amount in £.") from None
+        if not math.isfinite(b) or b < 0:
+            raise PlayInputError("Budget must be a positive amount in £.")
+        if b > 10_000_000:
+            raise PlayInputError("That budget is larger than any book Archie can size against.")
+    if data.get("status") is not None and data["status"] not in _PLAY_STATUSES:
+        raise PlayInputError("Status must be draft, active, paused or closed.")
+    legs = data.get("legs")
+    if legs is not None:
+        if len(legs) > MAX_LEGS:
+            raise PlayInputError(f"Keep a play to {MAX_LEGS} legs or fewer.")
+        seen: set[str] = set()
+        for l in legs:
+            t = str(l.get("ticker") or "").strip().upper()
+            if not t or not _TICKER_RE.fullmatch(t):
+                raise PlayInputError(f"“{l.get('ticker') or ''}” doesn't look like a ticker (e.g. CCJ or NUCG.L).")
+            if t in seen:
+                raise PlayInputError(f"{t} appears twice in the basket.")
+            seen.add(t)
+            try:
+                w = float(l.get("target_weight") or 0.0)
+            except (TypeError, ValueError):
+                raise PlayInputError(f"{t}'s weight must be a number.") from None
+            if not math.isfinite(w) or w < 0:
+                raise PlayInputError(f"{t}'s weight can't be negative.")
+        if legs and sum(float(l.get("target_weight") or 0.0) for l in legs) <= 0:
+            raise PlayInputError("Give at least one leg a weight above zero.")
+
+
+_FIELD_MESSAGES = {
+    "conviction": "Conviction must be low, medium or high.",
+    "budget_gbp": "Budget must be a positive amount in £.",
+    "horizon_months": "Horizon must be between 1 and 120 months.",
+    "account_kind": "Account must be Invest or Stocks ISA.",
+    "status": "Status must be draft, active, paused or closed.",
+    "idea": "Keep the idea under 8,000 characters.",
+    "tranche_index": "Pick a tranche from the plan.",
+    "target_weight": "Leg weights must be between 0% and 100%.",
+    "weight": "Weight must be between 1% and 50%.",
+    "ticker": "Pick a ticker (e.g. CCJ or NUCG.L).",
+    "owner": "Pick where this holding should go.",
+    "title": "Give the play a short name (under 80 characters).",
+}
+
+
+def friendly_validation_message(errors: list[dict[str, Any]]) -> str:
+    """One readable sentence for a FastAPI 422 on the plays API."""
+    for err in errors:
+        loc = [str(x) for x in err.get("loc") or [] if not str(x).isdigit()]
+        field = next((f for f in reversed(loc) if f in _FIELD_MESSAGES), None)
+        if field:
+            return _FIELD_MESSAGES[field]
+    if errors:
+        loc = ".".join(str(x) for x in errors[0].get("loc") or [] if x != "body")
+        return f"Check {loc or 'the request'}: {errors[0].get('msg', 'invalid value')}."
+    return "Something in that request wasn't valid."
+
+
+def unknown_tickers(db: Session, legs: list[dict[str, Any]]) -> list[str]:
+    """Legs whose ticker isn't on Trading 212 (empty when the list can't be checked)."""
+    if not legs or not instruments_known(db):
+        return []
+    return [l["ticker"] for l in legs if l.get("instrument_verified") is False]
+
+
 def update_play(db: Session, play: Play, patch: dict[str, Any], *, risk: dict[str, Any] | None = None) -> Play:
+    validate_play_input(patch)
     resize = bool(patch.pop("resize", False))
     for key in ("title", "thesis", "conviction", "horizon_months", "account_kind", "what_would_change_my_mind"):
         if patch.get(key) is not None:
@@ -547,7 +659,17 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
 
     risk = risk or ConfigStore(db).get_risk()
     book = book or book_context(db)
-    overlap = overlap_with_book(play.legs or [], book["positions"], account_kind=play.account_kind)
+    # A play counts holdings it owns (or Unsorted ones it would adopt) — never
+    # ones owned by another play or Core, so nothing is double counted.
+    try:
+        from app.services import book_service
+
+        owners = book_service.resolve_owners(book["positions"], book_service.owning_plays(db), book_service.explicit_rows(db))
+        countable = book_service.available_for_play(play, book["positions"], owners)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("ownership unavailable for sizing, using same-account overlap: %s", exc)
+        countable = [p for p in book["positions"] if p.get("account_kind") == play.account_kind]
+    overlap = overlap_with_book(play.legs or [], countable)
     overlap_any = overlap_with_book(play.legs or [], book["positions"])
     override = play.budget_gbp if (play.sizing or {}).get("budget_override") else None
     sizing = compute_sizing(
@@ -563,6 +685,12 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
     )
     sizing["budget_override"] = bool(override)
     sizing["staged"] = (play.sizing or {}).get("staged", [])
+    if sizing["budget_gbp"] < MIN_LEG_NOTIONAL_GBP and not sizing["staged"]:
+        # Already at (or past) target with what you hold — nothing to stage.
+        sizing["tranches"] = []
+        sizing["steps"] = [s for s in sizing.get("steps", []) if not s.startswith("Staged in")] + [
+            "Holdings you already own cover the target, so no new money is planned."]
+        sizing["rationale"] = " ".join(sizing["steps"])
     play.sizing = sizing
     play.budget_gbp = sizing["budget_gbp"]
     play.budget_pct_of_book = sizing["budget_pct_of_book"]
@@ -571,7 +699,8 @@ def resize_play(db: Session, play: Play, *, risk: dict[str, Any] | None = None, 
     play.meta = meta
 
 
-def create_play(db: Session, data: dict[str, Any]) -> Play:
+def create_play(db: Session, data: dict[str, Any], *, book: dict[str, Any] | None = None) -> Play:
+    validate_play_input(data, creating=True)
     play = Play(
         title=data.get("title") or "Untitled play",
         thesis=data.get("thesis") or "",
@@ -582,7 +711,9 @@ def create_play(db: Session, data: dict[str, Any]) -> Play:
         kill_criteria=[dict(c) for c in data.get("kill_criteria") or []],
         status="draft",
         review={},
-        meta={},
+        related=[],
+        bench=[],
+        meta={"origin": data["origin"]} if data.get("origin") else {},
     )
     legs = _normalise_legs([dict(l) for l in data.get("legs") or []])
     _attach_instruments(db, legs)
@@ -593,7 +724,7 @@ def create_play(db: Session, data: dict[str, Any]) -> Play:
     db.add(play)
     db.flush()
     try:
-        resize_play(db, play)
+        resize_play(db, play, book=book)
     except Exception as exc:  # noqa: BLE001 — sizing needs a portfolio; a manual play can still be saved
         logger.warning("sizing failed for new play: %s", exc)
     db.commit()
@@ -601,9 +732,15 @@ def create_play(db: Session, data: dict[str, Any]) -> Play:
     return play
 
 
-def delete_play(db: Session, play: Play) -> None:
+def delete_play(db: Session, play: Play) -> int:
+    """Delete a play. Holdings it owned go to Unsorted; returns how many moved.
+    Proposals it staged stay in the queue (they're labelled "not part of any play")."""
+    from app.services import book_service
+
+    moved = book_service.release_play(db, play)
     db.delete(play)
     db.commit()
+    return moved
 
 
 # ── Staging (proposals only — never executes) ────────────────────────────────
@@ -615,6 +752,17 @@ def _executed_notional_today(db: Session) -> float:
         return float(_daily_executed_notional(db))
     except Exception:  # noqa: BLE001
         return 0.0
+
+
+def _friendly_skip(error: str | None) -> str:
+    e = (error or "").lower()
+    if e.startswith("unknown instrument"):
+        return "not available on Trading 212"
+    if "could not price" in e or "convert" in e:
+        return "no live price right now"
+    if "too small" in e:
+        return "below the minimum order size"
+    return error or "not proposed"
 
 
 def stage_tranche(
@@ -632,20 +780,26 @@ def stage_tranche(
     from app.services.config_store import ConfigStore
 
     if play.status not in {"active", "draft"}:
-        raise ValueError(f"Play is {play.status}; activate it before staging")
+        verb = "Resume" if play.status == "paused" else "Reopen"
+        raise PlayInputError(f"This play is {play.status}. {verb} it before staging a tranche.")
     risk = risk or ConfigStore(db).get_risk()
     sizing = dict(play.sizing or {})
     tranches = sizing.get("tranches") or []
     staged = list(sizing.get("staged") or [])
     staged_idx = {s["index"] for s in staged}
+    if not tranches or float(play.budget_gbp or 0.0) < MIN_LEG_NOTIONAL_GBP:
+        raise PlayInputError("No new money is planned for this play — holdings you already own cover its target. "
+                             "Raise the budget or conviction to add more.")
+    if not play.legs:
+        raise PlayInputError("This play has no basket yet — add some legs first.")
     if tranche_index is None:
         tranche_index = next((i for i in range(len(tranches)) if i not in staged_idx), None)
         if tranche_index is None:
-            raise ValueError("All tranches are already staged")
-    if tranche_index >= len(tranches):
-        raise ValueError(f"Tranche {tranche_index} does not exist")
+            raise PlayInputError("Every tranche is already staged.")
+    if tranche_index < 0 or tranche_index >= len(tranches):
+        raise PlayInputError(f"There's no tranche {tranche_index + 1} — this play has {len(tranches)}.")
     if tranche_index in staged_idx:
-        raise ValueError(f"Tranche {tranche_index + 1} is already staged")
+        raise PlayInputError(f"Tranche {tranche_index + 1} is already staged.")
 
     tranche = tranches[tranche_index]
     tranche_gbp = float(play.budget_gbp) * float(tranche["pct_of_budget"])
@@ -657,6 +811,10 @@ def stage_tranche(
             free_cash_gbp = book_context(db)["free_cash_gbp"].get(play.account_kind)
         except Exception:  # noqa: BLE001
             free_cash_gbp = None
+    if free_cash_gbp is not None and free_cash_gbp < MIN_LEG_NOTIONAL_GBP:
+        acct = "Stocks ISA" if play.account_kind == "stocks_isa" else "Invest account"
+        raise PlayInputError(f"There's no free cash in your {acct} to fund this tranche. "
+                             "Add funds or free some up, then stage it again.")
 
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -684,7 +842,7 @@ def stage_tranche(
                 breaches_all.append({"ticker": leg["ticker"], "breaches": res["violations"],
                                      "notional_gbp": round(notional, 2)})
             else:
-                skipped.append({"ticker": leg["ticker"], "reason": res.get("error") or "not proposed"})
+                skipped.append({"ticker": leg["ticker"], "reason": _friendly_skip(res.get("error"))})
             continue
         intent_view = res["intent"]
         intent = db.get(TradeIntent, intent_view["id"])
@@ -775,11 +933,22 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
                      history_fn: Callable[[str, int], list[tuple[date, float]]] = _history_closes,
                      price_fn: Callable[[str], float | None] = last_price) -> dict[str, Any]:
     book = book or book_context(db)
+    # Count what the play owns (any account) — see book_service for ownership.
+    try:
+        from app.services import book_service
+
+        mine = book_service.owned_positions(db, play, book["positions"])
+        if play.status == "draft":
+            owners = book_service.resolve_owners(book["positions"], book_service.owning_plays(db), book_service.explicit_rows(db))
+            mine = book_service.available_for_play(play, book["positions"], owners)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("ownership unavailable for performance: %s", exc)
+        mine = [p for p in book["positions"] if p.get("account_kind") == play.account_kind]
     legs_out = []
     held_total = 0.0
     for leg in play.legs or []:
         keys = _leg_keys(leg)
-        held = [p for p in book["positions"] if _position_matches(p, keys) and p.get("account_kind") == play.account_kind]
+        held = [p for p in mine if _position_matches(p, keys)]
         value = sum(p["value"] for p in held)
         ppl = sum(p["ppl"] for p in held)
         held_total += value
@@ -788,6 +957,14 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
     for l in legs_out:
         l["actual_weight"] = (l["value_gbp"] / held_total) if held_total else 0.0
         l["drift"] = l["actual_weight"] - float(l.get("target_weight") or 0.0) if held_total else 0.0
+    # Holdings the user moved into this play that aren't basket legs still count.
+    off_basket = [
+        {"ticker": p["ticker"], "name": p.get("name"), "account_kind": p.get("account_kind"),
+         "value_gbp": round(p["value"], 2), "ppl_gbp": round(p["ppl"], 2)}
+        for p in mine if not any(_position_matches(p, _leg_keys(l)) for l in play.legs or [])
+    ]
+    legs_value = held_total
+    held_total += sum(o["value_gbp"] for o in off_basket)
 
     since_dt = play.activated_at or play.created_at or _now()
     benchmark = (play.meta or {}).get("benchmark") or "SPY"
@@ -820,6 +997,8 @@ def play_performance(db: Session, play: Play, *, book: dict[str, Any] | None = N
         "budget_gbp": play.budget_gbp,
         "exposure_pct_of_budget": (held_total / play.budget_gbp) if play.budget_gbp else None,
         "legs": legs_out,
+        "basket_gbp": round(legs_value, 2),
+        "off_basket": off_basket,
         "benchmark": benchmark,
         "since": since_dt.isoformat(),
         **series,
@@ -930,40 +1109,162 @@ Rules:
 - Do NOT size the position — the app sizes it deterministically against the user's book.
 - "what_would_change_my_mind": one or two sentences, concrete and falsifiable.
 - Thesis: markdown, 2-4 short paragraphs, plain English, no hype.
+- If the idea is not an investable theme (gibberish, a pure goal like "make me rich", something with no listed
+  instruments on Trading 212, or anything harmful), do NOT invent a basket: set "unclear" to one friendly sentence
+  saying why and suggesting a sharper theme, and leave legs and kill_criteria empty.
 Return only the structured JSON."""
 
 
+# ── Idea sanity (before spending a model call) ──────────────────────────────
+
+_GOAL_ONLY = re.compile(
+    r"^(please\s+)?(make|get|help)?\s*(me\s+)?(rich|money|richer|wealthy|a millionaire|profit|profits|returns?)\b|"
+    r"\b(beat the market|best stocks?|make (me )?money|get rich|10x|100x|to the moon|moon ?shot|free money|quick money)\b",
+    re.I,
+)
+_MASH = {"asdf", "asdfgh", "qwerty", "qwer", "zxcv", "test", "testing", "hello", "hi", "foo", "bar", "lorem", "ipsum",
+         "aaa", "xxx", "abc", "idk", "something", "anything", "stuff", "stocks", "shares", "invest", "investing"}
+
+
+def idea_problem(idea: str | None) -> str | None:
+    """A friendly reason the idea can't be drafted, or None if it's worth a try.
+    Cheap and deterministic; the model still gets a chance to say "unclear"."""
+    text = re.sub(r"\s+", " ", str(idea or "")).strip()
+    if len(text) < 3:
+        return "Describe the theme in a few words — e.g. “Europe is rearming for a decade”."
+    if len(text) > 4000:
+        return "That's a lot — keep the idea under 4,000 characters."
+    words = re.findall(r"[A-Za-z][A-Za-z'\-]*", text)
+    letters = sum(len(w) for w in words)
+    if not words or letters < 0.5 * len(text.replace(" ", "")):
+        return "Archie couldn't find an idea in that. Describe what you believe will happen, in plain English."
+    if len(words) <= 2 and all(w.lower() in _MASH or not re.search(r"[aeiouy]", w.lower()) or re.fullmatch(r"(.)\1+", w.lower()) for w in words):
+        return "That doesn't read like a theme yet. What do you believe will happen — e.g. “GLP-1 drugs keep expanding”?"
+    if _GOAL_ONLY.search(text) and len(words) <= 8:
+        return ("That's a goal rather than a theme. Plays work best as a belief about the world — "
+                "e.g. “AI datacentres need far more power” — and Archie sizes the risk for you.")
+    return None
+
+
+class DraftFailure(Exception):
+    """A draft that can't succeed; ``message`` is friendly, ``kind`` drives the UI."""
+
+    def __init__(self, message: str, kind: str = "failed"):
+        super().__init__(message)
+        self.message = message
+        self.kind = kind
+
+
+def _friendly_draft_error(exc: BaseException) -> tuple[str, str]:
+    if isinstance(exc, DraftFailure):
+        return exc.message, exc.kind
+    name = type(exc).__name__
+    text = str(exc)
+    low = text.lower()
+    if name in {"CLINotFoundError", "CLIConnectionError"} or "claude code not found" in low or "not logged in" in low \
+            or "api key" in low or "authentication" in low or "401" in low:
+        return ("Archie needs a Claude login to draft plays. Run `claude login` (or set ANTHROPIC_API_KEY), then retry.",
+                "model")
+    if "rate" in low and "limit" in low or "overloaded" in low or "529" in low:
+        return "Claude is busy right now. Give it a minute and retry.", "model"
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "Drafting took too long. Retry — it's usually quicker the second time.", "model"
+    if "invalid twice" in low:
+        return "Archie couldn't turn this into a sound basket. Try rephrasing the idea more specifically.", "failed"
+    return "Archie hit a snag drafting this play. Retry, or rephrase the idea.", "failed"
+
+
+# ── Draft jobs (persisted so restarts don't strand a spinner) ────────────────
+
+STALE_JOB_MINUTES = 15
+INTERRUPTED_MSG = "The server restarted while Archie was drafting this play. Retry to pick it up again."
+
+
+def _session_factory():
+    from app.core.database import SessionLocal
+
+    return SessionLocal()
+
+
 class DraftJob:
-    def __init__(self, request: dict[str, Any]):
-        self.id = uuid.uuid4().hex[:12]
-        self.request = request
-        self.status = "running"  # running | done | error
-        self.progress: list[dict[str, str]] = []
-        self.play_id: str | None = None
-        self.error: str | None = None
-        self.started_at = _now()
-        self.finished_at: datetime | None = None
-        self.add("Reading your portfolio")
+    """Write-through handle on a ``PlayDraftJob`` row (safe to use from the worker thread)."""
+
+    def __init__(self, job_id: str, request: dict[str, Any] | None = None):
+        self.id = job_id
+        self.request = request or {}
+
+    def _update(self, fn: Callable[[PlayDraftJob], None]) -> None:
+        try:
+            with _session_factory() as db:
+                row = db.get(PlayDraftJob, self.id)
+                if row is None:
+                    return
+                fn(row)
+                row.updated_at = _now()
+                db.add(row)
+                db.commit()
+        except Exception:  # noqa: BLE001 — progress is best-effort; never kill the draft over it
+            logger.debug("draft job update failed", exc_info=True)
 
     def add(self, line: str) -> None:
-        if self.progress and self.progress[-1]["text"] == line:
-            return
-        self.progress.append({"at": _now().isoformat(), "text": line})
+        def _fn(row: PlayDraftJob) -> None:
+            progress = list(row.progress or [])
+            if progress and progress[-1].get("text") == line:
+                return
+            progress.append({"at": _now().isoformat(), "text": line})
+            row.progress = progress
+        self._update(_fn)
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "job_id": self.id, "status": self.status, "progress": self.progress, "play_id": self.play_id,
-            "error": self.error, "started_at": self.started_at.isoformat(),
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
-        }
+    def finish(self, *, play_id: str | None = None, error: str | None = None, error_kind: str | None = None) -> None:
+        def _fn(row: PlayDraftJob) -> None:
+            row.status = "error" if error else "done"
+            row.play_id = play_id or row.play_id
+            row.error = error
+            row.error_kind = error_kind
+            row.finished_at = _now()
+        self._update(_fn)
 
 
-_JOBS: dict[str, DraftJob] = {}
-_JOBS_LOCK = threading.Lock()
+def serialize_job(row: PlayDraftJob) -> dict[str, Any]:
+    return {
+        "job_id": row.id, "status": row.status, "progress": row.progress or [], "play_id": row.play_id,
+        "error": row.error, "error_kind": row.error_kind,
+        "retryable": row.status == "error" and row.error_kind != "unclear_idea",
+        "idea": (row.request or {}).get("idea"), "request": row.request or {},
+        "started_at": row.created_at.isoformat() if row.created_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+    }
 
 
-def get_draft_job(job_id: str) -> DraftJob | None:
-    return _JOBS.get(job_id)
+def _mark_interrupted(row: PlayDraftJob) -> None:
+    row.status = "error"
+    row.error = INTERRUPTED_MSG
+    row.error_kind = "interrupted"
+    row.finished_at = _now()
+    row.progress = list(row.progress or []) + [{"at": _now().isoformat(), "text": "Interrupted"}]
+
+
+def get_draft_job(db: Session, job_id: str) -> dict[str, Any] | None:
+    row = db.get(PlayDraftJob, job_id)
+    if row is None:
+        return None
+    # A worker that went silent (killed, crashed) without the startup sweep catching it.
+    if row.status == "running" and row.updated_at and row.updated_at < _now() - timedelta(minutes=STALE_JOB_MINUTES):
+        _mark_interrupted(row)
+        db.add(row)
+        db.commit()
+    return serialize_job(row)
+
+
+def fail_interrupted_jobs(db: Session) -> int:
+    """Startup sweep: any job still 'running' was cut off by the restart."""
+    rows = db.execute(select(PlayDraftJob).where(PlayDraftJob.status == "running")).scalars().all()
+    for row in rows:
+        _mark_interrupted(row)
+        db.add(row)
+    if rows:
+        db.commit()
+    return len(rows)
 
 
 def _mcp_servers() -> dict[str, Any]:
@@ -1092,6 +1393,16 @@ def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: di
         for l in out.legs
     ])
     _attach_instruments(db, legs)
+    # Drop legs Trading 212 doesn't list; a basket needs at least two real ones.
+    missing = unknown_tickers(db, legs)
+    if missing:
+        kept = [l for l in legs if l["ticker"] not in missing]
+        if len(kept) < 2:
+            acct = "Stocks ISA" if (req.get("account_kind") or "stocks_isa") == "stocks_isa" else "Invest account"
+            raise DraftFailure(
+                f"Archie couldn't find enough of this theme on Trading 212 ({', '.join(missing)} aren't listed for your "
+                f"{acct}). Try a broader angle on the idea, or the other account.", "no_instruments")
+        legs = _normalise_legs(kept)
     conviction = req.get("conviction") or out.suggested_conviction
     play = Play(
         title=out.title.strip(),
@@ -1105,8 +1416,11 @@ def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: di
         what_would_change_my_mind=out.what_would_change_my_mind.strip(),
         review={},
         source_session_id=req.get("source_session_id"),
+        related=[],
+        bench=[],
         meta={"idea": req["idea"], "benchmark": (out.benchmark or "SPY").upper(), "key_risks": out.key_risks,
-              "conviction_source": "user" if req.get("conviction") else "archie"},
+              "conviction_source": "user" if req.get("conviction") else "archie",
+              **({"dropped_legs": missing} if missing else {})},
     )
     if req.get("budget_gbp"):
         play.budget_gbp = float(req["budget_gbp"])
@@ -1119,12 +1433,16 @@ def _draft_to_play(db: Session, req: dict[str, Any], out: PlayDraftOut, book: di
     return play
 
 
-async def _draft(job: DraftJob) -> None:
-    from app.core.database import SessionLocal
-
+async def _draft(job: DraftJob) -> str:
+    """Research → validate → size → save. Returns the new play id; raises
+    ``DraftFailure`` for outcomes the user should see as-is."""
     req = job.request
-    with SessionLocal() as db:
-        book = book_context(db)
+    with _session_factory() as db:
+        try:
+            book = book_context(db)
+        except Exception as exc:  # noqa: BLE001
+            raise DraftFailure("Archie couldn't read your portfolio just now. Check the broker connection, then retry.",
+                               "failed") from exc
         job.add(f"Book: {_fmt_gbp(book['total_gbp'])} across {len(book['positions'])} holdings")
         job.add("Researching the theme")
         schema = PlayDraftOut.model_json_schema()
@@ -1147,39 +1465,59 @@ async def _draft(job: DraftJob) -> None:
                     job.add("Tightening the draft")
         else:
             raise RuntimeError(f"Draft was invalid twice: {error}")
+        if out.unclear:
+            raise DraftFailure(out.unclear.strip()[:400], "unclear_idea")
         job.add(f"Basket: {', '.join(l.ticker.upper() for l in out.legs)}")
+        job.add("Checking it's all on Trading 212")
         job.add("Sizing against your book and risk rails")
         play = _draft_to_play(db, req, out, book)
-        job.play_id = play.id
         job.add("Draft ready")
+        return play.id
 
 
-def start_draft_job(request: dict[str, Any]) -> DraftJob:
-    job = DraftJob(request)
-    with _JOBS_LOCK:
-        # Keep the registry small; finished jobs older than an hour are dropped.
-        cutoff = _now() - timedelta(hours=1)
-        for k in [k for k, j in _JOBS.items() if j.finished_at and j.finished_at < cutoff]:
-            _JOBS.pop(k, None)
-        _JOBS[job.id] = job
-
-    def _run() -> None:
-        try:
-            asyncio.run(_draft(job))
-            job.status = "done"
-        except Exception as exc:  # noqa: BLE001
+def run_draft_job(job: DraftJob) -> None:
+    """Blocking body of a draft job (runs on a worker thread)."""
+    try:
+        play_id = asyncio.run(_draft(job))
+        job.finish(play_id=play_id)
+    except Exception as exc:  # noqa: BLE001
+        message, kind = _friendly_draft_error(exc)
+        if not isinstance(exc, DraftFailure):
             logger.exception("play draft failed")
-            job.status = "error"
-            job.error = str(exc)[:500]
-            job.add("Drafting failed")
-        finally:
-            job.finished_at = _now()
-
-    threading.Thread(target=_run, name=f"play-draft-{job.id}", daemon=True).start()
-    return job
+        job.add("Couldn't draft this one" if kind == "unclear_idea" else "Drafting stopped")
+        job.finish(error=message, error_kind=kind)
 
 
-_REVIEW_SYSTEM = """You review a user's theme bet ("Play") in 3-5 sentences. Be specific and calm.
+def start_draft_job(db: Session, request: dict[str, Any], *, retry_of: str | None = None, run: bool = True) -> dict[str, Any]:
+    """Validate the idea, persist a job and start drafting in the background."""
+    problem = idea_problem(request.get("idea"))
+    if problem:
+        raise PlayInputError(problem)
+    request = {**request, "idea": re.sub(r"\s+", " ", str(request["idea"])).strip()}
+    validate_play_input({k: request.get(k) for k in ("conviction", "horizon_months", "account_kind", "budget_gbp")})
+    row = PlayDraftJob(id=uuid.uuid4().hex[:12], status="running", request=request, retry_of=retry_of,
+                       progress=[{"at": _now().isoformat(), "text": "Reading your portfolio"}])
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    if run:
+        job = DraftJob(row.id, request)
+        threading.Thread(target=run_draft_job, args=(job,), name=f"play-draft-{row.id}", daemon=True).start()
+    return serialize_job(row)
+
+
+def retry_draft_job(db: Session, job_id: str, *, run: bool = True) -> dict[str, Any]:
+    row = db.get(PlayDraftJob, job_id)
+    if row is None:
+        raise PlayInputError("That draft has gone — start a new one.")
+    if row.status == "running":
+        raise PlayInputError("This draft is still running.")
+    if row.status == "done" and row.play_id:
+        raise PlayInputError("This draft already finished.")
+    return start_draft_job(db, dict(row.request or {}), retry_of=row.id, run=run)
+
+
+_REVIEW_SYSTEM ="""You review a user's theme bet ("Play") in 3-5 sentences. Be specific and calm.
 Judge whether the thesis is on track given the data: performance vs benchmark, kill-rule status, drift,
 and time elapsed vs horizon. verdict: on_track | watch | broken. Return only the structured JSON."""
 

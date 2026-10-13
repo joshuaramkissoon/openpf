@@ -231,8 +231,18 @@ def propose_trade(
     }
     if notional is not None:
         meta["requested_notional_gbp"] = notional
-    if play_id:
-        meta["play_id"] = str(play_id)[:64]
+    # "For which play?" — a play id, or "core" for long-term / no-thesis holdings.
+    if play_id and str(play_id).strip().lower() == "core":
+        meta["owner"] = "core"
+    elif play_id:
+        from app.models.entities import Play
+
+        play = db.get(Play, str(play_id).strip())
+        if play is None:
+            warnings.append(f"play {play_id!r} not found — proposal is not linked to a play")
+        else:
+            meta["play_id"] = play.id
+            meta.setdefault("play_title", play.title)
     if warnings:
         meta["warnings"] = warnings
 
@@ -279,6 +289,7 @@ def serialize_intent(intent: TradeIntent) -> dict[str, Any]:
         "stop_price": intent.stop_price,
         "account_kind": meta.get("account_kind"),
         "play_id": meta.get("play_id"),
+        "owner": "core" if meta.get("owner") == "core" else ("play" if meta.get("play_id") else None),
         "source": meta.get("source"),
         "rationale": intent.rationale,
         "failure_reason": intent.failure_reason,

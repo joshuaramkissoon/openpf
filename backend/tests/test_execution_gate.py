@@ -196,7 +196,23 @@ def fake_market(monkeypatch):
     monkeypatch.setattr(proposal_service, "_to_gbp", lambda amount, ccy: amount * 0.5)
 
 
+def test_propose_trade_links_core_and_drops_unknown_play(db, fake_market):
+    core = proposal_service.propose_trade(
+        db, side="buy", account_kind="stocks_isa", symbol="AAPL", notional_gbp=50.0, rationale="core top-up", play_id="core",
+    )
+    assert core["ok"] and core["intent"]["owner"] == "core"
+    ghost = proposal_service.propose_trade(
+        db, side="buy", account_kind="stocks_isa", symbol="AAPL", notional_gbp=60.0, rationale="x", play_id="nope",
+    )
+    assert ghost["ok"] and ghost["intent"]["play_id"] is None
+    assert any("not found" in w for w in ghost["warnings"])
+
+
 def test_propose_trade_creates_proposed_intent(db, fake_market):
+    from app.models.entities import Play
+
+    db.add(Play(id="play-1", title="AI power"))
+    db.commit()
     out = proposal_service.propose_trade(
         db, side="buy", account_kind="stocks_isa", symbol="AAPL", notional_gbp=100.0,
         rationale="test", play_id="play-1", source="chat",

@@ -5,8 +5,11 @@ import os
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import plays as plays_api
 from app.api import agent, attention, broker, charts, config, costs, health, instruments, leveraged, orders, portfolio, research, scheduler, strategy, telegram, theses, watchlist
@@ -103,6 +106,17 @@ async def lifespan(app: FastAPI):
                 logging.getLogger(__name__).info("Seeded %d watchlist items from config", seeded)
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).warning("Watchlist seed skipped", exc_info=True)
+    # Play drafts cut off by the restart become failed jobs with a Retry.
+    try:
+        from app.core.database import SessionLocal
+        from app.services.plays_service import fail_interrupted_jobs
+
+        with SessionLocal() as db:
+            n = fail_interrupted_jobs(db)
+            if n:
+                logging.getLogger(__name__).info("Marked %d interrupted play draft(s) as failed", n)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("Play draft sweep skipped", exc_info=True)
     if _sandbox_enabled():
         try:
             from app.core.database import SessionLocal
@@ -136,6 +150,17 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError):
+    """Plays endpoints answer bad input with one friendly sentence (the UI shows
+    it as-is); everything else keeps FastAPI's default 422 body."""
+    if request.url.path.startswith(f"{settings.api_prefix}/plays"):
+        from app.services.plays_service import friendly_validation_message
+
+        return JSONResponse(status_code=422, content={"detail": friendly_validation_message(exc.errors())})
+    return await request_validation_exception_handler(request, exc)
+
 
 # Added before CORS so CORS stays outermost and 401s still carry CORS headers.
 if settings.openpf_api_token:
