@@ -505,3 +505,8 @@ class PlayDraftJob(Base):
     # unclear_idea | no_instruments | interrupted | model | failed
     error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     retry_of: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+# Smart-money disclosure tables live in their own module; importing them here
+# registers them with Base.metadata for init_db.
+from app.models.smart_money import Disclosure, DisclosureCache  # noqa: E402,F401

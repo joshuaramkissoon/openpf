@@ -37,6 +37,7 @@ RESERVED_SLUGS = {
     "new", "builtin", "builtins", "suggestions", "draft", "jobs", "system", "recipes", "skills",
     "trading212-api", "watch-cycle", "alpha-loop-open", "alpha-loop-midday", "alpha-loop-eod",
     "lev-morning-scan", "lev-midday-check", "lev-eod-close", "portfolio-rebalance-check",
+    "smart-money-refresh",
 }
 
 ALLOWED_FRONTMATTER = {"name", "description"}

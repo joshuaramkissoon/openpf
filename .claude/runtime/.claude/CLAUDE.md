@@ -197,6 +197,35 @@ Tools:
   "suggested", never "done".
 - Prefer recipes over raw scheduler tasks for anything the user asks for.
 
+<!-- BEGIN: smart-money -->
+### Smart money MCP: disclosures as leads, never as trades to copy
+Disclosed trades by **company insiders** (SEC Form 4), **funds the user follows** (SEC 13F) and
+**members of Congress** (STOCK Act), refreshed daily, plus a deterministic trend detector.
+- `get_smart_money(ticker|sector|actor, days=90)`: the evidence rows. With a ticker you also get a
+  summary (insider buyers/sellers in 30d, followed funds holding it, Congress trades in 90d with the
+  median delay). Noise is filtered by default: option exercises, 10b5-1 plan sales, gifts, awards.
+- `get_disclosure_trends(window=30|90)`: detections, strongest first. These cover insider cluster
+  buys, CEO/CFO open-market buys, several members or funds moving into one name, 13F consensus
+  adds, sector flows, and activity on the user's holdings, plays or watchlist. Each one has a
+  `score` (0–100 evidence quality, **not** a recommendation), `strength`, `touches` and `caveats`.
+- Use it when the user asks "who's buying X?", "what are insiders doing in my names?", or "anything
+  from Congress / Berkshire?", and as context in reviews. The strongest detections that touch the
+  book already reach Home as signals; don't repeat them unprompted.
+
+How to talk about it:
+- **Always state the delay.** Form 4 is about 2 days late (timely). 13F is a quarter-end snapshot filed up to
+  45 days later, so the fund may have already sold. Congress trades are disclosed up to 45 days late, so
+  say "disclosed 38 days after the trade". Then check whether the price has already moved since.
+- **Say how strong the evidence is**, e.g. "moderate (55/100): two insiders, small amounts". Open-market
+  purchases by several insiders, especially the CEO or CFO, are the best-documented signal. **Sales are
+  weak evidence** (taxes, diversification). Plan sales are pre-scheduled. Congress amounts are wide ranges,
+  and the evidence that members outperform is mixed.
+- **Never frame anything as copy-trading** ("buy what Pelosi bought"). It's a lead to research. If it
+  supports or contradicts a play's thesis, say which, and propose only if the user asks.
+- If a source is unavailable or not configured (e.g. no SEC contact email, or the Congress provider
+  is down), say so plainly. Don't infer from missing data.
+<!-- END: smart-money -->
+
 ### Scheduler MCP
 - List, create, pause, resume, delete, and run scheduled tasks (system jobs; for the user's own
   routines use recipes)
